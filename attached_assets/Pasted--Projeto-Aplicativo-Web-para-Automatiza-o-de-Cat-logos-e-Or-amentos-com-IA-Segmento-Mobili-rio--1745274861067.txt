@@ -1,0 +1,143 @@
+**Projeto: Aplicativo Web para Automatização de Catálogos e Orçamentos com IA — Segmento Mobiliário**
+
+Quero desenvolver um aplicativo web no Replit que resolva um problema prático e recorrente em empresas de móveis: atualmente, vendedores perdem muito tempo buscando manualmente em planilhas os móveis que mais se assemelham aos apresentados por arquitetos em renders ou projetos. Esse gargalo gera perda de vendas e baixa conversão comercial.
+
+Esse aplicativo será responsável por **automatizar todo o processo**, desde o upload do catálogo da empresa até a **busca inteligente por imagem**, geração de **orçamentos**, **moodboards** e **renders realistas** com IA.
+
+---
+
+### 1. Estrutura Geral do App:
+
+- Aplicativo web responsivo (acesso via navegador em desktop e tablet).
+- Interface visual inspirada no **layout do Mercado Livre**:
+  - Cards de produtos
+  - Filtros por cor, categoria, faixa de preço, material
+  - Barra de busca inteligente
+  - Layout estilo marketplace moderno e amigável ao vendedor
+
+---
+
+### 2. Login e Acesso Multiempresa:
+
+- Cada empresa terá seu próprio ambiente privado com login por e-mail e senha.
+- Todos os dados (catálogo, imagens, moodboards, orçamentos) serão **isolados por empresa**.
+- Autenticação e gestão de sessões via Firebase Authentication.
+
+---
+
+### 3. Upload e Processamento de Catálogo:
+
+- A empresa fará o upload de um **arquivo Excel ou PDF** com seu catálogo.
+- O app deve processar automaticamente o conteúdo do arquivo, criando os produtos no sistema com base nos seguintes dados:
+  - Nome
+  - Código
+  - Preço
+  - Descrição
+  - Cores
+  - Categoria
+  - Tamanhos disponíveis (se aplicável)
+  - Preços por tamanho/cor (se houver variação)
+  - Imagem (extraída do Excel ou associada via nome de arquivo/pasta zip)
+
+> O processo é 100% automático: **o usuário não precisa cadastrar produto por produto**.
+
+---
+
+### 4. Dashboard da Empresa (Estilo E-commerce):
+
+- Exibição dos produtos organizados em **cards visuais com filtros**.
+- Permite ordenação e filtragem por:
+  - Categoria
+  - Cor
+  - Faixa de preço
+  - Código
+- Cada card exibe:
+  - Imagem do produto
+  - Nome
+  - Código
+  - Preço (ajustável por cor ou tamanho, se aplicável)
+  - Botão “Adicionar ao orçamento”
+
+---
+
+### 5. IA de Busca Visual:
+
+- O vendedor poderá enviar uma **imagem** (ex: render, print ou foto).
+- A IA analisará a imagem e retornará os produtos mais similares com base em:
+  - Formato
+  - Estilo
+  - Cor
+  - Categoria
+
+> A IA pode ser baseada em modelos como **CLIP da OpenAI**, **ResNet + Faiss** ou APIs de similaridade visual (ex: Dify, Hugging Face).
+
+---
+
+### 6. Geração Automática de Moodboard com IA:
+
+- Após identificar os produtos similares, o app deve gerar automaticamente um **moodboard visual**, que será:
+  - Exportável como PDF ou imagem
+  - Contendo: imagens dos produtos, código, preço, nome do cliente, nome do arquiteto e data
+  - Layout bonito, objetivo e ideal para apresentações comerciais
+
+---
+
+### 7. Geração de Render Realista com IA:
+
+- A IA também deverá gerar um novo **render do ambiente**, substituindo os móveis fictícios do arquiteto pelos produtos reais encontrados no catálogo da empresa.
+- A imagem final deve manter o cenário original do render, mas com os móveis substituídos automaticamente.
+- A renderização pode ser feita com base em IA generativa (ex: integração com ferramentas de AI art que suportam composição visual por prompt e imagens de referência).
+
+---
+
+### 8. Orçamentos Inteligentes com Detalhamento:
+
+- Os produtos selecionados (manualmente ou pela IA) podem ser adicionados a um **orçamento personalizado**.
+- O orçamento incluirá:
+  - Lista de produtos com imagem, nome, código, cor e tamanho escolhido
+  - Preço final considerando variações por cor ou dimensão (se aplicável)
+  - Soma total
+  - Dados do cliente (nome, telefone, e-mail)
+  - Exportação como PDF pronta para enviar
+
+> Os tamanhos e variações de preço devem ser capturados automaticamente do Excel, quando estiverem disponíveis. Produtos sem tamanhos definidos devem ser listados normalmente.
+
+---
+
+### 9. Estrutura de Dados:
+
+- Firebase Firestore para:
+  - Produtos organizados por empresa
+  - Dados de login/autenticação
+  - Moodboards e orçamentos gerados
+  - Renders e logs da IA
+- Firebase Storage para imagens e arquivos
+
+---
+
+### 10. Tecnologias Sugeridas:
+
+- **Frontend:** React.js ou Next.js
+- **Backend:** Node.js + Express (se necessário)
+- **Banco de dados:** Firebase Firestore
+- **IA de similaridade:** CLIP (OpenAI) ou Dify/HuggingFace APIs
+- **Render IA:** Integração com IA generativa como DALL·E, Midjourney (via API ou intermediário)
+- **PDF Exportação:** jsPDF ou html2pdf.js
+- **Leitura de Excel:** PapaParse ou SheetJS
+
+---
+
+### 11. Funcionalidades Extras:
+
+- Reprocessamento de catálogos (upload de nova versão)
+- Cadastro de múltiplos usuários por empresa
+- Histórico de orçamentos gerados
+- Logs de interações da IA
+- Histórico de renders e moodboards por projeto
+
+---
+
+### 🎯 Objetivo Final:
+
+Desenvolver uma plataforma SaaS inteligente que otimize o tempo dos vendedores, melhore a experiência de atendimento ao arquiteto e aumente a conversão de vendas. A proposta é escalar a solução com mínima necessidade de configuração técnica para cada nova empresa que utilizar o app. O app unifica tecnologia de automação, IA visual e experiência comercial em uma ferramenta prática e eficiente.
+
