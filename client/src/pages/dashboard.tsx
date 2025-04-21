@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useAuth } from "@/lib/auth";
+import { useAuth } from "@/lib/auth.js";
 import { useToast } from "@/hooks/use-toast";
 import { Product } from "@shared/schema";
 
