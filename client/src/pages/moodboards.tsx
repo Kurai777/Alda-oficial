@@ -122,10 +122,101 @@ export default function Moodboards() {
     <div className="container mx-auto p-4 max-w-7xl">
       <div className="flex justify-between items-center mb-6">
         <h1 className="text-2xl font-bold">Moodboards</h1>
-        <Button>
-          <Plus className="mr-2 h-4 w-4" />
-          Novo Moodboard
-        </Button>
+        <Dialog>
+          <DialogTrigger asChild>
+            <Button>
+              <Plus className="mr-2 h-4 w-4" />
+              Novo Moodboard
+            </Button>
+          </DialogTrigger>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Criar Novo Moodboard</DialogTitle>
+              <DialogDescription>
+                Preencha as informações para criar um novo moodboard.
+              </DialogDescription>
+            </DialogHeader>
+            <form onSubmit={(e) => {
+              e.preventDefault();
+              const formData = new FormData(e.currentTarget);
+              const newMoodboard = {
+                userId: user?.id || 1,
+                projectName: formData.get('projectName') as string,
+                clientName: formData.get('clientName') as string,
+                architectName: formData.get('architectName') as string,
+                description: formData.get('description') as string,
+                productIds: [],
+                imageUrl: "",
+              };
+              
+              // Create new moodboard
+              apiRequest("POST", "/api/moodboards", newMoodboard)
+                .then(res => res.json())
+                .then(data => {
+                  queryClient.invalidateQueries({
+                    queryKey: ["/api/moodboards"]
+                  });
+                  toast({
+                    title: "Moodboard criado",
+                    description: "O moodboard foi criado com sucesso.",
+                  });
+                  // Close dialog by clicking outside
+                  document.body.click();
+                })
+                .catch(err => {
+                  console.error("Error creating moodboard:", err);
+                  toast({
+                    title: "Erro ao criar moodboard",
+                    description: "Ocorreu um erro ao criar o moodboard.",
+                    variant: "destructive",
+                  });
+                });
+            }} className="space-y-4">
+              <div className="grid gap-4">
+                <div className="grid gap-2">
+                  <label htmlFor="projectName" className="text-sm font-medium">Nome do Projeto</label>
+                  <input
+                    id="projectName"
+                    name="projectName"
+                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    placeholder="Digite o nome do projeto"
+                    required
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <label htmlFor="clientName" className="text-sm font-medium">Nome do Cliente</label>
+                  <input
+                    id="clientName"
+                    name="clientName"
+                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    placeholder="Digite o nome do cliente"
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <label htmlFor="architectName" className="text-sm font-medium">Nome do Arquiteto</label>
+                  <input
+                    id="architectName"
+                    name="architectName"
+                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    placeholder="Digite o nome do arquiteto"
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <label htmlFor="description" className="text-sm font-medium">Descrição</label>
+                  <textarea
+                    id="description"
+                    name="description"
+                    className="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    placeholder="Digite uma descrição para o moodboard"
+                  />
+                </div>
+              </div>
+              <div className="flex justify-end">
+                <Button type="submit">Criar Moodboard</Button>
+              </div>
+            </form>
+          </DialogContent>
+        </Dialog>
       </div>
 
       {/* Moodboards Grid */}

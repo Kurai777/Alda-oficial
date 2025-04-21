@@ -29,7 +29,15 @@ export const getQueryFn: <T>(options: {
 }) => QueryFunction<T> =
   ({ on401: unauthorizedBehavior }) =>
   async ({ queryKey }) => {
-    const res = await fetch(queryKey[0] as string, {
+    // Adiciona userId=1 como default para todas as solicitações GET
+    let url = queryKey[0] as string;
+    if (url.includes('?')) {
+      url += '&userId=1';
+    } else {
+      url += '?userId=1';
+    }
+    
+    const res = await fetch(url, {
       credentials: "include",
     });
 
