@@ -61,11 +61,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Product endpoints
   app.get("/api/products", async (req: Request, res: Response) => {
     try {
-      const userId = parseInt(req.query.userId as string);
-      
-      if (isNaN(userId)) {
-        return res.status(400).json({ message: "Invalid user ID" });
-      }
+      const userId = parseInt(req.query.userId as string) || 1; // Default to userId 1 for mock data
       
       const products = await storage.getProductsByUserId(userId);
       return res.status(200).json(products);
@@ -151,11 +147,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Catalog endpoints
   app.get("/api/catalogs", async (req: Request, res: Response) => {
     try {
-      const userId = parseInt(req.query.userId as string);
-      
-      if (isNaN(userId)) {
-        return res.status(400).json({ message: "Invalid user ID" });
-      }
+      const userId = parseInt(req.query.userId as string) || 1; // Default to userId 1 for mock data
       
       const catalogs = await storage.getCatalogsByUserId(userId);
       return res.status(200).json(catalogs);
@@ -205,11 +197,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Quote endpoints
   app.get("/api/quotes", async (req: Request, res: Response) => {
     try {
-      const userId = parseInt(req.query.userId as string);
-      
-      if (isNaN(userId)) {
-        return res.status(400).json({ message: "Invalid user ID" });
-      }
+      const userId = parseInt(req.query.userId as string) || 1; // Default to userId 1 for mock data
       
       const quotes = await storage.getQuotesByUserId(userId);
       return res.status(200).json(quotes);
@@ -295,11 +283,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Moodboard endpoints
   app.get("/api/moodboards", async (req: Request, res: Response) => {
     try {
-      const userId = parseInt(req.query.userId as string);
-      
-      if (isNaN(userId)) {
-        return res.status(400).json({ message: "Invalid user ID" });
-      }
+      const userId = parseInt(req.query.userId as string) || 1; // Default to userId 1 for mock data
       
       const moodboards = await storage.getMoodboardsByUserId(userId);
       return res.status(200).json(moodboards);
@@ -385,10 +369,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // AI visual search endpoint (simplified for now)
   app.post("/api/ai/visual-search", async (req: Request, res: Response) => {
     try {
-      const { userId, imageBase64 } = req.body;
+      const { userId = 1, imageBase64 } = req.body; // Default to userId 1 for mock data
       
-      if (!userId || !imageBase64) {
-        return res.status(400).json({ message: "User ID and image are required" });
+      if (!imageBase64) {
+        return res.status(400).json({ message: "Image is required" });
       }
       
       // In a real implementation, here we would:
