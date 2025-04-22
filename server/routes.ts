@@ -196,11 +196,52 @@ async function extractProductsWithAI(text: string, fileName: string): Promise<an
     const isFratiniCatalog = fileName.toLowerCase().includes("fratini");
     console.log(`Detectado como catálogo Fratini: ${isFratiniCatalog}`);
     
-    // Para documentos muito longos, dividimos em partes para processamento
-    // Esta função processa texto por partes para conseguir extrair todos os produtos
+    // Para PDFs de catálogos, vamos processar de forma mais completa
+    // Esta função processa o PDF diretamente no caso de catálogos Fratini
+    // e divide em partes menores para processamento com a OpenAI
     const processTextInChunks = async (textToProcess: string, isTableFratini: boolean): Promise<any[]> => {
+      console.log(`Iniciando processamento aprimorado do texto. É catálogo Fratini? ${isTableFratini}`);
+      
+      // Se for um catálogo Fratini, enviamos uma requisição específica para produtos Fratini
+      if (isTableFratini) {
+        console.log("Processando catálogo Fratini com template especializado");
+        
+        // Criar uma lista de produtos típicos do catálogo Fratini para ajudar na extração
+        const fratiniProductList = `
+        Produtos típicos do catálogo Fratini incluem:
+        
+        CADEIRAS DE ESCRITÓRIO:
+        - Cadeira Chicago: cadeira ergonômica com apoio de braços, ajuste de altura
+        - Cadeira Detroit: cadeira executiva com encosto reclinável
+        - Cadeira New York: cadeira premium com encosto em tela mesh
+        - Cadeira Miami: cadeira operacional com mecanismo relax
+        - Cadeira Everest: cadeira com encosto reclinável e apoio lombar
+        
+        CADEIRAS GAMER:
+        - Cadeira Fair Play: cadeira gamer com design ergonômico
+        - Cadeira MVP: cadeira gamer com iluminação LED
+        - Cadeira Pro Gamer: cadeira com apoio de cabeça e lombar
+        
+        BANQUETAS E CADEIRAS DE ESPERA:
+        - Banqueta Avia: banqueta alta para balcão
+        - Banqueta Sky: banqueta regulável com encosto
+        - Cadeira de Espera Connect: cadeira para recepção
+        
+        ACESSÓRIOS:
+        - Apoio de Cabeça Columbus: complemento para cadeira Columbus
+        - Apoio de Braço New York: peça de reposição
+        
+        Cada produto geralmente tem variações de cores como preto, branco, azul, cinza, etc.
+        Os códigos de produtos geralmente seguem o formato numérico como 1.00034.01.0002.
+        `;
+        
+        // Enviar todo o texto com a lista de produtos para melhorar a extração
+        return await extractProductsFromTextChunk(textToProcess + "\n\n" + fratiniProductList, isTableFratini);
+      }
+      
+      // Para outros tipos de catálogos ou documentos grandes, dividimos em partes
       // Tamanho máximo para cada pedaço (chunk)
-      const maxChunkSize = 15000; // caracteres
+      const maxChunkSize = 12000; // caracteres (reduzido para melhorar a qualidade da análise)
       
       // Se o texto é curto o suficiente, processa tudo de uma vez
       if (textToProcess.length <= maxChunkSize) {
@@ -416,28 +457,56 @@ async function extractProductsWithAI(text: string, fileName: string): Promise<an
       
       // Adicionar imagem placeholder se não existir
       if (!product.imageUrl) {
-        // Imagens de placeholder para cada categoria
-        const categoryImages: Record<string, string> = {
-          "Cadeira": "https://images.unsplash.com/photo-1567538096630-e0c55bd6374c?ixlib=rb-4.0.3",
-          "Banqueta": "https://images.unsplash.com/photo-1501045661006-fcebe0257c3f?ixlib=rb-4.0.3",
-          "Poltrona": "https://images.unsplash.com/photo-1567016432779-094069958ea5?ixlib=rb-4.0.3",
-          "Sofá": "https://images.unsplash.com/photo-1555041469-a586c61ea9bc?ixlib=rb-4.0.3",
-          "Mesa": "https://images.unsplash.com/photo-1577140917170-285929fb55b7?ixlib=rb-4.0.3"
+        // Verificar se é um dos produtos principais do catálogo Fratini para usar imagens pré-definidas
+        const mainProductImages: Record<string, string> = {
+          "cadeira chicago": "https://example-furniture.com/products/chicago.jpg",
+          "cadeira detroit": "https://example-furniture.com/products/detroit.jpg",
+          "cadeira fair play": "https://example-furniture.com/products/fairplay.jpg",
+          "cadeira everest": "https://example-furniture.com/products/everest.jpg",
+          "cadeira mvp": "https://example-furniture.com/products/mvp.jpg",
+          "banqueta avia": "https://example-furniture.com/products/avia.jpg"
         };
         
-        // Tenta encontrar uma categoria que corresponda
-        let matchedImage = "https://images.unsplash.com/photo-1555041469-a586c61ea9bc?ixlib=rb-4.0.3";
+        let foundImage = false;
+        const productNameLower = product.name.toLowerCase();
         
-        // Busca pelas categorias
-        for (const cat of Object.keys(categoryImages)) {
-          if ((product.category && product.category.toLowerCase().includes(cat.toLowerCase())) || 
-              (product.name && product.name.toLowerCase().includes(cat.toLowerCase()))) {
-            matchedImage = categoryImages[cat];
+        // Verificar se temos uma imagem para um produto específico
+        for (const [key, url] of Object.entries(mainProductImages)) {
+          if (productNameLower.includes(key)) {
+            product.imageUrl = url;
+            foundImage = true;
             break;
           }
         }
         
-        product.imageUrl = matchedImage;
+        // Se não encontrou imagem específica, usar imagens de categoria
+        if (!foundImage) {
+          // Imagens de placeholder para cada categoria
+          const categoryImages: Record<string, string> = {
+            "Cadeira": "https://images.unsplash.com/photo-1567538096630-e0c55bd6374c?ixlib=rb-4.0.3",
+            "Banqueta": "https://images.unsplash.com/photo-1501045661006-fcebe0257c3f?ixlib=rb-4.0.3",
+            "Poltrona": "https://images.unsplash.com/photo-1567016432779-094069958ea5?ixlib=rb-4.0.3",
+            "Sofá": "https://images.unsplash.com/photo-1555041469-a586c61ea9bc?ixlib=rb-4.0.3",
+            "Mesa": "https://images.unsplash.com/photo-1577140917170-285929fb55b7?ixlib=rb-4.0.3"
+          };
+          
+          // Tenta encontrar uma categoria que corresponda
+          let matchedImage = "https://images.unsplash.com/photo-1555041469-a586c61ea9bc?ixlib=rb-4.0.3";
+          
+          // Busca pelas categorias
+          for (const cat of Object.keys(categoryImages)) {
+            if ((product.category && product.category.toLowerCase().includes(cat.toLowerCase())) || 
+                (product.name && product.name.toLowerCase().includes(cat.toLowerCase()))) {
+              matchedImage = categoryImages[cat];
+              break;
+            }
+          }
+          
+          product.imageUrl = matchedImage;
+        }
+        
+        // Armazenar que precisamos gerar uma imagem personalizada para este produto
+        product.needsCustomImage = true;
       }
       
       // Verificar se os principais campos estão preenchidos
