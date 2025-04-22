@@ -44,8 +44,12 @@ import {
   Check,
   AlertCircle,
   Clock,
+  Database,
+  ListIcon,
+  EyeIcon
 } from "lucide-react";
 import UploadCard from "@/components/catalog/upload-card";
+import CatalogProducts from "@/components/catalog/catalog-products";
 
 export default function Catalogs() {
   const { user } = useAuth();
@@ -53,6 +57,7 @@ export default function Catalogs() {
   const queryClient = useQueryClient();
   const [catalogToProcess, setCatalogToProcess] = useState<number | null>(null);
   const [catalogToDelete, setCatalogToDelete] = useState<number | null>(null);
+  const [selectedCatalog, setSelectedCatalog] = useState<Catalog | null>(null);
 
   // Fetch catalogs
   const { data: catalogs, isLoading } = useQuery({
@@ -173,6 +178,19 @@ export default function Catalogs() {
     }
   };
 
+  // Verificar se estamos visualizando produtos de um catálogo específico
+  if (selectedCatalog) {
+    return (
+      <div className="container mx-auto p-4 max-w-7xl">
+        <CatalogProducts 
+          catalogId={selectedCatalog.id} 
+          fileName={selectedCatalog.fileName}
+          onBack={() => setSelectedCatalog(null)}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="container mx-auto p-4 max-w-7xl">
       <div className="flex justify-between items-center mb-6">
@@ -224,16 +242,21 @@ export default function Catalogs() {
                 {catalogs.map((catalog: Catalog) => (
                   <TableRow key={catalog.id}>
                     <TableCell className="font-medium">{catalog.fileName}</TableCell>
-                    <TableCell>{formatDate(catalog.createdAt.toString())}</TableCell>
-                    <TableCell>{getStatusBadge(catalog.processedStatus)}</TableCell>
+                    <TableCell>{formatDate(catalog.createdAt?.toString() || '')}</TableCell>
+                    <TableCell>{getStatusBadge(catalog.processedStatus || '')}</TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end space-x-2">
-                        {catalog.processedStatus === "processed" && (
-                          <Button variant="outline" size="sm">
-                            <Download className="h-4 w-4 mr-1" />
-                            Download
+                        {catalog.processedStatus === "completed" || catalog.processedStatus === "processed" ? (
+                          <Button 
+                            variant="outline" 
+                            size="sm"
+                            onClick={() => setSelectedCatalog(catalog)}
+                          >
+                            <ListIcon className="h-4 w-4 mr-1" />
+                            Ver Produtos
                           </Button>
-                        )}
+                        ) : null}
+                        
                         {catalog.processedStatus === "pending" && (
                           <Button
                             variant="outline"
@@ -287,7 +310,7 @@ export default function Catalogs() {
         </CardContent>
         <CardFooter className="flex justify-between text-sm text-gray-500">
           <div>
-            {catalogs?.length} catálogo(s) importado(s)
+            {catalogs?.length || 0} catálogo(s) importado(s)
           </div>
           <div>
             Última atualização: {new Date().toLocaleTimeString()}

@@ -62,29 +62,31 @@ export default function UploadCard() {
     try {
       setIsUploading(true);
       
-      // In a real implementation, we would upload the file to Firebase Storage
-      // and then create a catalog entry in the database
+      // Criar um objeto FormData para enviar o arquivo
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('userId', user?.id?.toString() || '1');
       
-      // For this demo, we'll simulate a successful upload
-      await new Promise(resolve => setTimeout(resolve, 1500));
+      // Enviar o arquivo para o servidor
+      const response = await fetch('/api/catalogs/upload', {
+        method: 'POST',
+        body: formData,
+        // Não configuramos headers quando enviamos FormData
+      });
       
-      // Create catalog entry
-      if (user) {
-        await apiRequest("POST", "/api/catalogs", {
-          userId: user.id,
-          fileName: file.name,
-          fileUrl: "https://example.com/catalog.xlsx", // In real app, this would be the actual file URL
-          processedStatus: "processing",
-        });
-        
-        // Invalidate catalogs query to refresh the list
-        queryClient.invalidateQueries({ queryKey: ["/api/catalogs"] });
-        
-        toast({
-          title: "Catálogo enviado com sucesso",
-          description: "Seu catálogo está sendo processado.",
-        });
+      if (!response.ok) {
+        throw new Error(`Upload falhou: ${response.statusText}`);
       }
+      
+      const result = await response.json();
+      
+      // Invalidate catalogs query to refresh the list
+      queryClient.invalidateQueries({ queryKey: ["/api/catalogs"] });
+      
+      toast({
+        title: "Catálogo enviado com sucesso",
+        description: "Seu catálogo está sendo processado. Os produtos serão extraídos automaticamente.",
+      });
     } catch (error) {
       console.error("Upload failed:", error);
       toast({
