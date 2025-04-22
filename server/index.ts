@@ -7,15 +7,20 @@ const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
+// Importar storage para acessar o sessionStore
+import { storage } from "./storage";
+
 // Configuração da sessão
 const SESSION_SECRET = process.env.SESSION_SECRET || 'alda-session-secret';
 app.use(session({
+  store: storage.sessionStore, // Usar o sessionStore configurado no storage
   secret: SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
   cookie: { 
     secure: process.env.NODE_ENV === 'production',
     maxAge: 1000 * 60 * 60 * 24 * 7, // 1 semana
+    httpOnly: true
   }
 }));
 

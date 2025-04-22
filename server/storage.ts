@@ -5,8 +5,13 @@ import {
   quotes, type Quote, type InsertQuote,
   moodboards, type Moodboard, type InsertMoodboard
 } from "@shared/schema";
+import session from "express-session";
+import { pool } from "./db";
 
 export interface IStorage {
+  // Armazenamento de sessões
+  sessionStore: session.Store;
+  
   // User methods
   getUser(id: number): Promise<User | undefined>;
   getUserByEmail(email: string): Promise<User | undefined>;
@@ -41,7 +46,15 @@ export interface IStorage {
   deleteMoodboard(id: number): Promise<boolean>;
 }
 
+import connectPgSimple from "connect-pg-simple";
+import createMemoryStore from "memorystore";
+
+const PostgresSessionStore = connectPgSimple(session);
+const MemoryStore = createMemoryStore(session);
+
 export class MemStorage implements IStorage {
+  sessionStore: session.Store;
+  
   private users: Map<number, User>;
   private products: Map<number, Product>;
   private catalogs: Map<number, Catalog>;
@@ -55,6 +68,10 @@ export class MemStorage implements IStorage {
   private moodboardId: number;
 
   constructor() {
+    // Inicializar o sessionStore
+    this.sessionStore = new MemoryStore({
+      checkPeriod: 86400000 // Limpar sessões expiradas a cada 24 horas
+    });
     this.users = new Map();
     this.products = new Map();
     this.catalogs = new Map();
