@@ -1,6 +1,6 @@
 import { ReactNode, useEffect } from "react";
 import Navigation from "./navigation";
-import { useAuth } from "@/lib/auth.js";
+import { useAuth } from "@/lib/auth";
 import { useLocation } from "wouter";
 
 interface LayoutProps {
