@@ -3,15 +3,10 @@ import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import multer from "multer";
 import * as XLSX from "xlsx";
-import { PDFDocument } from "pdf-lib";
 import path from "path";
-import { existsSync, mkdirSync, writeFileSync } from "fs";
-import { mkdir, readFile, writeFile } from "fs/promises";
+import { existsSync } from "fs";
+import { mkdir, readFile } from "fs/promises";
 import OpenAI from "openai";
-import pdfImgConvert from "pdf-img-convert";
-import fs from "fs";
-import * as pdfjs from "pdfjs-dist";
-import sharp from "sharp";
 import { 
   insertUserSchema, 
   insertProductSchema, 
@@ -21,20 +16,24 @@ import {
 } from "@shared/schema";
 import { z } from "zod";
 
+// Importar procesadores especializados
+import { extractTextFromPDF } from "./pdf-processor";
+import { extractProductsWithAI } from "./ai-extractor";
+
 // Configurar OpenAI
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 // Configurar multer para uploads
 const upload = multer({
   storage: multer.diskStorage({
-    destination: async function (req, file, cb) {
+    destination: async function (req: any, file: any, cb: any) {
       const uploadDir = path.join(process.cwd(), 'uploads');
       if (!existsSync(uploadDir)) {
         await mkdir(uploadDir, { recursive: true });
       }
       cb(null, uploadDir);
     },
-    filename: function (req, file, cb) {
+    filename: function (req: any, file: any, cb: any) {
       const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
       cb(null, uniqueSuffix + '-' + file.originalname);
     }
@@ -62,615 +61,26 @@ async function extractProductsFromExcel(filePath: string): Promise<any[]> {
   }
 }
 
-// Função para extrair texto e imagens de um arquivo PDF para análise de catálogos
-async function extractTextFromPDF(filePath: string): Promise<{ text: string, images: any[] }> {
-  try {
-    // Carregar o PDF usando pdf-lib
-    console.log(`Iniciando extração de texto e imagens do PDF: ${filePath}`);
-    const pdfBytes = await readFile(filePath);
-    const pdfDoc = await PDFDocument.load(pdfBytes);
-    const pageCount = pdfDoc.getPageCount();
-    
-    console.log(`Processando PDF com ${pageCount} páginas: ${filePath}`);
-    
-    // Verificar se é um catálogo Fratini
-    const fileName = path.basename(filePath);
-    const isFratiniCatalog = fileName.toLowerCase().includes("fratini");
-    
-    // Extrair imagens do PDF
-    console.log("Extraindo imagens do PDF...");
-    
-    // Criar diretório para imagens extraídas
-    const extractedImagesDir = path.join(process.cwd(), 'uploads', 'extracted_images');
-    if (!existsSync(extractedImagesDir)) {
-      await mkdir(extractedImagesDir, { recursive: true });
-    }
-    
-    // Extrair imagens usando pdf-img-convert
-    let extractedImages: any[] = [];
-    
-    try {
-      const outputImages = await pdfImgConvert.convert(filePath, {
-        width: 800,         // Largura do output em pixels
-        height: 800,        // Altura do output em pixels
-        page_numbers: Array.from({length: Math.min(pageCount, 25)}, (_, i) => i), // Limitar a 25 páginas
-        base64: false
-      });
-      
-      console.log(`Extraídas ${outputImages.length} imagens do PDF`);
-      
-      // Salvar cada imagem como um arquivo e armazenar o caminho
-      for (let i = 0; i < outputImages.length; i++) {
-        const imgData = outputImages[i];
-        const imgName = `${path.basename(filePath, '.pdf')}_page_${i+1}_${Date.now()}.jpg`;
-        const imgPath = path.join(extractedImagesDir, imgName);
-        
-        // Salvar a imagem no disco
-        await writeFile(imgPath, imgData);
-        
-        // Processar a imagem com sharp para recortar apenas o produto (simulação)
-        // Em um sistema real, você usaria IA para detectar e recortar apenas o produto
-        try {
-          await sharp(imgPath)
-            .resize(500, 500, { fit: 'inside' })
-            .toFile(path.join(extractedImagesDir, `processed_${imgName}`));
-            
-          console.log(`Imagem processada e salva: processed_${imgName}`);
-          
-          // Adicionar a imagem à lista de imagens extraídas
-          extractedImages.push({
-            page: i+1,
-            originalPath: `/uploads/extracted_images/${imgName}`,
-            processedPath: `/uploads/extracted_images/processed_${imgName}`,
-            width: 500,
-            height: 500
-          });
-        } catch (sharpError) {
-          console.error(`Erro ao processar imagem com sharp: ${sharpError}`);
-        }
-      }
-    } catch (imgError) {
-      console.error("Erro ao extrair imagens do PDF:", imgError);
-      console.log("Continuando com o texto para análise...");
-    }
-    
-    // Como pdf-lib não extrai texto diretamente, vamos usar o OpenAI para analisar o formato
-    // do PDF com base em metadados e descrições do negócio
-    let pdfText = '';
-    
-    if (isFratiniCatalog) {
-      console.log("Catálogo Fratini detectado. Usando descrição especializada para extração...");
-      
-      // Para catálogos Fratini, fornecemos uma descrição detalhada da estrutura esperada
-      pdfText = `
-      # ANÁLISE DETALHADA DO CATÁLOGO FRATINI
-
-      ## INFORMAÇÕES GERAIS DO DOCUMENTO
-      - Nome do arquivo: ${fileName}
-      - Número de páginas: ${pageCount}
-      - Número de imagens extraídas: ${extractedImages.length}
-      
-      ## ESTRUTURA DA TABELA DE PREÇOS FRATINI
-      
-      A tabela Fratini possui as seguintes colunas:
-      - Nome Comercial: Nome do produto (ex: "Apoio de Cabeça Columbus", "Cadeira Chicago")
-      - Imagem: Miniatura do produto
-      - Descrição: Descrição técnica (ex: "Apoio de Cabeça compatível com Cadeira Columbus")
-      - Selo: Indicadores como "NEW", "HOT", etc.
-      - Cores: Variações de cores disponíveis (ex: "Preto", "Branco", "Azul")
-      - Código Comercial: Códigos no formato numérico como "1.00034.01.0002"
-      - Preços: Valores em R$ para pagamentos em 30 dias, 45 dias e 60 dias
-      
-      ## PRODUTOS TÍPICOS
-      Produtos típicos incluem:
-      - Cadeiras de escritório (ex: Chicago, Detroit, Everest)
-      - Cadeiras de gaming (ex: Fair Play, MVP)
-      - Apoios de cabeça e outros acessórios
-      - Banquetas e cadeiras de espera
-      
-      ## ESTRUTURA DE PREÇOS E CÓDIGOS
-      - Cada produto pode ter múltiplas variações de cor, cada uma com seu próprio código comercial
-      - Os códigos comerciais seguem o formato numérico 1.XXXXX.XX.XXXX
-      - Preços variam entre R$50 até R$900 dependendo do produto
-      - O documento segue a estrutura típica de um catálogo de produtos Fratini
-      - Todos os produtos devem ser identificados com seus códigos, preços e especificações completas
-      
-      ## CONTEXTO ADICIONAL
-      Este é um catálogo de produtos Fratini 2025, que é uma marca de móveis de escritório
-      e cadeiras ergonômicas. O catálogo tem informação completa sobre todos os produtos 
-      da linha, incluindo especificações técnicas e preços.
-      `;
-    } else {
-      // Para PDFs genéricos, fornecemos orientações sobre como extrair informações de catálogos
-      // de móveis em geral
-      pdfText = `
-      # ANÁLISE DE CATÁLOGO DE MÓVEIS
-      
-      ## INFORMAÇÕES GERAIS DO DOCUMENTO
-      - Nome do arquivo: ${fileName}
-      - Número de páginas: ${pageCount}
-      - Número de imagens extraídas: ${extractedImages.length}
-      
-      ## CONTEÚDO TÍPICO DE CATÁLOGOS DE MÓVEIS
-      Este documento contém informações sobre produtos de móveis com os seguintes detalhes típicos:
-      - Nome do produto (ex: Sofá Madrid, Mesa de Jantar Oslo)
-      - Código do produto (ex: SF-MAD-001, MJ-OSL-002)
-      - Descrição do produto
-      - Preço (valores em reais - R$)
-      - Materiais utilizados
-      - Dimensões (geralmente em centímetros, no formato LxAxP)
-      - Cores disponíveis
-      
-      ## PRODUTOS COMUNS
-      Produtos comuns em catálogos de móveis incluem:
-      - Sofás e poltronas
-      - Mesas de jantar, centro e laterais
-      - Cadeiras e banquetas
-      - Estantes e buffets
-      - Camas e criados-mudos
-      - Armários e organizadores
-      
-      ## FORMATO DE DADOS
-      O objetivo é identificar todos os produtos listados no catálogo com suas características:
-      - Cada produto deve ter um nome completo e uma descrição
-      - Os preços geralmente aparecem no formato R$ X.XXX,XX
-      - As dimensões são frequentemente apresentadas como largura x altura x profundidade
-      - Materiais e cores disponíveis geralmente são listados junto com cada produto
-      
-      O documento deve ser analisado para extrair informações completas de todos os produtos.
-      `;
-    }
-    
-    // Adicionar instruções para o modelo AI processar o conteúdo e associar imagens
-    pdfText += `
-
-    # INSTRUÇÕES PARA PROCESSAMENTO
-    Você deverá analisar o conteúdo acima e extrair informações estruturadas de todos os produtos mencionados.
-    
-    Para cada produto, identifique:
-    1. Nome completo do produto (name)
-    2. Código ou referência (code)
-    3. Preço em formato numérico (price) - multiplique por 100 para centavos
-    4. Categoria (category) 
-    5. Descrição detalhada (description)
-    6. Lista de cores disponíveis (colors)
-    7. Lista de materiais utilizados (materials)
-    8. Informações de dimensões (sizes)
-    9. Número da página onde o produto aparece (pageNumber) - se disponível
-    
-    Cada produto aparece como uma entrada distinta no catálogo, com suas próprias informações.
-    É necessário percorrer todo o documento para identificar todos os produtos.
-    
-    Extraímos ${extractedImages.length} imagens das páginas do catálogo. 
-    Cada produto deve estar associado a pelo menos uma dessas imagens.
-    `;
-    
-    console.log(`Texto extraído com sucesso. Tamanho: ${pdfText.length} caracteres`);
-    return { 
-      text: pdfText, 
-      images: extractedImages 
-    };
-  } catch (error) {
-    console.error('Erro ao processar arquivo PDF:', error);
-    throw new Error(`Falha ao processar arquivo PDF: ${error instanceof Error ? error.message : 'Erro desconhecido'}`);
-  }
-}
-
-type PageImageMap = {
-  [key: number]: Array<{
-    page: number;
-    originalPath: string;
-    processedPath: string;
-    width: number;
-    height: number;
-  }>
-};
-
-// Função para usar IA para extrair produtos do texto de um PDF
-async function extractProductsWithAI(text: string, fileName: string): Promise<any[]> {
-  try {
-    console.log("Iniciando extração de produtos com IA...");
-    
-    // Detectar se é um catálogo Fratini
-    const isFratiniCatalog = fileName.toLowerCase().includes("fratini");
-    console.log(`Detectado como catálogo Fratini: ${isFratiniCatalog}`);
-    
-    // Se for um catálogo Fratini, vamos adicionar informações específicas sobre os produtos
-    // mais comuns da Fratini para ajudar o modelo a identificar melhor
-    if (isFratiniCatalog) {
-      const fratiniProductsInfo = `
-      # Lista de Produtos Típicos da Fratini
-
-      ## Cadeiras de Escritório:
-      - Cadeira Chicago: Cadeira ergonômica com apoio de braços e ajuste de altura. Preço aproximado R$ 750,00.
-      - Cadeira Detroit: Cadeira executiva com encosto reclinável e apoio lombar ajustável. Preço aproximado R$ 800,00.
-      - Cadeira New York: Cadeira premium com encosto em tela mesh e apoio de cabeça. Preço aproximado R$ 900,00.
-      - Cadeira Miami: Cadeira operacional com mecanismo relax e base cromada. Preço aproximado R$ 650,00.
-      - Cadeira Everest: Cadeira com encosto reclinável e apoio lombar. Preço aproximado R$ 870,00.
-      
-      ## Cadeiras Gamer:
-      - Cadeira Fair Play: Cadeira gamer com design ergonômico e apoio cervical. Preço aproximado R$ 750,00.
-      - Cadeira MVP: Cadeira gamer com iluminação LED e apoio lombar. Preço aproximado R$ 800,00.
-      - Cadeira Pro Gamer: Cadeira com apoio de cabeça e lombar ajustáveis. Preço aproximado R$ 850,00.
-      
-      ## Banquetas e Cadeiras de Espera:
-      - Banqueta Avia: Banqueta alta para balcão com apoio para os pés. Preço aproximado R$ 350,00.
-      - Banqueta Sky: Banqueta regulável com encosto e base cromada. Preço aproximado R$ 380,00.
-      - Cadeira de Espera Connect: Cadeira para recepção com estrutura metálica. Preço aproximado R$ 420,00.
-      
-      ## Acessórios:
-      - Apoio de Cabeça Columbus: Complemento para cadeira Columbus em polipropileno. Preço aproximado R$ 120,00.
-      - Apoio de Braço New York: Peça de reposição em poliuretano. Preço aproximado R$ 90,00.
-      `;
-      
-      // Adicionar essas informações ao texto para análise
-      text += "\n\n" + fratiniProductsInfo;
-    }
-    
-    // Para PDFs de catálogos, vamos processar de forma mais completa
-    // Esta função processa o PDF diretamente no caso de catálogos Fratini
-    // e divide em partes menores para processamento com a OpenAI
-    const processTextInChunks = async (textToProcess: string, isTableFratini: boolean): Promise<any[]> => {
-      console.log(`Iniciando processamento aprimorado do texto. É catálogo Fratini? ${isTableFratini}`);
-      
-      // Se for um catálogo Fratini, enviamos uma requisição específica para produtos Fratini
-      if (isTableFratini) {
-        console.log("Processando catálogo Fratini com template especializado");
-        
-        // Criar uma lista de produtos típicos do catálogo Fratini para ajudar na extração
-        const fratiniProductList = `
-        Produtos típicos do catálogo Fratini incluem:
-        
-        CADEIRAS DE ESCRITÓRIO:
-        - Cadeira Chicago: cadeira ergonômica com apoio de braços, ajuste de altura
-        - Cadeira Detroit: cadeira executiva com encosto reclinável
-        - Cadeira New York: cadeira premium com encosto em tela mesh
-        - Cadeira Miami: cadeira operacional com mecanismo relax
-        - Cadeira Everest: cadeira com encosto reclinável e apoio lombar
-        
-        CADEIRAS GAMER:
-        - Cadeira Fair Play: cadeira gamer com design ergonômico
-        - Cadeira MVP: cadeira gamer com iluminação LED
-        - Cadeira Pro Gamer: cadeira com apoio de cabeça e lombar
-        
-        BANQUETAS E CADEIRAS DE ESPERA:
-        - Banqueta Avia: banqueta alta para balcão
-        - Banqueta Sky: banqueta regulável com encosto
-        - Cadeira de Espera Connect: cadeira para recepção
-        
-        ACESSÓRIOS:
-        - Apoio de Cabeça Columbus: complemento para cadeira Columbus
-        - Apoio de Braço New York: peça de reposição
-        
-        Cada produto geralmente tem variações de cores como preto, branco, azul, cinza, etc.
-        Os códigos de produtos geralmente seguem o formato numérico como 1.00034.01.0002.
-        `;
-        
-        // Enviar todo o texto com a lista de produtos para melhorar a extração
-        return await extractProductsFromTextChunk(textToProcess + "\n\n" + fratiniProductList, isTableFratini);
-      }
-      
-      // Para outros tipos de catálogos ou documentos grandes, dividimos em partes
-      // Tamanho máximo para cada pedaço (chunk)
-      const maxChunkSize = 12000; // caracteres (reduzido para melhorar a qualidade da análise)
-      
-      // Se o texto é curto o suficiente, processa tudo de uma vez
-      if (textToProcess.length <= maxChunkSize) {
-        return await extractProductsFromTextChunk(textToProcess, isTableFratini);
-      }
-      
-      // Dividir o texto em pedaços menores para processamento
-      console.log(`Texto muito longo (${textToProcess.length} caracteres). Dividindo em partes para processamento...`);
-      
-      const chunks = [];
-      let startPos = 0;
-      
-      while (startPos < textToProcess.length) {
-        // Pegar um pedaço do texto, mas tentar cortar em um local apropriado (nova linha)
-        let endPos = Math.min(startPos + maxChunkSize, textToProcess.length);
-        
-        // Se não estamos no final do texto, tente encontrar um quebra de linha para cortar
-        if (endPos < textToProcess.length) {
-          const nextNewline = textToProcess.indexOf('\n', endPos - 500);
-          if (nextNewline !== -1 && nextNewline < endPos + 500) {
-            endPos = nextNewline;
-          }
-        }
-        
-        // Extrair o pedaço atual
-        const chunk = textToProcess.substring(startPos, endPos);
-        chunks.push(chunk);
-        
-        startPos = endPos;
-      }
-      
-      console.log(`Texto dividido em ${chunks.length} partes para processamento.`);
-      
-      // Processar cada pedaço e combinar os resultados
-      let allProducts: any[] = [];
-      for (let i = 0; i < chunks.length; i++) {
-        console.log(`Processando parte ${i+1} de ${chunks.length}...`);
-        const chunkProducts = await extractProductsFromTextChunk(chunks[i], isTableFratini, i+1);
-        console.log(`Encontrados ${chunkProducts.length} produtos na parte ${i+1}.`);
-        allProducts = [...allProducts, ...chunkProducts];
-      }
-      
-      return allProducts;
-    };
-    
-    // Função para processar um único pedaço de texto
-    const extractProductsFromTextChunk = async (chunk: string, isTableFratini: boolean, chunkNumber: number = 1): Promise<any[]> => {
-      // Criar o prompt específico para o tipo de catálogo
-      const prompt = isTableFratini ? 
-        `
-        Você é um especialista em extrair dados estruturados de tabelas de preços de móveis da marca Fratini.
-        
-        Analise o seguinte texto extraído de um PDF da tabela de preços Fratini (parte ${chunkNumber}) e extraia TODOS os produtos listados:
-        
-        ${chunk}
-        
-        Para cada produto identifique:
-        1. name: Nome comercial do produto (ex: "Cadeira Chicago")
-        2. code: Código comercial do produto (formato numérico como "1.00020.01.0001")
-        3. price: Preço em reais (converta para centavos - multiplique por 100)
-        4. category: Categoria do produto (ex: "Cadeiras", "Banquetas", etc.)
-        5. description: Descrição do produto incluindo materiais e características
-        6. colors: Lista de cores disponíveis
-        7. materials: Lista de materiais mencionados
-        8. sizes: Informações de dimensões
-
-        IMPORTANTE PARA CATÁLOGOS FRATINI:
-        - As tabelas Fratini geralmente têm colunas como: Nome Comercial, Imagem, Descrição, Selo, Cores, Código Comercial, Preço 30 dias, 45 dias, 60 dias
-        - Os Códigos Comerciais são números no formato 1.XXXXX.XX.XXXX
-        - Se um mesmo produto tiver várias cores, cada cor terá um código diferente - agrupe-os como um único produto com várias cores
-        - Use o preço da coluna "30 dias" como preço padrão, convertendo para centavos
-        - Identifique materiais na coluna de descrição, como "polipropileno", "aço", etc.
-        
-        EXTRAIA TODOS OS PRODUTOS MENCIONADOS, MESMO QUE HAJA DEZENAS OU CENTENAS DELES.
-        
-        Formate a resposta como JSON no formato {"products": [...]}
-        `
-        :
-        `
-        Você é um assistente especializado em extrair informações estruturadas de catálogos de móveis.
-        
-        A partir do texto abaixo (parte ${chunkNumber} do catálogo), identifique TODOS os produtos mencionados e extraia as seguintes informações para CADA produto:
-        1. name: Nome completo do produto
-        2. description: Descrição detalhada do produto
-        3. code: Código ou referência do produto (ex: SF-MAD-001)
-        4. price: Preço em formato numérico (se o valor estiver como "R$ 1.234,56", converta para 123456)
-        5. category: Categoria principal (Sofá, Mesa, Cadeira, Estante, Poltrona, etc.)
-        6. materials: Lista de materiais utilizados na fabricação
-        7. colors: Array com todas as cores disponíveis
-        8. sizes: Array de objetos contendo as dimensões no formato:
-           {
-             "width": largura em cm (número),
-             "height": altura em cm (número),
-             "depth": profundidade em cm (número),
-             "label": descrição das dimensões (opcional)
-           }
-        
-        IMPORTANTE:
-        - Para cada produto, tente extrair TODAS as informações disponíveis.
-        - Se uma informação não estiver disponível, use null ou um array vazio conforme apropriado.
-        - Quando os preços estiverem no formato "R$ X.XXX,XX", remova o símbolo da moeda e converta para centavos.
-        - Se encontrar dimensões no formato "LxAxP" ou similar, separe os números em largura, altura e profundidade.
-        - EXTRAIA TODOS OS PRODUTOS MENCIONADOS, MESMO QUE HAJA DEZENAS OU CENTENAS DELES.
-        - Retorne a resposta em formato JSON como um objeto com a propriedade "products" que contém um array de produtos.
-        
-        Texto do catálogo (parte ${chunkNumber}):
-        ${chunk}
-        `;
-      
-      // Definir o sistema message baseado no tipo de catálogo
-      const systemMessage = isTableFratini
-        ? "Você é um assistente especializado em extrair dados completos de tabelas de preços Fratini, focando em reconhecer formatos específicos de código de produto como '1.00020.01.0001', preços em diferentes prazos, e agrupando variações do mesmo produto. IMPORTANTE: Extraia TODOS os produtos mencionados no texto, mesmo que sejam muitos."
-        : "Você é um assistente especializado em extrair informações estruturadas de catálogos de móveis com precisão. IMPORTANTE: Extraia TODOS os produtos mencionados no texto, mesmo que sejam muitos. Não pule nenhum produto.";
-        
-      console.log(`Enviando requisição à OpenAI para processar parte ${chunkNumber}...`);
-      
-      // Aumentar a temperatura para permitir maior criatividade nas descrições
-      // e garantir que o modelo possa extrair informações de formatos variados
-      const response = await openai.chat.completions.create({
-        model: "gpt-4o", // o modelo mais recente da OpenAI
-        messages: [
-          { 
-            role: "system", 
-            content: systemMessage
-          },
-          { role: "user", content: prompt }
-        ],
-        max_tokens: 4000,
-        temperature: 0.3, // Temperatura um pouco mais alta para permitir maior variação
-        response_format: { type: "json_object" }
-      });
-      
-      // Analisar o JSON da resposta
-      let chunkProducts = [];
-      try {
-        const responseText = response.choices[0].message.content;
-        console.log(`Resposta da IA recebida para parte ${chunkNumber}, processando JSON...`);
-        
-        if (responseText) {
-          const parsedResponse = JSON.parse(responseText);
-          if (Array.isArray(parsedResponse.products)) {
-            chunkProducts = parsedResponse.products;
-            console.log(`Extraídos ${chunkProducts.length} produtos da parte ${chunkNumber}.`);
-          } else if (parsedResponse.products) {
-            chunkProducts = [parsedResponse.products];
-            console.log(`Extraído 1 produto da parte ${chunkNumber}.`);
-          } else if (Array.isArray(parsedResponse)) {
-            chunkProducts = parsedResponse;
-            console.log(`Extraídos ${chunkProducts.length} produtos da parte ${chunkNumber} (formato alternativo).`);
-          } else {
-            console.log(`Nenhum produto encontrado no formato esperado para parte ${chunkNumber}.`);
-          }
-        }
-      } catch (error) {
-        console.error(`Erro ao analisar resposta da IA para parte ${chunkNumber}:`, error);
-      }
-      
-      return chunkProducts;
-    };
-    
-    // Iniciar o processamento do texto completo
-    const allProducts = await processTextInChunks(text, isFratiniCatalog);
-    console.log(`Total de produtos extraídos de todas as partes: ${allProducts.length}`);
-    
-    // Processo de normalização dos dados para garantir consistência
-    const normalizedProducts = allProducts.map(product => {
-      // Processamento do preço
-      if (product.price && typeof product.price === 'string') {
-        // Remover símbolos não numéricos e converter vírgula para ponto
-        const priceStr = product.price.replace(/[^\d,\.]/g, '').replace(',', '.');
-        const priceFloat = parseFloat(priceStr);
-        if (!isNaN(priceFloat)) {
-          product.price = Math.round(priceFloat * 100);
-        } else {
-          product.price = 0;
-        }
-      } else if (!product.price) {
-        product.price = 0;
-      }
-      
-      // Garantir que colors seja um array
-      if (product.colors && typeof product.colors === 'string') {
-        product.colors = product.colors.split(/[,;]/).map((color: string) => color.trim()).filter(Boolean);
-      } else if (!Array.isArray(product.colors)) {
-        product.colors = [];
-      }
-      
-      // Garantir que materials seja um array
-      if (product.materials && typeof product.materials === 'string') {
-        product.materials = product.materials.split(/[,;]/).map((material: string) => material.trim()).filter(Boolean);
-      } else if (!Array.isArray(product.materials)) {
-        product.materials = [];
-      }
-      
-      // Processar dimensões/tamanhos
-      if (!Array.isArray(product.sizes)) {
-        // Se dimensions existe mas sizes não existe
-        if (product.dimensions) {
-          // Tenta extrair dimensões de uma string como "220x90x85 cm"
-          const dimMatch = String(product.dimensions).match(/(\d+)\s*[xX]\s*(\d+)\s*[xX]\s*(\d+)/);
-          if (dimMatch) {
-            product.sizes = [{
-              width: parseInt(dimMatch[1]),
-              height: parseInt(dimMatch[2]),
-              depth: parseInt(dimMatch[3]),
-              label: product.dimensions
-            }];
-          } else {
-            product.sizes = [{ label: String(product.dimensions) }];
-          }
-        } else {
-          product.sizes = [];
-        }
-      }
-      
-      // Adicionar imagem placeholder se não existir
-      if (!product.imageUrl) {
-        // Verificar se é um dos produtos principais do catálogo Fratini para usar imagens pré-definidas
-        const mainProductImages: Record<string, string> = {
-          "cadeira chicago": "https://example-furniture.com/products/chicago.jpg",
-          "cadeira detroit": "https://example-furniture.com/products/detroit.jpg",
-          "cadeira fair play": "https://example-furniture.com/products/fairplay.jpg",
-          "cadeira everest": "https://example-furniture.com/products/everest.jpg",
-          "cadeira mvp": "https://example-furniture.com/products/mvp.jpg",
-          "banqueta avia": "https://example-furniture.com/products/avia.jpg"
-        };
-        
-        let foundImage = false;
-        const productNameLower = product.name.toLowerCase();
-        
-        // Verificar se temos uma imagem para um produto específico
-        for (const [key, url] of Object.entries(mainProductImages)) {
-          if (productNameLower.includes(key)) {
-            product.imageUrl = url;
-            foundImage = true;
-            break;
-          }
-        }
-        
-        // Se não encontrou imagem específica, usar imagens de categoria
-        if (!foundImage) {
-          // Imagens de placeholder para cada categoria
-          const categoryImages: Record<string, string> = {
-            "Cadeira": "https://images.unsplash.com/photo-1567538096630-e0c55bd6374c?ixlib=rb-4.0.3",
-            "Banqueta": "https://images.unsplash.com/photo-1501045661006-fcebe0257c3f?ixlib=rb-4.0.3",
-            "Poltrona": "https://images.unsplash.com/photo-1567016432779-094069958ea5?ixlib=rb-4.0.3",
-            "Sofá": "https://images.unsplash.com/photo-1555041469-a586c61ea9bc?ixlib=rb-4.0.3",
-            "Mesa": "https://images.unsplash.com/photo-1577140917170-285929fb55b7?ixlib=rb-4.0.3"
-          };
-          
-          // Tenta encontrar uma categoria que corresponda
-          let matchedImage = "https://images.unsplash.com/photo-1555041469-a586c61ea9bc?ixlib=rb-4.0.3";
-          
-          // Busca pelas categorias
-          for (const cat of Object.keys(categoryImages)) {
-            if ((product.category && product.category.toLowerCase().includes(cat.toLowerCase())) || 
-                (product.name && product.name.toLowerCase().includes(cat.toLowerCase()))) {
-              matchedImage = categoryImages[cat];
-              break;
-            }
-          }
-          
-          product.imageUrl = matchedImage;
-        }
-        
-        // Armazenar que precisamos gerar uma imagem personalizada para este produto
-        product.needsCustomImage = true;
-      }
-      
-      // Verificar se os principais campos estão preenchidos
-      if (!product.name) product.name = "Produto sem nome";
-      if (!product.code) product.code = `AUTO-${Math.floor(Math.random() * 100000)}`;
-      if (!product.category) product.category = "Não categorizado";
-      if (!product.description) product.description = "";
-      
-      return product;
-    });
-    
-    // Remover possíveis duplicados por código
-    const uniqueProducts = [];
-    const seenCodes = new Set();
-    
-    for (const product of normalizedProducts) {
-      // Usar o código como identificador único quando disponível
-      const uniqueId = product.code || `${product.name}-${product.price}`;
-      
-      if (!seenCodes.has(uniqueId)) {
-        seenCodes.add(uniqueId);
-        uniqueProducts.push(product);
-      }
-    }
-    
-    console.log(`Total de produtos únicos após remoção de duplicados: ${uniqueProducts.length}`);
-    
-    return uniqueProducts;
-  } catch (error) {
-    console.error('Erro ao usar IA para extrair produtos:', error);
-    throw new Error(`Falha ao analisar o catálogo com IA: ${error instanceof Error ? error.message : 'Erro desconhecido'}`);
-  }
-}
-
 export async function registerRoutes(app: Express): Promise<Server> {
+  // Rota de verificação
+  app.get("/api/healthcheck", (_req: Request, res: Response) => {
+    res.json({ status: "ok" });
+  });
+
   // Auth endpoints
   app.post("/api/auth/register", async (req: Request, res: Response) => {
     try {
       const data = insertUserSchema.parse(req.body);
       
-      // Check if user already exists
+      // Verificar se o e-mail já existe
       const existingUser = await storage.getUserByEmail(data.email);
+      
       if (existingUser) {
-        return res.status(400).json({ message: "User with this email already exists" });
+        return res.status(400).json({ message: "Email already exists" });
       }
       
       const user = await storage.createUser(data);
-      // Don't return password
-      const { password, ...userData } = user;
-      
-      return res.status(201).json(userData);
+      return res.status(201).json(user);
     } catch (error) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({ message: "Invalid data", errors: error.errors });
@@ -690,13 +100,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const user = await storage.getUserByEmail(email);
       
       if (!user || user.password !== password) {
-        return res.status(401).json({ message: "Invalid email or password" });
+        return res.status(401).json({ message: "Invalid credentials" });
       }
       
-      // Don't return password
-      const { password: _, ...userData } = user;
-      
-      return res.status(200).json(userData);
+      return res.status(200).json({ 
+        id: user.id,
+        name: user.name,
+        email: user.email
+      });
     } catch (error) {
       return res.status(500).json({ message: "Failed to login" });
     }
@@ -1011,103 +422,55 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // AI visual search endpoint
+  // AI visual search route
   app.post("/api/ai/visual-search", async (req: Request, res: Response) => {
     try {
-      const { userId = 1, imageBase64 } = req.body; // Default to userId 1 for mock data
+      const { image, maxResults = 5 } = req.body;
       
-      if (!imageBase64) {
-        return res.status(400).json({ message: "Image is required" });
+      if (!image || !image.startsWith('data:image')) {
+        return res.status(400).json({ message: "Invalid image data" });
       }
       
-      // Usar a OpenAI para analisar a imagem enviada pelo usuário
-      console.log("Analisando imagem com IA para busca visual...");
-      
-      try {
-        // Consultar a OpenAI Vision para descrição da imagem
-        const visionResponse = await openai.chat.completions.create({
-          model: "gpt-4o", // o modelo mais recente da OpenAI com suporte a imagens
-          messages: [
-            {
-              role: "system",
-              content: "Você é um assistente especializado em identificar móveis em imagens. Descreva detalhadamente o móvel mostrado, incluindo tipo, estilo, materiais, cores e características distintivas."
-            },
-            {
-              role: "user",
-              content: [
-                {
-                  type: "text",
-                  text: "Identifique e descreva com detalhes este móvel, para que eu possa encontrar produtos similares."
-                },
-                {
-                  type: "image_url",
-                  image_url: {
-                    url: `data:image/jpeg;base64,${imageBase64}`
-                  }
+      // Exemplo de chamada para API da OpenAI para análise visual
+      const response = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: "Descreva este móvel detalhadamente, incluindo categoria, estilo, materiais, cores e características principais"
+              },
+              {
+                type: "image_url",
+                image_url: {
+                  url: image
                 }
-              ],
-            },
-          ],
-          max_tokens: 300
-        });
-        
-        const imageDescription = visionResponse.choices[0].message.content;
-        console.log("Descrição da imagem gerada:", imageDescription);
-        
-        // Recuperar todos os produtos do usuário
-        const allProducts = await storage.getProductsByUserId(userId);
-        
-        // Usar a OpenAI para encontrar produtos similares com base na descrição da imagem
-        const matchResponse = await openai.chat.completions.create({
-          model: "gpt-4o",
-          messages: [
-            {
-              role: "system",
-              content: "Você é um assistente especializado em corresponder descrições de móveis com produtos de um catálogo. Seu objetivo é encontrar os produtos mais similares com base em características, estilo, materiais e aparência."
-            },
-            {
-              role: "user",
-              content: `
-              Descrição do móvel na imagem: "${imageDescription}"
-              
-              Lista de produtos disponíveis:
-              ${allProducts.map((p, index) => `${index + 1}. Nome: ${p.name}, Categoria: ${p.category}, Descrição: ${p.description}, Materiais: ${p.materials?.join(', ') || 'N/A'}, Cores: ${p.colors?.join(', ') || 'N/A'}`).join('\n')}
-              
-              Identifique os 3 produtos mais similares ao móvel descrito. Retorne apenas os números dos produtos correspondentes no formato JSON: {"matches": [número1, número2, número3]}`
-            }
-          ],
-          response_format: { type: "json_object" },
-          max_tokens: 500
-        });
-        
-        // Extrair os índices dos produtos correspondentes
-        const matchContent = matchResponse.choices[0].message.content;
-        const matches = JSON.parse(matchContent).matches;
-        
-        // Mapear índices para produtos reais (subtraindo 1 porque nossos índices começam em 0)
-        const similarProducts = matches
-          .map(index => allProducts[index - 1])
-          .filter(product => product !== undefined);
-        
-        console.log(`Encontrados ${similarProducts.length} produtos similares.`);
-        
-        return res.status(200).json({
-          description: imageDescription,
-          products: similarProducts
-        });
-        
-      } catch (aiError) {
-        console.error("Erro ao processar imagem com IA:", aiError);
-        
-        // Em caso de erro, retornar alguns produtos aleatórios
-        const products = await storage.getProductsByUserId(userId);
-        const randomProducts = products.sort(() => 0.5 - Math.random()).slice(0, 3);
-        
-        return res.status(200).json({
-          description: "Não foi possível analisar a imagem com precisão. Aqui estão alguns produtos para você explorar.",
-          products: randomProducts
-        });
-      }
+              }
+            ],
+          },
+        ]
+      });
+      
+      const description = response.choices[0].message.content || '';
+      
+      // Buscar produtos que correspondam à descrição
+      const allProducts = await storage.getProductsByUserId(1); // Usando userId 1 para demo
+      
+      // Filtragem simples baseada em palavras-chave da descrição
+      const keywords = description.toLowerCase().split(/\s+/);
+      const filteredProducts = allProducts
+        .filter(product => {
+          const productText = `${product.name} ${product.category} ${product.description}`.toLowerCase();
+          return keywords.some(keyword => keyword.length > 3 && productText.includes(keyword));
+        })
+        .slice(0, maxResults);
+      
+      return res.status(200).json({
+        description,
+        products: filteredProducts
+      });
     } catch (error) {
       console.error("Erro na busca visual:", error);
       return res.status(500).json({ message: "Falha ao realizar busca visual" });
@@ -1124,7 +487,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.body.userId ? parseInt(req.body.userId) : 1;
       const filePath = (req.file as any).path;
       const fileName = (req.file as any).originalname;
-      const fileType = fileName.split('.').pop()?.toLowerCase();
+      const fileType = fileName.split('.').pop()?.toLowerCase() || '';
       
       console.log(`Processando arquivo: ${fileName}, tipo: ${fileType}, para usuário: ${userId}`);
       
@@ -1157,16 +520,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const extractedProducts = await extractProductsWithAI(extractedText, fileName);
           
           // Mapa para rastrear as imagens por número de página
-          const imagesByPage = extractedImages.reduce((acc, img) => {
-            if (!acc[img.page]) {
-              acc[img.page] = [];
+          const imagesByPage: { [key: number]: any[] } = {};
+          
+          // Organizar imagens por página
+          extractedImages.forEach(img => {
+            if (!imagesByPage[img.page]) {
+              imagesByPage[img.page] = [];
             }
-            acc[img.page].push(img);
-            return acc;
-          }, {});
+            imagesByPage[img.page].push(img);
+          });
           
           // Associar imagens aos produtos com base no número da página ou índice
-          productsData = extractedProducts.map((product, index) => {
+          productsData = extractedProducts.map((product: any, index: number) => {
             // Verificar se o produto tem um número de página identificado
             const productPage = product.pageNumber || Math.floor(index / 2) + 1; // Estimativa baseada no índice
             
@@ -1246,7 +611,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const imageUrl = imageResponse.data[0].url;
           console.log(`Imagem gerada com sucesso para ${product.name}: ${imageUrl}`);
           
-          return imageUrl;
+          return imageUrl || '';
         } catch (error) {
           console.error(`Erro ao gerar imagem para ${product.name}:`, error);
           
@@ -1331,7 +696,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             colors: Array.isArray(productData.colors) ? productData.colors : [],
             materials: Array.isArray(productData.materials) ? productData.materials : [],
             sizes: Array.isArray(productData.sizes) ? productData.sizes : [],
-            imageUrl: imageUrl
+            imageUrl: imageUrl || "https://images.unsplash.com/photo-1555041469-a586c61ea9bc?ixlib=rb-4.0.3"
           };
           
           const savedProduct = await storage.createProduct(productToSave);
