@@ -1112,8 +1112,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const userId = req.body.userId ? parseInt(req.body.userId) : 1;
-      const filePath = req.file.path;
-      const fileName = req.file.originalname;
+      const filePath = (req.file as any).path;
+      const fileName = (req.file as any).originalname;
       const fileType = fileName.split('.').pop()?.toLowerCase();
       
       console.log(`Processando arquivo: ${fileName}, tipo: ${fileType}, para usuário: ${userId}`);
@@ -1136,15 +1136,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
           productsData = await extractProductsFromExcel(filePath);
           extractionInfo = `Extraídos ${productsData.length} produtos do arquivo Excel.`;
         } else if (fileType === 'pdf') {
-          // Extrair texto do PDF usando OpenAI Vision API
-          console.log(`Iniciando extração de texto do PDF: ${filePath}`);
-          const extractedText = await extractTextFromPDF(filePath);
+          // Extrair texto e imagens do PDF
+          console.log(`Iniciando extração de texto e imagens do PDF: ${filePath}`);
+          const { text: extractedText, images: extractedImages } = await extractTextFromPDF(filePath);
           console.log(`Texto extraído com sucesso. Tamanho: ${extractedText.length} caracteres`);
+          console.log(`Imagens extraídas com sucesso. Total: ${extractedImages.length} imagens`);
           
           // Usar IA para extrair produtos do texto
           console.log("Iniciando análise de produtos com IA...");
-          productsData = await extractProductsWithAI(extractedText, fileName);
-          extractionInfo = `PDF processado com sucesso. Identificados ${productsData.length} produtos.`;
+          const extractedProducts = await extractProductsWithAI(extractedText, fileName);
+          
+          // Mapa para rastrear as imagens por número de página
+          const imagesByPage = extractedImages.reduce((acc, img) => {
+            if (!acc[img.page]) {
+              acc[img.page] = [];
+            }
+            acc[img.page].push(img);
+            return acc;
+          }, {});
+          
+          // Associar imagens aos produtos com base no número da página ou índice
+          productsData = extractedProducts.map((product, index) => {
+            // Verificar se o produto tem um número de página identificado
+            const productPage = product.pageNumber || Math.floor(index / 2) + 1; // Estimativa baseada no índice
+            
+            // Encontrar imagens para essa página
+            const pageImages = imagesByPage[productPage] || [];
+            
+            // Se temos imagens para essa página, adicionar a primeira à URL do produto
+            if (pageImages.length > 0) {
+              product.imageUrl = pageImages[0].processedPath;
+              console.log(`Associada imagem da página ${productPage} ao produto "${product.name}"`);
+            }
+            
+            return product;
+          });
+          
+          extractionInfo = `PDF processado com sucesso. Identificados ${productsData.length} produtos e extraídas ${extractedImages.length} imagens.`;
         } else {
           throw new Error("Formato de arquivo não suportado. Use Excel ou PDF");
         }
