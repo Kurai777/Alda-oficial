@@ -3,7 +3,8 @@ import fs, { existsSync } from "fs";
 import { mkdir, readFile, writeFile } from "fs/promises";
 import { PDFDocument } from "pdf-lib";
 import sharp from "sharp";
-import pdfImgConvert from "pdf-img-convert";
+// Usar nosso wrapper ao invés de importar diretamente
+import pdfImgConvert from "./pdf-converter-wrapper.js";
 
 // Interface para imagens extraídas do PDF
 export interface ExtractedImage {
