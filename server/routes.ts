@@ -15,6 +15,14 @@ import {
   insertMoodboardSchema 
 } from "@shared/schema";
 import { z } from "zod";
+import "express-session";
+
+// Estender a interface Session do express-session para incluir userId
+declare module "express-session" {
+  interface SessionData {
+    userId?: number;
+  }
+}
 
 // Importar procesadores especializados
 import { extractTextFromPDF } from "./pdf-processor";
@@ -104,8 +112,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Invalid credentials" });
       }
       
-      // Simular sessão - em uma implementação real, você usaria express-session
-      req.session = { userId: user.id };
+      // Definir o userId na sessão
+      req.session.userId = user.id;
       
       return res.status(200).json({ 
         id: user.id,
@@ -147,8 +155,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/auth/logout", (req: Request, res: Response) => {
     try {
       // Limpar a sessão
-      req.session = null;
-      return res.status(200).json({ message: "Logged out successfully" });
+      if (req.session) {
+        req.session.destroy((err) => {
+          if (err) {
+            return res.status(500).json({ message: "Failed to logout" });
+          }
+          res.clearCookie('connect.sid');
+          return res.status(200).json({ message: "Logged out successfully" });
+        });
+      } else {
+        return res.status(200).json({ message: "Already logged out" });
+      }
     } catch (error) {
       return res.status(500).json({ message: "Failed to logout" });
     }
