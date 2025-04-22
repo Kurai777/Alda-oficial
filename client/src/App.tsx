@@ -10,32 +10,39 @@ import Catalogs from "@/pages/catalogs";
 import Quotes from "@/pages/quotes";
 import Moodboards from "@/pages/moodboards";
 import Layout from "@/components/layout/layout";
-import { AuthProvider } from "@/lib/auth.js";
+import { AuthProvider } from "@/lib/auth";
+
+import { ProtectedRoute } from "./lib/protected-route";
 
 function Router() {
   return (
     <Switch>
       <Route path="/login" component={Login} />
-      <Route path="/">
+      
+      <ProtectedRoute path="/">
         <Layout>
           <Dashboard />
         </Layout>
-      </Route>
-      <Route path="/catalogs">
+      </ProtectedRoute>
+      
+      <ProtectedRoute path="/catalogs">
         <Layout>
           <Catalogs />
         </Layout>
-      </Route>
-      <Route path="/quotes">
+      </ProtectedRoute>
+      
+      <ProtectedRoute path="/quotes">
         <Layout>
           <Quotes />
         </Layout>
-      </Route>
-      <Route path="/moodboards">
+      </ProtectedRoute>
+      
+      <ProtectedRoute path="/moodboards">
         <Layout>
           <Moodboards />
         </Layout>
-      </Route>
+      </ProtectedRoute>
+      
       <Route component={NotFound} />
     </Switch>
   );
