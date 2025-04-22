@@ -246,16 +246,14 @@ export default function Catalogs() {
                     <TableCell>{getStatusBadge(catalog.processedStatus || '')}</TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end space-x-2">
-                        {catalog.processedStatus === "completed" || catalog.processedStatus === "processed" ? (
-                          <Button 
-                            variant="outline" 
-                            size="sm"
-                            onClick={() => setSelectedCatalog(catalog)}
-                          >
-                            <ListIcon className="h-4 w-4 mr-1" />
-                            Ver Produtos
-                          </Button>
-                        ) : null}
+                        <Button 
+                          variant="outline" 
+                          size="sm"
+                          onClick={() => setSelectedCatalog(catalog)}
+                        >
+                          <ListIcon className="h-4 w-4 mr-1" />
+                          Ver Produtos
+                        </Button>
                         
                         {catalog.processedStatus === "pending" && (
                           <Button

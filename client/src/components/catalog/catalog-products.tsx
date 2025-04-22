@@ -44,7 +44,9 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
     queryKey: ["/api/products", { catalogId }],
     queryFn: async () => {
       const userId = user?.id || 1;
+      console.log(`Fetching products for userId=${userId} and catalogId=${catalogId}`);
       const response = await apiRequest("GET", `/api/products?userId=${userId}&catalogId=${catalogId}`);
+      console.log("API response:", response);
       return response || [];
     }
   });
