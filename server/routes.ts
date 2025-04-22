@@ -143,72 +143,111 @@ async function extractTextFromPDF(filePath: string): Promise<string> {
 }
 
 // Função para usar IA para extrair produtos do texto de um PDF
-async function extractProductsWithAI(text: string): Promise<any[]> {
+async function extractProductsWithAI(text: string, fileName: string): Promise<any[]> {
   try {
     console.log("Iniciando extração de produtos com IA...");
     
-    const prompt = `
-    Você é um assistente especializado em extrair informações estruturadas de catálogos de móveis.
+    // Detectar se é um catálogo Fratini
+    const isFratiniCatalog = fileName.toLowerCase().includes("fratini");
+    console.log(`Detectado como catálogo Fratini: ${isFratiniCatalog}`);
+    
+    // Prompt especializado para catálogos Fratini
+    const prompt = isFratiniCatalog ? 
+      `
+      Você é um especialista em extrair dados estruturados de tabelas de preços de móveis da marca Fratini.
+      
+      Analise o seguinte texto extraído de um PDF da tabela de preços Fratini e extraia TODOS os produtos listados:
+      
+      ${text}
+      
+      Para cada produto identifique:
+      1. name: Nome comercial do produto (ex: "Cadeira Chicago")
+      2. code: Código comercial do produto (formato numérico como "1.00020.01.0001")
+      3. price: Preço em reais (converta para centavos - multiplique por 100)
+      4. category: Categoria do produto (ex: "Cadeiras", "Banquetas", etc.)
+      5. description: Descrição do produto incluindo materiais e características
+      6. colors: Lista de cores disponíveis
+      7. materials: Lista de materiais mencionados
+      8. sizes: Informações de dimensões
 
-    A partir do texto abaixo, identifique todos os produtos mencionados e extraia as seguintes informações para CADA produto:
-    1. name: Nome completo do produto
-    2. description: Descrição detalhada do produto
-    3. code: Código ou referência do produto (ex: SF-MAD-001)
-    4. price: Preço em formato numérico (se o valor estiver como "R$ 1.234,56", converta para 123456)
-    5. category: Categoria principal (Sofá, Mesa, Cadeira, Estante, Poltrona, etc.)
-    6. materials: Lista de materiais utilizados na fabricação
-    7. colors: Array com todas as cores disponíveis
-    8. sizes: Array de objetos contendo as dimensões no formato:
-       {
-         "width": largura em cm (número),
-         "height": altura em cm (número),
-         "depth": profundidade em cm (número),
-         "label": descrição das dimensões (opcional)
-       }
-
-    IMPORTANTE:
-    - Para cada produto, tente extrair TODAS as informações disponíveis.
-    - Se uma informação não estiver disponível, use null ou um array vazio conforme apropriado.
-    - Quando os preços estiverem no formato "R$ X.XXX,XX", remova o símbolo da moeda e converta para centavos.
-    - Se encontrar dimensões no formato "LxAxP" ou similar, separe os números em largura, altura e profundidade.
-    - Retorne a resposta em formato JSON como um objeto com a propriedade "products" que contém um array de produtos.
-
-    EXEMPLO DE RESPOSTA:
-    {
-      "products": [
-        {
-          "name": "Sofá Madrid",
-          "description": "Sofá de 3 lugares com braços largos e almofadas macias",
-          "code": "SF-MAD-001",
-          "price": 350000,
-          "category": "Sofá",
-          "materials": ["Estrutura em madeira", "Estofamento em espuma D-33", "Revestimento em tecido suede"],
-          "colors": ["Cinza", "Bege", "Azul marinho"],
-          "sizes": [{"width": 220, "height": 90, "depth": 85, "label": "3 lugares"}]
-        },
-        {
-          "name": "Mesa de Jantar Oslo",
-          "description": "Mesa de jantar retangular com bordas arredondadas",
-          "code": "MJ-OSL-002",
-          "price": 220000,
-          "category": "Mesa",
-          "materials": ["Tampo em MDF laminado", "Pés em madeira maciça"],
-          "colors": ["Carvalho", "Nogueira", "Branco"],
-          "sizes": [{"width": 160, "height": 78, "depth": 90, "label": "6 lugares"}]
-        }
-      ]
-    }
-
-    Texto do catálogo:
-    ${text}
-    `;
+      IMPORTANTE PARA CATÁLOGOS FRATINI:
+      - As tabelas Fratini geralmente têm colunas como: Nome Comercial, Imagem, Descrição, Selo, Cores, Código Comercial, Preço 30 dias, 45 dias, 60 dias
+      - Os Códigos Comerciais são números no formato 1.XXXXX.XX.XXXX
+      - Se um mesmo produto tiver várias cores, cada cor terá um código diferente - agrupe-os como um único produto com várias cores
+      - Use o preço da coluna "30 dias" como preço padrão, convertendo para centavos
+      - Identifique materiais na coluna de descrição, como "polipropileno", "aço", etc.
+      - Formate a resposta como JSON no formato {"products": [...]}
+      `
+      :
+      `
+      Você é um assistente especializado em extrair informações estruturadas de catálogos de móveis.
+      
+      A partir do texto abaixo, identifique todos os produtos mencionados e extraia as seguintes informações para CADA produto:
+      1. name: Nome completo do produto
+      2. description: Descrição detalhada do produto
+      3. code: Código ou referência do produto (ex: SF-MAD-001)
+      4. price: Preço em formato numérico (se o valor estiver como "R$ 1.234,56", converta para 123456)
+      5. category: Categoria principal (Sofá, Mesa, Cadeira, Estante, Poltrona, etc.)
+      6. materials: Lista de materiais utilizados na fabricação
+      7. colors: Array com todas as cores disponíveis
+      8. sizes: Array de objetos contendo as dimensões no formato:
+         {
+           "width": largura em cm (número),
+           "height": altura em cm (número),
+           "depth": profundidade em cm (número),
+           "label": descrição das dimensões (opcional)
+         }
+      
+      IMPORTANTE:
+      - Para cada produto, tente extrair TODAS as informações disponíveis.
+      - Se uma informação não estiver disponível, use null ou um array vazio conforme apropriado.
+      - Quando os preços estiverem no formato "R$ X.XXX,XX", remova o símbolo da moeda e converta para centavos.
+      - Se encontrar dimensões no formato "LxAxP" ou similar, separe os números em largura, altura e profundidade.
+      - Retorne a resposta em formato JSON como um objeto com a propriedade "products" que contém um array de produtos.
+      
+      EXEMPLO DE RESPOSTA:
+      {
+        "products": [
+          {
+            "name": "Sofá Madrid",
+            "description": "Sofá de 3 lugares com braços largos e almofadas macias",
+            "code": "SF-MAD-001",
+            "price": 350000,
+            "category": "Sofá",
+            "materials": ["Estrutura em madeira", "Estofamento em espuma D-33", "Revestimento em tecido suede"],
+            "colors": ["Cinza", "Bege", "Azul marinho"],
+            "sizes": [{"width": 220, "height": 90, "depth": 85, "label": "3 lugares"}]
+          },
+          {
+            "name": "Mesa de Jantar Oslo",
+            "description": "Mesa de jantar retangular com bordas arredondadas",
+            "code": "MJ-OSL-002",
+            "price": 220000,
+            "category": "Mesa",
+            "materials": ["Tampo em MDF laminado", "Pés em madeira maciça"],
+            "colors": ["Carvalho", "Nogueira", "Branco"],
+            "sizes": [{"width": 160, "height": 78, "depth": 90, "label": "6 lugares"}]
+          }
+        ]
+      }
+      
+      Texto do catálogo:
+      ${text}
+      `;
+    
+    // Definir o sistema message baseado no tipo de catálogo
+    const systemMessage = isFratiniCatalog
+      ? "Você é um assistente especializado em extrair dados de tabelas de preços Fratini, focando em reconhecer formatos específicos de código de produto como '1.00020.01.0001', preços em diferentes prazos, e agrupando o mesmo produto em diferentes cores. Retorne todos os produtos encontrados no formato JSON."
+      : "Você é um assistente especializado em extrair informações estruturadas de catálogos de móveis com precisão. Sua tarefa é identificar produtos e suas características com exatidão.";
+      
+    console.log(`Utilizando prompt especializado para ${isFratiniCatalog ? 'catálogo Fratini' : 'catálogo genérico'}`);
     
     const response = await openai.chat.completions.create({
       model: "gpt-4o", // o modelo mais recente da OpenAI
       messages: [
         { 
           role: "system", 
-          content: "Você é um assistente especializado em extrair informações estruturadas de catálogos de móveis com precisão. Sua tarefa é identificar produtos e suas características com exatidão."
+          content: systemMessage
         },
         { role: "user", content: prompt }
       ],
@@ -730,7 +769,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           
           // Usar IA para extrair produtos do texto
           console.log("Iniciando análise de produtos com IA...");
-          productsData = await extractProductsWithAI(extractedText);
+          productsData = await extractProductsWithAI(extractedText, fileName);
           extractionInfo = `PDF processado com sucesso. Identificados ${productsData.length} produtos.`;
         } else {
           throw new Error("Formato de arquivo não suportado. Use Excel ou PDF");
