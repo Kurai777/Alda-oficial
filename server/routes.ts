@@ -509,45 +509,67 @@ export async function registerRoutes(app: Express): Promise<Server> {
           productsData = await extractProductsFromExcel(filePath);
           extractionInfo = `Extraídos ${productsData.length} produtos do arquivo Excel.`;
         } else if (fileType === 'pdf') {
-          // Extrair texto e imagens do PDF
-          console.log(`Iniciando extração de texto e imagens do PDF: ${filePath}`);
-          const { text: extractedText, images: extractedImages } = await extractTextFromPDF(filePath);
-          console.log(`Texto extraído com sucesso. Tamanho: ${extractedText.length} caracteres`);
-          console.log(`Imagens extraídas com sucesso. Total: ${extractedImages.length} imagens`);
-          
-          // Usar IA para extrair produtos do texto
-          console.log("Iniciando análise de produtos com IA...");
-          const extractedProducts = await extractProductsWithAI(extractedText, fileName);
-          
-          // Mapa para rastrear as imagens por número de página
-          const imagesByPage: { [key: number]: any[] } = {};
-          
-          // Organizar imagens por página
-          extractedImages.forEach(img => {
-            if (!imagesByPage[img.page]) {
-              imagesByPage[img.page] = [];
-            }
-            imagesByPage[img.page].push(img);
-          });
-          
-          // Associar imagens aos produtos com base no número da página ou índice
-          productsData = extractedProducts.map((product: any, index: number) => {
-            // Verificar se o produto tem um número de página identificado
-            const productPage = product.pageNumber || Math.floor(index / 2) + 1; // Estimativa baseada no índice
+          try {
+            // Tentar primeiro o método PaddleOCR para melhor precisão e extração de imagens
+            console.log(`Iniciando processamento OCR avançado do PDF: ${filePath}`);
             
-            // Encontrar imagens para essa página
-            const pageImages = imagesByPage[productPage] || [];
+            // Importar o módulo de processamento OCR
+            const { processPdfWithOcr, convertOcrProductsToAppFormat } = await import('./ocr-pdf-processor');
             
-            // Se temos imagens para essa página, adicionar a primeira à URL do produto
-            if (pageImages.length > 0) {
-              product.imageUrl = pageImages[0].processedPath;
-              console.log(`Associada imagem da página ${productPage} ao produto "${product.name}"`);
-            }
+            // Processar o PDF com OCR
+            const ocrProducts = await processPdfWithOcr(filePath);
             
-            return product;
-          });
-          
-          extractionInfo = `PDF processado com sucesso. Identificados ${productsData.length} produtos e extraídas ${extractedImages.length} imagens.`;
+            // Converter para o formato da aplicação
+            productsData = convertOcrProductsToAppFormat(ocrProducts, userId, catalog.id);
+            
+            console.log(`OCR extraiu ${productsData.length} produtos com imagens do PDF`);
+            extractionInfo = `PDF processado com OCR. Extraídos ${productsData.length} produtos com suas imagens reais.`;
+            
+          } catch (ocrError) {
+            console.error("Erro ao processar PDF com OCR:", ocrError);
+            console.log("Tentando método alternativo com IA...");
+            
+            // Método alternativo se o OCR falhar
+            // Extrair texto e imagens do PDF
+            console.log(`Iniciando extração de texto e imagens do PDF: ${filePath}`);
+            const { text: extractedText, images: extractedImages } = await extractTextFromPDF(filePath);
+            console.log(`Texto extraído com sucesso. Tamanho: ${extractedText.length} caracteres`);
+            console.log(`Imagens extraídas com sucesso. Total: ${extractedImages.length} imagens`);
+            
+            // Usar IA para extrair produtos do texto
+            console.log("Iniciando análise de produtos com IA...");
+            const extractedProducts = await extractProductsWithAI(extractedText, fileName);
+            
+            // Mapa para rastrear as imagens por número de página
+            const imagesByPage: { [key: number]: any[] } = {};
+            
+            // Organizar imagens por página
+            extractedImages.forEach(img => {
+              if (!imagesByPage[img.page]) {
+                imagesByPage[img.page] = [];
+              }
+              imagesByPage[img.page].push(img);
+            });
+            
+            // Associar imagens aos produtos com base no número da página ou índice
+            productsData = extractedProducts.map((product: any, index: number) => {
+              // Verificar se o produto tem um número de página identificado
+              const productPage = product.pageNumber || Math.floor(index / 2) + 1; // Estimativa baseada no índice
+              
+              // Encontrar imagens para essa página
+              const pageImages = imagesByPage[productPage] || [];
+              
+              // Se temos imagens para essa página, adicionar a primeira à URL do produto
+              if (pageImages.length > 0) {
+                product.imageUrl = pageImages[0].processedPath;
+                console.log(`Associada imagem da página ${productPage} ao produto "${product.name}"`);
+              }
+              
+              return product;
+            });
+            
+            extractionInfo = `PDF processado com método alternativo. Identificados ${productsData.length} produtos e extraídas ${extractedImages.length} imagens.`;
+          }
         } else {
           throw new Error("Formato de arquivo não suportado. Use Excel ou PDF");
         }
