@@ -56,6 +56,7 @@ export default function Catalogs() {
   const { user } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const [, navigate] = useLocation();
   const [catalogToProcess, setCatalogToProcess] = useState<number | null>(null);
   const [catalogToDelete, setCatalogToDelete] = useState<number | null>(null);
   const [selectedCatalog, setSelectedCatalog] = useState<Catalog | null>(null);

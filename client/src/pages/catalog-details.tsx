@@ -61,7 +61,8 @@ export default function CatalogDetails() {
   }, [catalog, catalogsLoading, user, navigate, toast]);
 
   // Format date
-  const formatDate = (dateString: string) => {
+  const formatDate = (dateString: string | Date | null) => {
+    if (!dateString) return "";
     return new Date(dateString).toLocaleDateString("pt-BR", {
       year: "numeric",
       month: "long",
@@ -106,7 +107,7 @@ export default function CatalogDetails() {
               </div>
               <div className="flex items-center">
                 <FileText className="h-4 w-4 mr-1" />
-                <span className="text-sm">Status: {catalog.status}</span>
+                <span className="text-sm">Status: {catalog.processedStatus || "Processado"}</span>
               </div>
             </div>
           </div>

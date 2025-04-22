@@ -7,6 +7,7 @@ import NotFound from "@/pages/not-found";
 import Login from "@/pages/login";
 import Dashboard from "@/pages/dashboard";
 import Catalogs from "@/pages/catalogs";
+import CatalogDetails from "@/pages/catalog-details";
 import Quotes from "@/pages/quotes";
 import Moodboards from "@/pages/moodboards";
 import Layout from "@/components/layout/layout";
@@ -28,6 +29,12 @@ function Router() {
       <ProtectedRoute path="/catalogs">
         <Layout>
           <Catalogs />
+        </Layout>
+      </ProtectedRoute>
+      
+      <ProtectedRoute path="/catalog/:id">
+        <Layout>
+          <CatalogDetails />
         </Layout>
       </ProtectedRoute>
       
