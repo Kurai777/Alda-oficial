@@ -104,6 +104,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Invalid credentials" });
       }
       
+      // Simular sessão - em uma implementação real, você usaria express-session
+      req.session = { userId: user.id };
+      
       return res.status(200).json({ 
         id: user.id,
         companyName: user.companyName || 'Empresa',
@@ -111,6 +114,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error) {
       return res.status(500).json({ message: "Failed to login" });
+    }
+  });
+  
+  // Rota para verificar se o usuário está autenticado
+  app.get("/api/auth/me", async (req: Request, res: Response) => {
+    try {
+      // Verificar se existe uma sessão (userId)
+      const userId = req.session?.userId;
+      
+      if (!userId) {
+        return res.status(401).json({ message: "Not authenticated" });
+      }
+      
+      const user = await storage.getUser(userId);
+      
+      if (!user) {
+        return res.status(401).json({ message: "User not found" });
+      }
+      
+      return res.status(200).json({ 
+        id: user.id,
+        companyName: user.companyName || 'Empresa',
+        email: user.email
+      });
+    } catch (error) {
+      return res.status(500).json({ message: "Failed to get user" });
+    }
+  });
+  
+  // Rota para logout
+  app.post("/api/auth/logout", (req: Request, res: Response) => {
+    try {
+      // Limpar a sessão
+      req.session = null;
+      return res.status(200).json({ message: "Logged out successfully" });
+    } catch (error) {
+      return res.status(500).json({ message: "Failed to logout" });
     }
   });
 

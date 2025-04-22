@@ -66,8 +66,12 @@ export default function Login() {
 
   const onLoginSubmit = async (data: LoginFormValues) => {
     try {
-      await login();
-      navigate("/");
+      await login({
+        email: data.email,
+        password: data.password,
+        rememberMe: data.rememberMe
+      });
+      // O redirecionamento é feito dentro da função login
     } catch (error) {
       console.error("Login failed:", error);
     }
@@ -75,8 +79,12 @@ export default function Login() {
 
   const onRegisterSubmit = async (data: RegisterFormValues) => {
     try {
-      await register();
-      navigate("/");
+      await register({
+        email: data.email,
+        password: data.password,
+        companyName: data.companyName
+      });
+      // O redirecionamento é feito dentro da função register
     } catch (error) {
       console.error("Registration failed:", error);
     }
