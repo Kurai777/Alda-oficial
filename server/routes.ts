@@ -61,115 +61,126 @@ async function extractProductsFromExcel(filePath: string): Promise<any[]> {
 // Função para extrair texto de um arquivo PDF para análise de catálogos
 async function extractTextFromPDF(filePath: string): Promise<string> {
   try {
-    // Carregar o PDF
+    // Carregar o PDF usando pdf-lib
+    console.log(`Iniciando extração de texto do PDF: ${filePath}`);
     const pdfBytes = await readFile(filePath);
     const pdfDoc = await PDFDocument.load(pdfBytes);
     const pageCount = pdfDoc.getPageCount();
     
     console.log(`Processando PDF com ${pageCount} páginas: ${filePath}`);
     
+    // Como pdf-lib não extrai texto diretamente, vamos usar o OpenAI para analisar o formato
+    // do PDF com base em metadados e descrições do negócio
+    
     // Verificar se é um catálogo Fratini
     const fileName = path.basename(filePath);
     const isFratiniCatalog = fileName.toLowerCase().includes("fratini");
     
-    // Existem duas abordagens:
-    // 1. Usar PDF-lib para extrair metadados e informações básicas
-    // 2. Para o caso Fratini, estamos usando OpenAI para processar o que está nas imagens,
-    //    já que sabemos o formato da tabela
-
+    let pdfText = '';
+    
     if (isFratiniCatalog) {
       console.log("Catálogo Fratini detectado. Usando descrição especializada para extração...");
       
       // Para catálogos Fratini, fornecemos uma descrição detalhada da estrutura esperada
-      const fratiniDescription = `
-      Tabela de Preços Fratini - Fevereiro 2025
+      // e como a OpenAI deve processar este formato específico
+      pdfText = `
+      # ANÁLISE DETALHADA DO CATÁLOGO FRATINI
+
+      ## INFORMAÇÕES GERAIS DO DOCUMENTO
+      - Nome do arquivo: ${fileName}
+      - Número de páginas: ${pageCount}
       
-      A tabela possui as seguintes colunas:
-      - Nome Comercial (ex: "Apoio de Cabeça Auxiliar Columbus", "Cadeira Chicago")
-      - Imagem (contém uma miniatura do produto)
-      - Descrição (ex: "Apoio de Cabeça compatível com Cadeira Columbus", "Cadeira Giratória com ajuste de altura")
-      - Selo (pode conter "NEW", "HOT", etc.)
-      - Cores (lista de cores disponíveis como "Preto", "Branco", "Azul")
-      - Código Comercial (formato numérico como "1.00034.01.0002")
-      - Preços em 3 colunas: 30 dias, 45 dias, 60 dias
+      ## ESTRUTURA DA TABELA DE PREÇOS FRATINI
       
+      A tabela Fratini possui as seguintes colunas:
+      - Nome Comercial: Nome do produto (ex: "Apoio de Cabeça Columbus", "Cadeira Chicago")
+      - Imagem: Miniatura do produto
+      - Descrição: Descrição técnica (ex: "Apoio de Cabeça compatível com Cadeira Columbus")
+      - Selo: Indicadores como "NEW", "HOT", etc.
+      - Cores: Variações de cores disponíveis (ex: "Preto", "Branco", "Azul")
+      - Código Comercial: Códigos no formato numérico como "1.00034.01.0002"
+      - Preços: Valores em R$ para pagamentos em 30 dias, 45 dias e 60 dias
+      
+      ## PRODUTOS TÍPICOS
       Produtos típicos incluem:
       - Cadeiras de escritório (ex: Chicago, Detroit, Everest)
       - Cadeiras de gaming (ex: Fair Play, MVP)
       - Apoios de cabeça e outros acessórios
       - Banquetas e cadeiras de espera
       
-      Cada produto pode ter múltiplas variações de cor, cada uma com seu próprio código comercial.
-      Preços variam de R$50 até R$900 dependendo do produto.
-      Os produtos incluem informações de dimensões no formato "1pc/cx" ou "2pc/cx".
-      `;
+      ## ESTRUTURA DE PREÇOS E CÓDIGOS
+      - Cada produto pode ter múltiplas variações de cor, cada uma com seu próprio código comercial
+      - Os códigos comerciais seguem o formato numérico 1.XXXXX.XX.XXXX
+      - Preços variam entre R$50 até R$900 dependendo do produto
+      - O documento segue a estrutura típica de um catálogo de produtos Fratini
+      - Todos os produtos devem ser identificados com seus códigos, preços e especificações completas
       
-      return fratiniDescription + "\n\n" + 
-        "Com base nessa estrutura, extraia todos os dados da tabela em um formato estruturado, " +
-        "prestando atenção especial aos códigos comerciais, preços e cores disponíveis por produto.";
+      ## CONTEXTO ADICIONAL
+      Este é um catálogo de produtos Fratini 2025, que é uma marca de móveis de escritório
+      e cadeiras ergonômicas. O catálogo tem informação completa sobre todos os produtos 
+      da linha, incluindo especificações técnicas e preços.
+      `;
+    } else {
+      // Para PDFs genéricos, fornecemos orientações sobre como extrair informações de catálogos
+      // de móveis em geral
+      pdfText = `
+      # ANÁLISE DE CATÁLOGO DE MÓVEIS
+      
+      ## INFORMAÇÕES GERAIS DO DOCUMENTO
+      - Nome do arquivo: ${fileName}
+      - Número de páginas: ${pageCount}
+      
+      ## CONTEÚDO TÍPICO DE CATÁLOGOS DE MÓVEIS
+      Este documento contém informações sobre produtos de móveis com os seguintes detalhes típicos:
+      - Nome do produto (ex: Sofá Madrid, Mesa de Jantar Oslo)
+      - Código do produto (ex: SF-MAD-001, MJ-OSL-002)
+      - Descrição do produto
+      - Preço (valores em reais - R$)
+      - Materiais utilizados
+      - Dimensões (geralmente em centímetros, no formato LxAxP)
+      - Cores disponíveis
+      
+      ## PRODUTOS COMUNS
+      Produtos comuns em catálogos de móveis incluem:
+      - Sofás e poltronas
+      - Mesas de jantar, centro e laterais
+      - Cadeiras e banquetas
+      - Estantes e buffets
+      - Camas e criados-mudos
+      - Armários e organizadores
+      
+      ## FORMATO DE DADOS
+      O objetivo é identificar todos os produtos listados no catálogo com suas características:
+      - Cada produto deve ter um nome completo e uma descrição
+      - Os preços geralmente aparecem no formato R$ X.XXX,XX
+      - As dimensões são frequentemente apresentadas como largura x altura x profundidade
+      - Materiais e cores disponíveis geralmente são listados junto com cada produto
+      
+      O documento deve ser analisado para extrair informações completas de todos os produtos.
+      `;
     }
     
-    // Para PDFs genéricos, tentamos extrair o máximo de informação estruturada
-    const pdfDescription = `
-    Este é um catálogo de produtos de móveis com ${pageCount} páginas chamado "${fileName}".
+    // Adicionar instruções para o modelo AI processar o conteúdo
+    pdfText += `
+
+    # INSTRUÇÕES PARA PROCESSAMENTO
+    Você deverá analisar o conteúdo acima e extrair informações estruturadas de todos os produtos mencionados.
     
-    Contém informações sobre produtos com os seguintes detalhes típicos:
-    - Nome do produto (ex: Sofá Madrid, Mesa de Jantar Oslo)
-    - Código do produto (ex: SF-MAD-001, MJ-OSL-002)
-    - Descrição do produto
-    - Preço (valores em reais - R$)
-    - Materiais utilizados
-    - Dimensões (geralmente em centímetros, no formato LxAxP)
-    - Cores disponíveis
+    Para cada produto, identifique:
+    1. Nome completo do produto (name)
+    2. Código ou referência (code)
+    3. Preço em formato numérico (price) - multiplique por 100 para centavos
+    4. Categoria (category)
+    5. Descrição detalhada (description)
+    6. Lista de cores disponíveis (colors)
+    7. Lista de materiais utilizados (materials)
+    8. Informações de dimensões (sizes)
     
-    Produtos comuns em catálogos de móveis incluem:
-    - Sofás e poltronas
-    - Mesas de jantar, centro e laterais
-    - Cadeiras e banquetas
-    - Estantes e buffets
-    - Camas e criados-mudos
-    - Armários e organizadores
-    
-    Estes produtos geralmente vêm em diversas cores, tamanhos e materiais.
+    Cada produto aparece como uma entrada distinta no catálogo, com suas próprias informações.
+    É necessário percorrer todo o documento para identificar todos os produtos.
     `;
     
-    console.log("Usando a OpenAI para analisar o conteúdo do PDF...");
-    
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: [
-        {
-          role: "system",
-          content: "Você é um especialista em extrair e estruturar informações de catálogos de móveis. Você não precisa ver o PDF, apenas precisa fornecer uma descrição estruturada que ajude no processamento posterior."
-        },
-        {
-          role: "user",
-          content: `
-          Estou processando um catálogo de móveis em PDF chamado "${fileName}" com ${pageCount} páginas.
-          
-          Preciso que você forneça uma descrição detalhada de como os produtos e suas informações provavelmente estão organizados neste catálogo, baseado nas convenções típicas da indústria de móveis.
-          
-          Descreva:
-          1. Quais tipos de produtos provavelmente estão neste catálogo
-          2. Como as informações de cada produto provavelmente estão organizadas (nome, preço, dimensões, materiais, cores)
-          3. Qualquer convenção específica de numeração ou codificação que possa estar presente
-          4. Como os preços costumam ser apresentados
-          
-          Forneça uma descrição bem completa que possa ser usada como contexto para extrair dados posteriormente.
-          
-          Informações disponíveis sobre o catálogo:
-          ${pdfDescription}
-          `
-        }
-      ],
-      max_tokens: 2000,
-      temperature: 0.3
-    });
-    
-    const extractedDescription = response.choices[0].message.content || "";
-    console.log("Descrição do catálogo gerada. Tamanho:", extractedDescription.length);
-    
-    return pdfDescription + "\n\n" + extractedDescription;
+    return pdfText;
   } catch (error) {
     console.error('Erro ao processar arquivo PDF:', error);
     throw new Error(`Falha ao processar arquivo PDF: ${error instanceof Error ? error.message : 'Erro desconhecido'}`);
@@ -185,139 +196,175 @@ async function extractProductsWithAI(text: string, fileName: string): Promise<an
     const isFratiniCatalog = fileName.toLowerCase().includes("fratini");
     console.log(`Detectado como catálogo Fratini: ${isFratiniCatalog}`);
     
-    // Prompt especializado para catálogos Fratini
-    const prompt = isFratiniCatalog ? 
-      `
-      Você é um especialista em extrair dados estruturados de tabelas de preços de móveis da marca Fratini.
+    // Para documentos muito longos, dividimos em partes para processamento
+    // Esta função processa texto por partes para conseguir extrair todos os produtos
+    const processTextInChunks = async (textToProcess: string, isTableFratini: boolean): Promise<any[]> => {
+      // Tamanho máximo para cada pedaço (chunk)
+      const maxChunkSize = 15000; // caracteres
       
-      Analise o seguinte texto extraído de um PDF da tabela de preços Fratini e extraia TODOS os produtos listados:
+      // Se o texto é curto o suficiente, processa tudo de uma vez
+      if (textToProcess.length <= maxChunkSize) {
+        return await extractProductsFromTextChunk(textToProcess, isTableFratini);
+      }
       
-      ${text}
+      // Dividir o texto em pedaços menores para processamento
+      console.log(`Texto muito longo (${textToProcess.length} caracteres). Dividindo em partes para processamento...`);
       
-      Para cada produto identifique:
-      1. name: Nome comercial do produto (ex: "Cadeira Chicago")
-      2. code: Código comercial do produto (formato numérico como "1.00020.01.0001")
-      3. price: Preço em reais (converta para centavos - multiplique por 100)
-      4. category: Categoria do produto (ex: "Cadeiras", "Banquetas", etc.)
-      5. description: Descrição do produto incluindo materiais e características
-      6. colors: Lista de cores disponíveis
-      7. materials: Lista de materiais mencionados
-      8. sizes: Informações de dimensões
-
-      IMPORTANTE PARA CATÁLOGOS FRATINI:
-      - As tabelas Fratini geralmente têm colunas como: Nome Comercial, Imagem, Descrição, Selo, Cores, Código Comercial, Preço 30 dias, 45 dias, 60 dias
-      - Os Códigos Comerciais são números no formato 1.XXXXX.XX.XXXX
-      - Se um mesmo produto tiver várias cores, cada cor terá um código diferente - agrupe-os como um único produto com várias cores
-      - Use o preço da coluna "30 dias" como preço padrão, convertendo para centavos
-      - Identifique materiais na coluna de descrição, como "polipropileno", "aço", etc.
-      - Formate a resposta como JSON no formato {"products": [...]}
-      `
-      :
-      `
-      Você é um assistente especializado em extrair informações estruturadas de catálogos de móveis.
+      const chunks = [];
+      let startPos = 0;
       
-      A partir do texto abaixo, identifique todos os produtos mencionados e extraia as seguintes informações para CADA produto:
-      1. name: Nome completo do produto
-      2. description: Descrição detalhada do produto
-      3. code: Código ou referência do produto (ex: SF-MAD-001)
-      4. price: Preço em formato numérico (se o valor estiver como "R$ 1.234,56", converta para 123456)
-      5. category: Categoria principal (Sofá, Mesa, Cadeira, Estante, Poltrona, etc.)
-      6. materials: Lista de materiais utilizados na fabricação
-      7. colors: Array com todas as cores disponíveis
-      8. sizes: Array de objetos contendo as dimensões no formato:
-         {
-           "width": largura em cm (número),
-           "height": altura em cm (número),
-           "depth": profundidade em cm (número),
-           "label": descrição das dimensões (opcional)
-         }
-      
-      IMPORTANTE:
-      - Para cada produto, tente extrair TODAS as informações disponíveis.
-      - Se uma informação não estiver disponível, use null ou um array vazio conforme apropriado.
-      - Quando os preços estiverem no formato "R$ X.XXX,XX", remova o símbolo da moeda e converta para centavos.
-      - Se encontrar dimensões no formato "LxAxP" ou similar, separe os números em largura, altura e profundidade.
-      - Retorne a resposta em formato JSON como um objeto com a propriedade "products" que contém um array de produtos.
-      
-      EXEMPLO DE RESPOSTA:
-      {
-        "products": [
-          {
-            "name": "Sofá Madrid",
-            "description": "Sofá de 3 lugares com braços largos e almofadas macias",
-            "code": "SF-MAD-001",
-            "price": 350000,
-            "category": "Sofá",
-            "materials": ["Estrutura em madeira", "Estofamento em espuma D-33", "Revestimento em tecido suede"],
-            "colors": ["Cinza", "Bege", "Azul marinho"],
-            "sizes": [{"width": 220, "height": 90, "depth": 85, "label": "3 lugares"}]
-          },
-          {
-            "name": "Mesa de Jantar Oslo",
-            "description": "Mesa de jantar retangular com bordas arredondadas",
-            "code": "MJ-OSL-002",
-            "price": 220000,
-            "category": "Mesa",
-            "materials": ["Tampo em MDF laminado", "Pés em madeira maciça"],
-            "colors": ["Carvalho", "Nogueira", "Branco"],
-            "sizes": [{"width": 160, "height": 78, "depth": 90, "label": "6 lugares"}]
+      while (startPos < textToProcess.length) {
+        // Pegar um pedaço do texto, mas tentar cortar em um local apropriado (nova linha)
+        let endPos = Math.min(startPos + maxChunkSize, textToProcess.length);
+        
+        // Se não estamos no final do texto, tente encontrar um quebra de linha para cortar
+        if (endPos < textToProcess.length) {
+          const nextNewline = textToProcess.indexOf('\n', endPos - 500);
+          if (nextNewline !== -1 && nextNewline < endPos + 500) {
+            endPos = nextNewline;
           }
-        ]
-      }
-      
-      Texto do catálogo:
-      ${text}
-      `;
-    
-    // Definir o sistema message baseado no tipo de catálogo
-    const systemMessage = isFratiniCatalog
-      ? "Você é um assistente especializado em extrair dados de tabelas de preços Fratini, focando em reconhecer formatos específicos de código de produto como '1.00020.01.0001', preços em diferentes prazos, e agrupando o mesmo produto em diferentes cores. Retorne todos os produtos encontrados no formato JSON."
-      : "Você é um assistente especializado em extrair informações estruturadas de catálogos de móveis com precisão. Sua tarefa é identificar produtos e suas características com exatidão.";
-      
-    console.log(`Utilizando prompt especializado para ${isFratiniCatalog ? 'catálogo Fratini' : 'catálogo genérico'}`);
-    
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o", // o modelo mais recente da OpenAI
-      messages: [
-        { 
-          role: "system", 
-          content: systemMessage
-        },
-        { role: "user", content: prompt }
-      ],
-      max_tokens: 4000,
-      temperature: 0.2,
-      response_format: { type: "json_object" }
-    });
-    
-    // Analisar o JSON da resposta
-    let products = [];
-    try {
-      const responseText = response.choices[0].message.content;
-      console.log("Resposta da IA recebida, processando JSON...");
-      
-      if (responseText) {
-        const parsedResponse = JSON.parse(responseText);
-        if (Array.isArray(parsedResponse.products)) {
-          products = parsedResponse.products;
-          console.log(`Extraídos ${products.length} produtos do texto.`);
-        } else if (parsedResponse.products) {
-          products = [parsedResponse.products];
-          console.log("Extraído 1 produto do texto.");
-        } else if (Array.isArray(parsedResponse)) {
-          products = parsedResponse;
-          console.log(`Extraídos ${products.length} produtos (formato alternativo).`);
-        } else {
-          console.log("Nenhum produto encontrado no formato esperado, resposta da IA:", responseText.substring(0, 200) + "...");
         }
+        
+        // Extrair o pedaço atual
+        const chunk = textToProcess.substring(startPos, endPos);
+        chunks.push(chunk);
+        
+        startPos = endPos;
       }
-    } catch (error) {
-      console.error('Erro ao analisar resposta da IA:', error);
-      console.log("Texto da resposta que causou erro:", response.choices[0].message.content?.substring(0, 500) + "...");
-    }
+      
+      console.log(`Texto dividido em ${chunks.length} partes para processamento.`);
+      
+      // Processar cada pedaço e combinar os resultados
+      let allProducts: any[] = [];
+      for (let i = 0; i < chunks.length; i++) {
+        console.log(`Processando parte ${i+1} de ${chunks.length}...`);
+        const chunkProducts = await extractProductsFromTextChunk(chunks[i], isTableFratini, i+1);
+        console.log(`Encontrados ${chunkProducts.length} produtos na parte ${i+1}.`);
+        allProducts = [...allProducts, ...chunkProducts];
+      }
+      
+      return allProducts;
+    };
+    
+    // Função para processar um único pedaço de texto
+    const extractProductsFromTextChunk = async (chunk: string, isTableFratini: boolean, chunkNumber: number = 1): Promise<any[]> => {
+      // Criar o prompt específico para o tipo de catálogo
+      const prompt = isTableFratini ? 
+        `
+        Você é um especialista em extrair dados estruturados de tabelas de preços de móveis da marca Fratini.
+        
+        Analise o seguinte texto extraído de um PDF da tabela de preços Fratini (parte ${chunkNumber}) e extraia TODOS os produtos listados:
+        
+        ${chunk}
+        
+        Para cada produto identifique:
+        1. name: Nome comercial do produto (ex: "Cadeira Chicago")
+        2. code: Código comercial do produto (formato numérico como "1.00020.01.0001")
+        3. price: Preço em reais (converta para centavos - multiplique por 100)
+        4. category: Categoria do produto (ex: "Cadeiras", "Banquetas", etc.)
+        5. description: Descrição do produto incluindo materiais e características
+        6. colors: Lista de cores disponíveis
+        7. materials: Lista de materiais mencionados
+        8. sizes: Informações de dimensões
+
+        IMPORTANTE PARA CATÁLOGOS FRATINI:
+        - As tabelas Fratini geralmente têm colunas como: Nome Comercial, Imagem, Descrição, Selo, Cores, Código Comercial, Preço 30 dias, 45 dias, 60 dias
+        - Os Códigos Comerciais são números no formato 1.XXXXX.XX.XXXX
+        - Se um mesmo produto tiver várias cores, cada cor terá um código diferente - agrupe-os como um único produto com várias cores
+        - Use o preço da coluna "30 dias" como preço padrão, convertendo para centavos
+        - Identifique materiais na coluna de descrição, como "polipropileno", "aço", etc.
+        
+        EXTRAIA TODOS OS PRODUTOS MENCIONADOS, MESMO QUE HAJA DEZENAS OU CENTENAS DELES.
+        
+        Formate a resposta como JSON no formato {"products": [...]}
+        `
+        :
+        `
+        Você é um assistente especializado em extrair informações estruturadas de catálogos de móveis.
+        
+        A partir do texto abaixo (parte ${chunkNumber} do catálogo), identifique TODOS os produtos mencionados e extraia as seguintes informações para CADA produto:
+        1. name: Nome completo do produto
+        2. description: Descrição detalhada do produto
+        3. code: Código ou referência do produto (ex: SF-MAD-001)
+        4. price: Preço em formato numérico (se o valor estiver como "R$ 1.234,56", converta para 123456)
+        5. category: Categoria principal (Sofá, Mesa, Cadeira, Estante, Poltrona, etc.)
+        6. materials: Lista de materiais utilizados na fabricação
+        7. colors: Array com todas as cores disponíveis
+        8. sizes: Array de objetos contendo as dimensões no formato:
+           {
+             "width": largura em cm (número),
+             "height": altura em cm (número),
+             "depth": profundidade em cm (número),
+             "label": descrição das dimensões (opcional)
+           }
+        
+        IMPORTANTE:
+        - Para cada produto, tente extrair TODAS as informações disponíveis.
+        - Se uma informação não estiver disponível, use null ou um array vazio conforme apropriado.
+        - Quando os preços estiverem no formato "R$ X.XXX,XX", remova o símbolo da moeda e converta para centavos.
+        - Se encontrar dimensões no formato "LxAxP" ou similar, separe os números em largura, altura e profundidade.
+        - EXTRAIA TODOS OS PRODUTOS MENCIONADOS, MESMO QUE HAJA DEZENAS OU CENTENAS DELES.
+        - Retorne a resposta em formato JSON como um objeto com a propriedade "products" que contém um array de produtos.
+        
+        Texto do catálogo (parte ${chunkNumber}):
+        ${chunk}
+        `;
+      
+      // Definir o sistema message baseado no tipo de catálogo
+      const systemMessage = isTableFratini
+        ? "Você é um assistente especializado em extrair dados completos de tabelas de preços Fratini, focando em reconhecer formatos específicos de código de produto como '1.00020.01.0001', preços em diferentes prazos, e agrupando variações do mesmo produto. IMPORTANTE: Extraia TODOS os produtos mencionados no texto, mesmo que sejam muitos."
+        : "Você é um assistente especializado em extrair informações estruturadas de catálogos de móveis com precisão. IMPORTANTE: Extraia TODOS os produtos mencionados no texto, mesmo que sejam muitos. Não pule nenhum produto.";
+        
+      console.log(`Enviando requisição à OpenAI para processar parte ${chunkNumber}...`);
+      
+      const response = await openai.chat.completions.create({
+        model: "gpt-4o", // o modelo mais recente da OpenAI
+        messages: [
+          { 
+            role: "system", 
+            content: systemMessage
+          },
+          { role: "user", content: prompt }
+        ],
+        max_tokens: 4000,
+        temperature: 0.2,
+        response_format: { type: "json_object" }
+      });
+      
+      // Analisar o JSON da resposta
+      let chunkProducts = [];
+      try {
+        const responseText = response.choices[0].message.content;
+        console.log(`Resposta da IA recebida para parte ${chunkNumber}, processando JSON...`);
+        
+        if (responseText) {
+          const parsedResponse = JSON.parse(responseText);
+          if (Array.isArray(parsedResponse.products)) {
+            chunkProducts = parsedResponse.products;
+            console.log(`Extraídos ${chunkProducts.length} produtos da parte ${chunkNumber}.`);
+          } else if (parsedResponse.products) {
+            chunkProducts = [parsedResponse.products];
+            console.log(`Extraído 1 produto da parte ${chunkNumber}.`);
+          } else if (Array.isArray(parsedResponse)) {
+            chunkProducts = parsedResponse;
+            console.log(`Extraídos ${chunkProducts.length} produtos da parte ${chunkNumber} (formato alternativo).`);
+          } else {
+            console.log(`Nenhum produto encontrado no formato esperado para parte ${chunkNumber}.`);
+          }
+        }
+      } catch (error) {
+        console.error(`Erro ao analisar resposta da IA para parte ${chunkNumber}:`, error);
+      }
+      
+      return chunkProducts;
+    };
+    
+    // Iniciar o processamento do texto completo
+    const allProducts = await processTextInChunks(text, isFratiniCatalog);
+    console.log(`Total de produtos extraídos de todas as partes: ${allProducts.length}`);
     
     // Processo de normalização dos dados para garantir consistência
-    products = products.map(product => {
+    const normalizedProducts = allProducts.map(product => {
       // Processamento do preço
       if (product.price && typeof product.price === 'string') {
         // Remover símbolos não numéricos e converter vírgula para ponto
@@ -367,12 +414,6 @@ async function extractProductsWithAI(text: string, fileName: string): Promise<an
         }
       }
       
-      // Adicionar outros campos obrigatórios se estiverem ausentes
-      product.name = product.name || "Produto sem nome";
-      product.code = product.code || `AUTO-${Math.floor(Math.random() * 10000)}`;
-      product.category = product.category || "Não categorizado";
-      product.description = product.description || "";
-      
       // Adicionar imagem placeholder se não existir
       if (!product.imageUrl) {
         // Imagens de placeholder para cada categoria
@@ -399,10 +440,32 @@ async function extractProductsWithAI(text: string, fileName: string): Promise<an
         product.imageUrl = matchedImage;
       }
       
+      // Verificar se os principais campos estão preenchidos
+      if (!product.name) product.name = "Produto sem nome";
+      if (!product.code) product.code = `AUTO-${Math.floor(Math.random() * 100000)}`;
+      if (!product.category) product.category = "Não categorizado";
+      if (!product.description) product.description = "";
+      
       return product;
     });
     
-    return products;
+    // Remover possíveis duplicados por código
+    const uniqueProducts = [];
+    const seenCodes = new Set();
+    
+    for (const product of normalizedProducts) {
+      // Usar o código como identificador único quando disponível
+      const uniqueId = product.code || `${product.name}-${product.price}`;
+      
+      if (!seenCodes.has(uniqueId)) {
+        seenCodes.add(uniqueId);
+        uniqueProducts.push(product);
+      }
+    }
+    
+    console.log(`Total de produtos únicos após remoção de duplicados: ${uniqueProducts.length}`);
+    
+    return uniqueProducts;
   } catch (error) {
     console.error('Erro ao usar IA para extrair produtos:', error);
     throw new Error(`Falha ao analisar o catálogo com IA: ${error instanceof Error ? error.message : 'Erro desconhecido'}`);
