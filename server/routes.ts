@@ -58,42 +58,114 @@ async function extractProductsFromExcel(filePath: string): Promise<any[]> {
   }
 }
 
-// Função para extrair texto de um arquivo PDF
+// Função para extrair texto de um arquivo PDF usando OpenAI Vision
 async function extractTextFromPDF(filePath: string): Promise<string> {
   try {
     const pdfBytes = await readFile(filePath);
     const pdfDoc = await PDFDocument.load(pdfBytes);
-    
-    // Extrair texto do PDF (usando OpenAI para esta tarefa, já que pdf-lib não extrai texto diretamente)
-    // Primeiro, vamos apenas retornar informações sobre o documento PDF
     const pageCount = pdfDoc.getPageCount();
-    const pdfInfo = `Documento PDF com ${pageCount} páginas.`;
     
-    return pdfInfo;
+    // Vamos processar apenas as primeiras 10 páginas no máximo para não sobrecarregar
+    const maxPages = Math.min(pageCount, 10);
+    const pdfInfo = `Documento PDF com ${pageCount} páginas (analisando ${maxPages}).`;
+    console.log(pdfInfo);
+    
+    // Converter o PDF para base64 e enviar para OpenAI Vision API
+    const base64Pdf = pdfBytes.toString('base64');
+    
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o", // o modelo mais recente da OpenAI com recursos de visão
+      messages: [
+        {
+          role: "system",
+          content: "Você é um assistente especializado em extrair e estruturar informações de catálogos de móveis. Extraia todos os detalhes relevantes sobre produtos, incluindo nomes, códigos, preços, materiais, dimensões e categorias."
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: "Este é um catálogo de produtos de móveis em PDF. Por favor, extraia o texto completo do documento, prestando especial atenção aos detalhes dos produtos como nome, código, preço, dimensões, materiais e cores disponíveis. Formata o texto de maneira clara, separando as informações de cada produto."
+            },
+            {
+              type: "image_url",
+              image_url: {
+                url: `data:application/pdf;base64,${base64Pdf}`
+              }
+            }
+          ]
+        }
+      ],
+      max_tokens: 4000
+    });
+    
+    const extractedText = response.choices[0].message.content || "";
+    console.log("Texto extraído do PDF com sucesso!");
+    
+    return extractedText;
   } catch (error) {
     console.error('Erro ao processar arquivo PDF:', error);
-    throw new Error('Falha ao processar arquivo PDF');
+    throw new Error(`Falha ao processar arquivo PDF: ${error instanceof Error ? error.message : 'Erro desconhecido'}`);
   }
 }
 
 // Função para usar IA para extrair produtos do texto de um PDF
 async function extractProductsWithAI(text: string): Promise<any[]> {
   try {
+    console.log("Iniciando extração de produtos com IA...");
+    
     const prompt = `
-    Eu tenho o texto de um catálogo de móveis e preciso extrair informações estruturadas sobre os produtos listados.
-    Analise o texto abaixo e extraia as seguintes informações para cada produto que você identificar:
-    - name: Nome do produto
-    - description: Descrição detalhada
-    - code: Código do produto
-    - price: Preço (em centavos, apenas números)
-    - materials: Materiais utilizados
-    - dimensions: Dimensões (largura, altura, profundidade)
-    - category: Categoria (Sofá, Mesa, Cadeira, etc.)
-    - colors: Cores disponíveis (array de cores)
-    
-    Se alguma informação estiver faltando, deixe o campo correspondente vazio.
-    Responda somente com um array JSON de produtos.
-    
+    Você é um assistente especializado em extrair informações estruturadas de catálogos de móveis.
+
+    A partir do texto abaixo, identifique todos os produtos mencionados e extraia as seguintes informações para CADA produto:
+    1. name: Nome completo do produto
+    2. description: Descrição detalhada do produto
+    3. code: Código ou referência do produto (ex: SF-MAD-001)
+    4. price: Preço em formato numérico (se o valor estiver como "R$ 1.234,56", converta para 123456)
+    5. category: Categoria principal (Sofá, Mesa, Cadeira, Estante, Poltrona, etc.)
+    6. materials: Lista de materiais utilizados na fabricação
+    7. colors: Array com todas as cores disponíveis
+    8. sizes: Array de objetos contendo as dimensões no formato:
+       {
+         "width": largura em cm (número),
+         "height": altura em cm (número),
+         "depth": profundidade em cm (número),
+         "label": descrição das dimensões (opcional)
+       }
+
+    IMPORTANTE:
+    - Para cada produto, tente extrair TODAS as informações disponíveis.
+    - Se uma informação não estiver disponível, use null ou um array vazio conforme apropriado.
+    - Quando os preços estiverem no formato "R$ X.XXX,XX", remova o símbolo da moeda e converta para centavos.
+    - Se encontrar dimensões no formato "LxAxP" ou similar, separe os números em largura, altura e profundidade.
+    - Retorne a resposta em formato JSON como um objeto com a propriedade "products" que contém um array de produtos.
+
+    EXEMPLO DE RESPOSTA:
+    {
+      "products": [
+        {
+          "name": "Sofá Madrid",
+          "description": "Sofá de 3 lugares com braços largos e almofadas macias",
+          "code": "SF-MAD-001",
+          "price": 350000,
+          "category": "Sofá",
+          "materials": ["Estrutura em madeira", "Estofamento em espuma D-33", "Revestimento em tecido suede"],
+          "colors": ["Cinza", "Bege", "Azul marinho"],
+          "sizes": [{"width": 220, "height": 90, "depth": 85, "label": "3 lugares"}]
+        },
+        {
+          "name": "Mesa de Jantar Oslo",
+          "description": "Mesa de jantar retangular com bordas arredondadas",
+          "code": "MJ-OSL-002",
+          "price": 220000,
+          "category": "Mesa",
+          "materials": ["Tampo em MDF laminado", "Pés em madeira maciça"],
+          "colors": ["Carvalho", "Nogueira", "Branco"],
+          "sizes": [{"width": 160, "height": 78, "depth": 90, "label": "6 lugares"}]
+        }
+      ]
+    }
+
     Texto do catálogo:
     ${text}
     `;
@@ -101,11 +173,14 @@ async function extractProductsWithAI(text: string): Promise<any[]> {
     const response = await openai.chat.completions.create({
       model: "gpt-4o", // o modelo mais recente da OpenAI
       messages: [
-        { role: "system", content: "Você é um assistente especializado em extrair informações estruturadas de textos de catálogos de móveis." },
+        { 
+          role: "system", 
+          content: "Você é um assistente especializado em extrair informações estruturadas de catálogos de móveis com precisão. Sua tarefa é identificar produtos e suas características com exatidão."
+        },
         { role: "user", content: prompt }
       ],
       max_tokens: 4000,
-      temperature: 0.3,
+      temperature: 0.2,
       response_format: { type: "json_object" }
     });
     
@@ -113,25 +188,33 @@ async function extractProductsWithAI(text: string): Promise<any[]> {
     let products = [];
     try {
       const responseText = response.choices[0].message.content;
+      console.log("Resposta da IA recebida, processando JSON...");
+      
       if (responseText) {
         const parsedResponse = JSON.parse(responseText);
         if (Array.isArray(parsedResponse.products)) {
           products = parsedResponse.products;
+          console.log(`Extraídos ${products.length} produtos do texto.`);
         } else if (parsedResponse.products) {
           products = [parsedResponse.products];
+          console.log("Extraído 1 produto do texto.");
         } else if (Array.isArray(parsedResponse)) {
           products = parsedResponse;
+          console.log(`Extraídos ${products.length} produtos (formato alternativo).`);
+        } else {
+          console.log("Nenhum produto encontrado no formato esperado, resposta da IA:", responseText.substring(0, 200) + "...");
         }
       }
     } catch (error) {
       console.error('Erro ao analisar resposta da IA:', error);
+      console.log("Texto da resposta que causou erro:", response.choices[0].message.content?.substring(0, 500) + "...");
     }
     
-    // Garantir que os preços estão em centavos (números inteiros)
+    // Processo de normalização dos dados para garantir consistência
     products = products.map(product => {
-      // Converter preço para número inteiro se for string
+      // Processamento do preço
       if (product.price && typeof product.price === 'string') {
-        // Remover símbolos de moeda e convertemos para centavos
+        // Remover símbolos não numéricos e converter vírgula para ponto
         const priceStr = product.price.replace(/[^\d,\.]/g, '').replace(',', '.');
         const priceFloat = parseFloat(priceStr);
         if (!isNaN(priceFloat)) {
@@ -139,14 +222,50 @@ async function extractProductsWithAI(text: string): Promise<any[]> {
         } else {
           product.price = 0;
         }
+      } else if (!product.price) {
+        product.price = 0;
       }
       
       // Garantir que colors seja um array
       if (product.colors && typeof product.colors === 'string') {
-        product.colors = product.colors.split(',').map((color: string) => color.trim());
-      } else if (!product.colors) {
+        product.colors = product.colors.split(/[,;]/).map((color: string) => color.trim()).filter(Boolean);
+      } else if (!Array.isArray(product.colors)) {
         product.colors = [];
       }
+      
+      // Garantir que materials seja um array
+      if (product.materials && typeof product.materials === 'string') {
+        product.materials = product.materials.split(/[,;]/).map((material: string) => material.trim()).filter(Boolean);
+      } else if (!Array.isArray(product.materials)) {
+        product.materials = [];
+      }
+      
+      // Processar dimensões/tamanhos
+      if (!Array.isArray(product.sizes)) {
+        // Se dimensions existe mas sizes não existe
+        if (product.dimensions) {
+          // Tenta extrair dimensões de uma string como "220x90x85 cm"
+          const dimMatch = String(product.dimensions).match(/(\d+)\s*[xX]\s*(\d+)\s*[xX]\s*(\d+)/);
+          if (dimMatch) {
+            product.sizes = [{
+              width: parseInt(dimMatch[1]),
+              height: parseInt(dimMatch[2]),
+              depth: parseInt(dimMatch[3]),
+              label: product.dimensions
+            }];
+          } else {
+            product.sizes = [{ label: String(product.dimensions) }];
+          }
+        } else {
+          product.sizes = [];
+        }
+      }
+      
+      // Adicionar outros campos obrigatórios se estiverem ausentes
+      product.name = product.name || "Produto sem nome";
+      product.code = product.code || `AUTO-${Math.floor(Math.random() * 10000)}`;
+      product.category = product.category || "Não categorizado";
+      product.description = product.description || "";
       
       return product;
     });
@@ -154,7 +273,7 @@ async function extractProductsWithAI(text: string): Promise<any[]> {
     return products;
   } catch (error) {
     console.error('Erro ao usar IA para extrair produtos:', error);
-    throw new Error('Falha ao analisar o catálogo com IA');
+    throw new Error(`Falha ao analisar o catálogo com IA: ${error instanceof Error ? error.message : 'Erro desconhecido'}`);
   }
 }
 
@@ -553,55 +672,48 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       console.log(`Processando arquivo: ${fileName}, tipo: ${fileType}, para usuário: ${userId}`);
       
-      // Processar o arquivo com base no tipo
-      let productsData = [];
-      let extractionInfo = "";
-      
-      if (fileType === 'xlsx' || fileType === 'xls') {
-        // Extrair dados do Excel
-        productsData = await extractProductsFromExcel(filePath);
-        extractionInfo = `Extraídos ${productsData.length} produtos do arquivo Excel.`;
-      } else if (fileType === 'pdf') {
-        // Extrair texto do PDF
-        const pdfInfo = await extractTextFromPDF(filePath);
-        
-        // Usar IA para extrair produtos do texto
-        // Em um ambiente de produção, isso pode ser feito de forma assíncrona
-        // e o usuário pode ser notificado quando estiver concluído
-        const sampleText = `
-        Catálogo de Móveis 2023
-        
-        Sofá Madrid
-        Código: SF-MAD-001
-        Descrição: Sofá de 3 lugares com braços largos e almofadas macias
-        Materiais: Estrutura em madeira, estofamento em espuma D-33, revestimento em tecido suede
-        Dimensões: 220x90x85 cm (LxAxP)
-        Preço: R$ 3.500,00
-        Cores disponíveis: Cinza, Bege, Azul marinho
-
-        Mesa de Jantar Oslo
-        Código: MJ-OSL-002
-        Descrição: Mesa de jantar retangular com bordas arredondadas
-        Materiais: Tampo em MDF laminado, pés em madeira maciça
-        Dimensões: 160x78x90 cm (LxAxP)
-        Preço: R$ 2.200,00
-        Cores disponíveis: Carvalho, Nogueira, Branco
-        `;
-        
-        productsData = await extractProductsWithAI(sampleText);
-        extractionInfo = `PDF processado com ${pdfInfo}. Identificados ${productsData.length} produtos.`;
-      } else {
-        return res.status(400).json({ message: "Formato de arquivo não suportado. Use Excel ou PDF" });
-      }
-      
-      // Criar o catálogo no banco de dados
+      // Criar o catálogo com status "processando"
       const catalog = await storage.createCatalog({
         userId,
         fileName,
         fileUrl: filePath,
-        processedStatus: "completed",
-        totalProducts: productsData.length
+        processedStatus: "processing"
       });
+      
+      // Processar o arquivo com base no tipo
+      let productsData = [];
+      let extractionInfo = "";
+      
+      try {
+        if (fileType === 'xlsx' || fileType === 'xls') {
+          // Extrair dados do Excel
+          productsData = await extractProductsFromExcel(filePath);
+          extractionInfo = `Extraídos ${productsData.length} produtos do arquivo Excel.`;
+        } else if (fileType === 'pdf') {
+          // Extrair texto do PDF usando OpenAI Vision API
+          console.log(`Iniciando extração de texto do PDF: ${filePath}`);
+          const extractedText = await extractTextFromPDF(filePath);
+          console.log(`Texto extraído com sucesso. Tamanho: ${extractedText.length} caracteres`);
+          
+          // Usar IA para extrair produtos do texto
+          console.log("Iniciando análise de produtos com IA...");
+          productsData = await extractProductsWithAI(extractedText);
+          extractionInfo = `PDF processado com sucesso. Identificados ${productsData.length} produtos.`;
+        } else {
+          throw new Error("Formato de arquivo não suportado. Use Excel ou PDF");
+        }
+      } catch (processingError) {
+        console.error("Erro durante o processamento do arquivo:", processingError);
+        
+        // Atualizar o status do catálogo para "erro"
+        await storage.updateCatalogStatus(catalog.id, "error");
+        
+        return res.status(400).json({ 
+          message: "Erro ao processar o arquivo", 
+          error: processingError instanceof Error ? processingError.message : "Erro desconhecido",
+          catalog: { ...catalog, processedStatus: "error" }
+        });
+      }
       
       // Adicionar produtos extraídos ao banco de dados
       const savedProducts = [];
@@ -614,11 +726,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
             name: productData.name || "Produto sem nome",
             description: productData.description || "",
             code: productData.code || `AUTO-${Math.floor(Math.random() * 10000)}`,
-            price: productData.price || 0,
-            materials: Array.isArray(productData.materials) ? productData.materials.join(", ") : (productData.materials || ""),
-            dimensions: productData.dimensions || "",
-            category: productData.category || "Não especificada",
+            price: typeof productData.price === 'number' ? productData.price : 0,
+            category: productData.category || "Não categorizado",
             colors: Array.isArray(productData.colors) ? productData.colors : [],
+            materials: Array.isArray(productData.materials) ? productData.materials : [],
+            sizes: Array.isArray(productData.sizes) ? productData.sizes : [],
             imageUrl: productData.imageUrl || null
           };
           
@@ -629,9 +741,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
       
+      // Atualizar o status do catálogo para "concluído"
+      const updatedCatalog = await storage.updateCatalogStatus(catalog.id, "completed");
+      
       return res.status(201).json({
         message: "Catálogo processado com sucesso",
-        catalog,
+        catalog: updatedCatalog,
         extractionInfo,
         totalProductsSaved: savedProducts.length,
         sampleProducts: savedProducts.slice(0, 3) // Retornar apenas alguns produtos como amostra

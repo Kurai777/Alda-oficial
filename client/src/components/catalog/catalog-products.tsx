@@ -49,8 +49,11 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
     }
   });
 
+  // Garantir que products é sempre um array antes de filtrar
+  const productsArray = Array.isArray(products) ? products : [];
+  
   // Filtrar produtos por termo de busca
-  const filteredProducts = products.filter((product: Product) => {
+  const filteredProducts = productsArray.filter((product: Product) => {
     if (!searchTerm) return true;
     
     const searchLower = searchTerm.toLowerCase();
@@ -60,7 +63,7 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
       product.category?.toLowerCase().includes(searchLower) ||
       String(product.price).includes(searchTerm) ||
       product.description?.toLowerCase().includes(searchLower) ||
-      product.materials?.some(m => m?.toLowerCase().includes(searchLower))
+      (Array.isArray(product.materials) && product.materials?.some(m => m?.toLowerCase().includes(searchLower)))
     );
   });
 
