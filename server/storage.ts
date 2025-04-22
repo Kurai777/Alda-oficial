@@ -14,7 +14,7 @@ export interface IStorage {
 
   // Product methods
   getProduct(id: number): Promise<Product | undefined>;
-  getProductsByUserId(userId: number): Promise<Product[]>;
+  getProductsByUserId(userId: number, catalogId?: number): Promise<Product[]>;
   getProductsByCategory(userId: number, category: string): Promise<Product[]>;
   createProduct(product: InsertProduct): Promise<Product>;
   updateProduct(id: number, product: Partial<InsertProduct>): Promise<Product | undefined>;
@@ -176,9 +176,19 @@ export class MemStorage implements IStorage {
     return this.products.get(id);
   }
 
-  async getProductsByUserId(userId: number): Promise<Product[]> {
+  async getProductsByUserId(userId: number, catalogId?: number): Promise<Product[]> {
     return Array.from(this.products.values()).filter(
-      (product) => product.userId === userId
+      (product) => {
+        // Filtrar sempre por userId
+        let match = product.userId === userId;
+        
+        // Se catalogId foi especificado, filtre também por ele
+        if (catalogId !== undefined && match) {
+          match = product.catalogId === catalogId;
+        }
+        
+        return match;
+      }
     );
   }
 

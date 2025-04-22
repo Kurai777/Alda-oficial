@@ -210,8 +210,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/products", async (req: Request, res: Response) => {
     try {
       const userId = parseInt(req.query.userId as string) || 1; // Default to userId 1 for mock data
+      const catalogId = req.query.catalogId ? parseInt(req.query.catalogId as string) : undefined;
       
-      const products = await storage.getProductsByUserId(userId);
+      const products = await storage.getProductsByUserId(userId, catalogId);
       return res.status(200).json(products);
     } catch (error) {
       return res.status(500).json({ message: "Failed to fetch products" });
