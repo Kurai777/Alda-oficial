@@ -19,6 +19,7 @@ export const insertUserSchema = createInsertSchema(users).pick({
 export const products = pgTable("products", {
   id: serial("id").primaryKey(),
   userId: integer("user_id").notNull(),
+  catalogId: integer("catalog_id"),
   name: text("name").notNull(),
   code: text("code").notNull(),
   description: text("description"),
@@ -33,6 +34,7 @@ export const products = pgTable("products", {
 
 export const insertProductSchema = createInsertSchema(products).pick({
   userId: true,
+  catalogId: true,
   name: true,
   code: true,
   description: true,

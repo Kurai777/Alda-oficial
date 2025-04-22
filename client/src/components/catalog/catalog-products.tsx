@@ -37,9 +37,10 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const pageSize = 10;
+  const [viewMode, setViewMode] = useState<'list' | 'grid'>('grid');
 
   // Buscar produtos do catálogo
-  const { data: products = [], isLoading, refetch } = useQuery({
+  const { data: products = [], isLoading, refetch, isError } = useQuery({
     queryKey: ["/api/products", { catalogId }],
     queryFn: async () => {
       const userId = user?.id || 1;
@@ -50,12 +51,16 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
 
   // Filtrar produtos por termo de busca
   const filteredProducts = products.filter((product: Product) => {
+    if (!searchTerm) return true;
+    
     const searchLower = searchTerm.toLowerCase();
     return (
       product.name?.toLowerCase().includes(searchLower) ||
       product.code?.toLowerCase().includes(searchLower) ||
       product.category?.toLowerCase().includes(searchLower) ||
-      String(product.price).includes(searchTerm)
+      String(product.price).includes(searchTerm) ||
+      product.description?.toLowerCase().includes(searchLower) ||
+      product.materials?.some(m => m?.toLowerCase().includes(searchLower))
     );
   });
 
