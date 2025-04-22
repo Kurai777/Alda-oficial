@@ -82,7 +82,105 @@ export class MemStorage implements IStorage {
       processedStatus: "completed",
       createdAt: new Date()
     };
-    this.createCatalog(demoFratiniCatalog);
+    const catalog = this.createCatalog(demoFratiniCatalog);
+    
+    // Add products from Tabela Fratini
+    const fratiniProducts = [
+      {
+        userId: 1,
+        catalogId: 1, // Associando ao catálogo Fratini
+        name: "Banqueta Aviv",
+        code: "1.00248.05",
+        description: "Banqueta em Polipropileno. AA: 77cm",
+        price: 29900, // R$ 299,00
+        category: "Banquetas",
+        imageUrl: "https://images.unsplash.com/photo-1581539250439-c96689b516dd?ixlib=rb-4.0.3",
+        colors: ["Branco", "Preto", "Amarelo", "Vermelho", "Fendi"],
+        materials: ["Polipropileno"],
+        sizes: [{ height: 77, label: "4pc/cx" }]
+      },
+      {
+        userId: 1,
+        catalogId: 1,
+        name: "Banqueta Berlim Alta",
+        code: "1.00250.05",
+        description: "Banqueta em Aço com pintura automotiva. AA: 76cm",
+        price: 17500, // R$ 175,00
+        category: "Banquetas",
+        imageUrl: "https://images.unsplash.com/photo-1595428774223-ef52624120d2?ixlib=rb-4.0.3",
+        colors: ["Preto", "Branco", "Amarelo", "Vermelho", "Bronze"],
+        materials: ["Aço"],
+        sizes: [{ height: 76, label: "4pc/cx" }]
+      },
+      {
+        userId: 1,
+        catalogId: 1,
+        name: "Banqueta Berlim Alta com Encosto",
+        code: "1.00242.05",
+        description: "Banqueta em Aço com pintura automotiva. AA: 76cm",
+        price: 18500, // R$ 185,00
+        category: "Banquetas",
+        imageUrl: "https://images.unsplash.com/photo-1616486338812-3dadae4b4ace?ixlib=rb-4.0.3",
+        colors: ["Preto", "Branco", "Amarelo", "Vermelho", "Bronze"],
+        materials: ["Aço"],
+        sizes: [{ height: 76, label: "4pc/cx" }]
+      },
+      {
+        userId: 1,
+        catalogId: 1,
+        name: "Banqueta Bristol",
+        code: "1.00297.05",
+        description: "Couro Ecológico (PU). Base em aço com pintura preta. Pistão com regulagem de altura",
+        price: 30900, // R$ 309,00
+        category: "Banquetas",
+        imageUrl: "https://images.unsplash.com/photo-1625584681159-44e8a9431d0b?ixlib=rb-4.0.3",
+        colors: ["Preto", "Caramelo"],
+        materials: ["Couro Ecológico", "Aço"],
+        sizes: [{ label: "2pc/cx" }]
+      },
+      {
+        userId: 1,
+        catalogId: 1,
+        name: "Banqueta Floripa",
+        code: "1.00304.05",
+        description: "Banqueta em Polipropileno. AA: 75cm",
+        price: 32000, // R$ 320,00
+        category: "Banquetas",
+        imageUrl: "https://images.unsplash.com/photo-1616486338812-3dadae4b4ace?ixlib=rb-4.0.3",
+        colors: ["Preto", "Fendi", "Verde Aloe"],
+        materials: ["Polipropileno"],
+        sizes: [{ height: 75, label: "4pc/cx" }]
+      },
+      {
+        userId: 1,
+        catalogId: 1,
+        name: "Banqueta Ipanema Alta",
+        code: "1.00305.05",
+        description: "Assento em polipropileno com base em aço pintado na mesma tonalidade do assento. AA: 75cm",
+        price: 28500, // R$ 285,00
+        category: "Banquetas",
+        imageUrl: "https://images.unsplash.com/photo-1585412727339-54e4bae3bbf9?ixlib=rb-4.0.3",
+        colors: ["Preto", "Nude", "Verde Aloe", "Terracota"],
+        materials: ["Polipropileno", "Aço"],
+        sizes: [{ height: 75, label: "4pc/cx" }]
+      },
+      {
+        userId: 1,
+        catalogId: 1,
+        name: "Cadeira Aviv",
+        code: "1.00110.01",
+        description: "Cadeira em Polipropileno",
+        price: 15500, // R$ 155,00
+        category: "Cadeiras",
+        imageUrl: "https://images.unsplash.com/photo-1561677978-583a8c7a4b43?ixlib=rb-4.0.3",
+        colors: ["Branco", "Preto", "Amarelo", "Vermelho", "Cinza", "Azul Marinho", "Fendi", "Laranja", "Verde Java", "Marrom Capuccino"],
+        materials: ["Polipropileno"],
+        sizes: [{ label: "4pc/cx" }]
+      }
+    ];
+    
+    // Adicionar os produtos da Fratini
+    fratiniProducts.forEach(product => this.createProduct(product));
 
     // Add sample products
     const demoProducts = [
