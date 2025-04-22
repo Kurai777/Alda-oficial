@@ -256,6 +256,16 @@ async function extractTextFromPDF(filePath: string): Promise<{ text: string, ima
   }
 }
 
+type PageImageMap = {
+  [key: number]: Array<{
+    page: number;
+    originalPath: string;
+    processedPath: string;
+    width: number;
+    height: number;
+  }>
+};
+
 // Função para usar IA para extrair produtos do texto de um PDF
 async function extractProductsWithAI(text: string, fileName: string): Promise<any[]> {
   try {
