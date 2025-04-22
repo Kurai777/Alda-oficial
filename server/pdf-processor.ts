@@ -3,6 +3,7 @@ import fs, { existsSync } from "fs";
 import { mkdir, readFile, writeFile } from "fs/promises";
 import { PDFDocument } from "pdf-lib";
 import sharp from "sharp";
+import pdfImgConvert from "pdf-img-convert";
 
 // Interface para imagens extraídas do PDF
 export interface ExtractedImage {
@@ -16,7 +17,7 @@ export interface ExtractedImage {
 // Função para extrair texto e imagens de um arquivo PDF para análise de catálogos
 export async function extractTextFromPDF(filePath: string): Promise<{ text: string, images: ExtractedImage[] }> {
   try {
-    // Carregar o PDF usando pdf-lib
+    // Carregar o PDF usando pdf-lib para obter informações
     console.log(`Iniciando extração de texto e imagens do PDF: ${filePath}`);
     const pdfBytes = await readFile(filePath);
     const pdfDoc = await PDFDocument.load(pdfBytes);
@@ -29,7 +30,7 @@ export async function extractTextFromPDF(filePath: string): Promise<{ text: stri
     const isFratiniCatalog = fileName.toLowerCase().includes("fratini");
     
     // Extrair imagens do PDF
-    console.log("Extraindo imagens do PDF...");
+    console.log("Extraindo imagens reais do PDF usando pdf-img-convert...");
     
     // Criar diretório para imagens extraídas
     const extractedImagesDir = path.join(process.cwd(), 'uploads', 'extracted_images');
@@ -40,21 +41,74 @@ export async function extractTextFromPDF(filePath: string): Promise<{ text: stri
     // Array para armazenar as imagens extraídas
     let extractedImages: ExtractedImage[] = [];
     
-    // Abordagem simplificada para extração de imagens:
-    // Para cada página, criar uma imagem representativa
     try {
-      for (let pageNum = 1; pageNum <= Math.min(pageCount, 25); pageNum++) {
+      // Converte cada página do PDF em uma imagem usando pdf-img-convert
+      // Isso vai gerar imagens reais das páginas do PDF, não apenas placeholders
+      const pdfImgOptions = {
+        width: 1200,          // Largura da página
+        height: 1600,         // Altura da página
+        quality: 95,         // Qualidade da imagem
+        format: "jpg",       // Formato da imagem
+        pagesToProcess: Array.from(Array(pageCount).keys()).map(i => i + 1) // Todas as páginas
+      };
+      
+      console.log("Convertendo páginas do PDF em imagens...");
+      
+      // Converter cada página do PDF em imagem
+      const pdfImgPages = await pdfImgConvert.convert(filePath, pdfImgOptions);
+      
+      console.log(`Convertidas ${pdfImgPages.length} páginas em imagens`);
+      
+      // Processar cada imagem gerada
+      for (let pageIndex = 0; pageIndex < pdfImgPages.length; pageIndex++) {
+        const pageNum = pageIndex + 1;
+        const imgData = pdfImgPages[pageIndex];
+        
         // Gerar nomes únicos para as imagens
         const imgName = `${path.basename(filePath, '.pdf')}_page_${pageNum}_${Date.now()}.jpg`;
         const imgPath = path.join(extractedImagesDir, imgName);
         const processedImgPath = path.join(extractedImagesDir, `processed_${imgName}`);
         
         try {
-          // Dimensões padrão para a imagem
+          // Salvar a imagem original da página
+          await writeFile(imgPath, Buffer.from(imgData));
+          
+          // Processar a imagem para uso no catálogo
+          await sharp(imgPath)
+            .resize(800, 800, { fit: 'inside' })
+            .toFile(processedImgPath);
+          
+          console.log(`Imagem real extraída para página ${pageNum} do PDF`);
+          
+          // Adicionar à lista de imagens extraídas
+          extractedImages.push({
+            page: pageNum,
+            originalPath: `/uploads/extracted_images/${imgName}`,
+            processedPath: `/uploads/extracted_images/processed_${imgName}`,
+            width: 800,
+            height: 800
+          });
+        } catch (pageError) {
+          console.error(`Erro ao processar imagem para página ${pageNum}:`, pageError);
+        }
+      }
+      
+      console.log(`Extraídas ${extractedImages.length} imagens reais das páginas do PDF`);
+    } catch (imgError) {
+      console.error("Erro ao extrair imagens reais do PDF:", imgError);
+      console.log("Tentando método alternativo para gerar imagens...");
+      
+      // Método alternativo se a extração falhar
+      for (let pageNum = 1; pageNum <= Math.min(pageCount, 25); pageNum++) {
+        const imgName = `${path.basename(filePath, '.pdf')}_page_${pageNum}_${Date.now()}.jpg`;
+        const imgPath = path.join(extractedImagesDir, imgName);
+        const processedImgPath = path.join(extractedImagesDir, `processed_${imgName}`);
+        
+        try {
+          // Criar uma imagem de fallback
           const width = 800;
           const height = 1000;
           
-          // Criar uma imagem representativa para a página
           await sharp({
             create: {
               width,
@@ -77,14 +131,12 @@ export async function extractTextFromPDF(filePath: string): Promise<{ text: stri
           .jpeg()
           .toFile(imgPath);
           
-          // Processar a imagem para uso no catálogo
           await sharp(imgPath)
             .resize(500, 500, { fit: 'inside' })
             .toFile(processedImgPath);
           
-          console.log(`Imagem criada para página ${pageNum} do PDF`);
+          console.log(`Imagem alternativa criada para página ${pageNum} do PDF`);
           
-          // Adicionar à lista de imagens extraídas
           extractedImages.push({
             page: pageNum,
             originalPath: `/uploads/extracted_images/${imgName}`,
@@ -93,13 +145,9 @@ export async function extractTextFromPDF(filePath: string): Promise<{ text: stri
             height: 500
           });
         } catch (pageError) {
-          console.error(`Erro ao processar imagem para página ${pageNum}:`, pageError);
+          console.error(`Erro ao processar imagem alternativa para página ${pageNum}:`, pageError);
         }
       }
-      
-      console.log(`Criadas ${extractedImages.length} imagens para as páginas do PDF`);
-    } catch (imgError) {
-      console.error("Erro ao criar imagens para o PDF:", imgError);
     }
     
     // Como pdf-lib não extrai texto diretamente, vamos usar metadados para análise

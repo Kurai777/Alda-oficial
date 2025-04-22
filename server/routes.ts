@@ -105,7 +105,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       return res.status(200).json({ 
         id: user.id,
-        name: user.name,
+        companyName: user.companyName || 'Empresa',
         email: user.email
       });
     } catch (error) {
