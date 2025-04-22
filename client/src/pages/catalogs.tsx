@@ -4,6 +4,7 @@ import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { Catalog } from "@shared/schema";
+import { useLocation } from "wouter";
 
 import {
   Card,
@@ -249,10 +250,10 @@ export default function Catalogs() {
                         <Button 
                           variant="outline" 
                           size="sm"
-                          onClick={() => setSelectedCatalog(catalog)}
+                          onClick={() => navigate(`/catalog/${catalog.id}`)}
                         >
-                          <ListIcon className="h-4 w-4 mr-1" />
-                          Ver Produtos
+                          <EyeIcon className="h-4 w-4 mr-1" />
+                          Ver Detalhes
                         </Button>
                         
                         {catalog.processedStatus === "pending" && (
