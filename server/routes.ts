@@ -570,8 +570,123 @@ export async function registerRoutes(app: Express): Promise<Server> {
             
             extractionInfo = `PDF processado com método alternativo. Identificados ${productsData.length} produtos e extraídas ${extractedImages.length} imagens.`;
           }
+        } else if (['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(fileType)) {
+          // Processar imagem diretamente com OCR
+          console.log(`Processando imagem com OCR: ${filePath}`);
+          
+          try {
+            // Importar o módulo de processamento de imagens
+            const { processImageWithOcr, convertOcrProductsToAppFormat } = await import('./image-ocr-processor');
+            
+            // Processar a imagem com OCR
+            const ocrProducts = await processImageWithOcr(filePath);
+            
+            if (ocrProducts && ocrProducts.length > 0) {
+              // Converter para o formato da aplicação
+              productsData = convertOcrProductsToAppFormat(ocrProducts, userId, catalog.id);
+              
+              console.log(`OCR extraiu ${productsData.length} produtos da imagem`);
+              extractionInfo = `Imagem processada com OCR. Extraídos ${productsData.length} produtos.`;
+            } else {
+              // Se não encontrou produtos, usar IA para analisar a imagem
+              console.log("OCR não encontrou produtos, usando IA para análise visual...");
+              
+              // Converter a imagem para base64
+              const imageBuffer = await readFile(filePath);
+              const base64Image = `data:image/${fileType};base64,${imageBuffer.toString('base64')}`;
+              
+              // Chamar a API da OpenAI para análise visual
+              const response = await openai.chat.completions.create({
+                model: "gpt-4o",
+                messages: [
+                  {
+                    role: "user",
+                    content: [
+                      {
+                        type: "text",
+                        text: "Descreva este móvel em detalhes, incluindo nome, categoria, preço (se visível), cores, materiais. Formate como JSON com campos: nome, categoria, descricao, preco, cores, materiais."
+                      },
+                      {
+                        type: "image_url",
+                        image_url: {
+                          url: base64Image
+                        }
+                      }
+                    ],
+                  },
+                ],
+                response_format: { type: "json_object" }
+              });
+              
+              const aiDescription = response.choices[0].message.content || '{}';
+              
+              try {
+                const productInfo = JSON.parse(aiDescription);
+                
+                // Criar um produto a partir da descrição da IA
+                productsData = [{
+                  userId,
+                  catalogId: catalog.id,
+                  name: productInfo.nome || "Produto em Imagem",
+                  description: productInfo.descricao || "",
+                  code: `IMG-${Math.floor(Math.random() * 10000)}`,
+                  price: 0, // Preço padrão
+                  category: productInfo.categoria || determineProductCategory(productInfo.nome || ""),
+                  colors: Array.isArray(productInfo.cores) ? productInfo.cores : 
+                          typeof productInfo.cores === 'string' ? [productInfo.cores] : [],
+                  materials: Array.isArray(productInfo.materiais) ? productInfo.materiais :
+                             typeof productInfo.materiais === 'string' ? [productInfo.materiais] : [],
+                  sizes: [],
+                  imageUrl: base64Image
+                }];
+                
+                extractionInfo = "Imagem processada com análise visual de IA.";
+              } catch (jsonError) {
+                console.error("Erro ao processar a resposta da IA:", jsonError);
+                
+                // Criar um produto simples com a imagem
+                productsData = [{
+                  userId,
+                  catalogId: catalog.id,
+                  name: "Produto em Imagem",
+                  description: "",
+                  code: `IMG-${Math.floor(Math.random() * 10000)}`,
+                  price: 0,
+                  category: "Outros",
+                  colors: [],
+                  materials: [],
+                  sizes: [],
+                  imageUrl: base64Image
+                }];
+                
+                extractionInfo = "Imagem processada como produto único.";
+              }
+            }
+          } catch (imageError) {
+            console.error("Erro ao processar imagem:", imageError);
+            
+            // Criar um produto simples com a imagem original
+            const imageBuffer = await readFile(filePath);
+            const base64Image = `data:image/${fileType};base64,${imageBuffer.toString('base64')}`;
+            
+            productsData = [{
+              userId,
+              catalogId: catalog.id,
+              name: path.basename(filePath, path.extname(filePath)),
+              description: "",
+              code: `IMG-${Math.floor(Math.random() * 10000)}`,
+              price: 0,
+              category: "Outros",
+              colors: [],
+              materials: [],
+              sizes: [],
+              imageUrl: base64Image
+            }];
+            
+            extractionInfo = "Imagem processada como produto único (fallback).";
+          }
         } else {
-          throw new Error("Formato de arquivo não suportado. Use Excel ou PDF");
+          throw new Error("Formato de arquivo não suportado. Use Excel, PDF ou imagens (JPG, PNG, etc)");
         }
       } catch (processingError) {
         console.error("Erro durante o processamento do arquivo:", processingError);
@@ -584,6 +699,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
           error: processingError instanceof Error ? processingError.message : "Erro desconhecido",
           catalog: { ...catalog, processedStatus: "error" }
         });
+      }
+      
+      // Utilitário para determinar a categoria de um produto com base no nome
+      const determineProductCategory = (productName: string): string => {
+        if (!productName) return "Outros";
+        
+        const nameLower = productName.toLowerCase();
+        
+        if (nameLower.includes('cadeira') && (nameLower.includes('gamer') || nameLower.includes('gaming'))) {
+          return 'Cadeiras Gamer';
+        } else if (nameLower.includes('cadeira')) {
+          return 'Cadeiras';
+        } else if (nameLower.includes('banqueta')) {
+          return 'Banquetas';
+        } else if (nameLower.includes('poltrona')) {
+          return 'Poltronas';
+        } else if (nameLower.includes('sofá') || nameLower.includes('sofa')) {
+          return 'Sofás';
+        } else if (nameLower.includes('mesa')) {
+          return 'Mesas';
+        } else if (nameLower.includes('apoio')) {
+          return 'Acessórios';
+        } else {
+          return 'Outros';
+        }
       }
       
       // Função para gerar imagem para um produto usando DALL-E
