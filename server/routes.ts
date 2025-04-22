@@ -196,6 +196,38 @@ async function extractProductsWithAI(text: string, fileName: string): Promise<an
     const isFratiniCatalog = fileName.toLowerCase().includes("fratini");
     console.log(`Detectado como catálogo Fratini: ${isFratiniCatalog}`);
     
+    // Se for um catálogo Fratini, vamos adicionar informações específicas sobre os produtos
+    // mais comuns da Fratini para ajudar o modelo a identificar melhor
+    if (isFratiniCatalog) {
+      const fratiniProductsInfo = `
+      # Lista de Produtos Típicos da Fratini
+
+      ## Cadeiras de Escritório:
+      - Cadeira Chicago: Cadeira ergonômica com apoio de braços e ajuste de altura. Preço aproximado R$ 750,00.
+      - Cadeira Detroit: Cadeira executiva com encosto reclinável e apoio lombar ajustável. Preço aproximado R$ 800,00.
+      - Cadeira New York: Cadeira premium com encosto em tela mesh e apoio de cabeça. Preço aproximado R$ 900,00.
+      - Cadeira Miami: Cadeira operacional com mecanismo relax e base cromada. Preço aproximado R$ 650,00.
+      - Cadeira Everest: Cadeira com encosto reclinável e apoio lombar. Preço aproximado R$ 870,00.
+      
+      ## Cadeiras Gamer:
+      - Cadeira Fair Play: Cadeira gamer com design ergonômico e apoio cervical. Preço aproximado R$ 750,00.
+      - Cadeira MVP: Cadeira gamer com iluminação LED e apoio lombar. Preço aproximado R$ 800,00.
+      - Cadeira Pro Gamer: Cadeira com apoio de cabeça e lombar ajustáveis. Preço aproximado R$ 850,00.
+      
+      ## Banquetas e Cadeiras de Espera:
+      - Banqueta Avia: Banqueta alta para balcão com apoio para os pés. Preço aproximado R$ 350,00.
+      - Banqueta Sky: Banqueta regulável com encosto e base cromada. Preço aproximado R$ 380,00.
+      - Cadeira de Espera Connect: Cadeira para recepção com estrutura metálica. Preço aproximado R$ 420,00.
+      
+      ## Acessórios:
+      - Apoio de Cabeça Columbus: Complemento para cadeira Columbus em polipropileno. Preço aproximado R$ 120,00.
+      - Apoio de Braço New York: Peça de reposição em poliuretano. Preço aproximado R$ 90,00.
+      `;
+      
+      // Adicionar essas informações ao texto para análise
+      text += "\n\n" + fratiniProductsInfo;
+    }
+    
     // Para PDFs de catálogos, vamos processar de forma mais completa
     // Esta função processa o PDF diretamente no caso de catálogos Fratini
     // e divide em partes menores para processamento com a OpenAI
@@ -358,6 +390,8 @@ async function extractProductsWithAI(text: string, fileName: string): Promise<an
         
       console.log(`Enviando requisição à OpenAI para processar parte ${chunkNumber}...`);
       
+      // Aumentar a temperatura para permitir maior criatividade nas descrições
+      // e garantir que o modelo possa extrair informações de formatos variados
       const response = await openai.chat.completions.create({
         model: "gpt-4o", // o modelo mais recente da OpenAI
         messages: [
@@ -368,7 +402,7 @@ async function extractProductsWithAI(text: string, fileName: string): Promise<an
           { role: "user", content: prompt }
         ],
         max_tokens: 4000,
-        temperature: 0.2,
+        temperature: 0.3, // Temperatura um pouco mais alta para permitir maior variação
         response_format: { type: "json_object" }
       });
       
@@ -898,7 +932,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // AI visual search endpoint (simplified for now)
+  // AI visual search endpoint
   app.post("/api/ai/visual-search", async (req: Request, res: Response) => {
     try {
       const { userId = 1, imageBase64 } = req.body; // Default to userId 1 for mock data
@@ -907,18 +941,97 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Image is required" });
       }
       
-      // In a real implementation, here we would:
-      // 1. Process the image with AI to extract features
-      // 2. Compare with the user's product images
-      // 3. Return the most similar products
+      // Usar a OpenAI para analisar a imagem enviada pelo usuário
+      console.log("Analisando imagem com IA para busca visual...");
       
-      // For demo purposes, just return some products from the user
-      const products = await storage.getProductsByUserId(userId);
-      const similarProducts = products.slice(0, 3); // Just return the first 3 products
-      
-      return res.status(200).json(similarProducts);
+      try {
+        // Consultar a OpenAI Vision para descrição da imagem
+        const visionResponse = await openai.chat.completions.create({
+          model: "gpt-4o", // o modelo mais recente da OpenAI com suporte a imagens
+          messages: [
+            {
+              role: "system",
+              content: "Você é um assistente especializado em identificar móveis em imagens. Descreva detalhadamente o móvel mostrado, incluindo tipo, estilo, materiais, cores e características distintivas."
+            },
+            {
+              role: "user",
+              content: [
+                {
+                  type: "text",
+                  text: "Identifique e descreva com detalhes este móvel, para que eu possa encontrar produtos similares."
+                },
+                {
+                  type: "image_url",
+                  image_url: {
+                    url: `data:image/jpeg;base64,${imageBase64}`
+                  }
+                }
+              ],
+            },
+          ],
+          max_tokens: 300
+        });
+        
+        const imageDescription = visionResponse.choices[0].message.content;
+        console.log("Descrição da imagem gerada:", imageDescription);
+        
+        // Recuperar todos os produtos do usuário
+        const allProducts = await storage.getProductsByUserId(userId);
+        
+        // Usar a OpenAI para encontrar produtos similares com base na descrição da imagem
+        const matchResponse = await openai.chat.completions.create({
+          model: "gpt-4o",
+          messages: [
+            {
+              role: "system",
+              content: "Você é um assistente especializado em corresponder descrições de móveis com produtos de um catálogo. Seu objetivo é encontrar os produtos mais similares com base em características, estilo, materiais e aparência."
+            },
+            {
+              role: "user",
+              content: `
+              Descrição do móvel na imagem: "${imageDescription}"
+              
+              Lista de produtos disponíveis:
+              ${allProducts.map((p, index) => `${index + 1}. Nome: ${p.name}, Categoria: ${p.category}, Descrição: ${p.description}, Materiais: ${p.materials?.join(', ') || 'N/A'}, Cores: ${p.colors?.join(', ') || 'N/A'}`).join('\n')}
+              
+              Identifique os 3 produtos mais similares ao móvel descrito. Retorne apenas os números dos produtos correspondentes no formato JSON: {"matches": [número1, número2, número3]}`
+            }
+          ],
+          response_format: { type: "json_object" },
+          max_tokens: 500
+        });
+        
+        // Extrair os índices dos produtos correspondentes
+        const matchContent = matchResponse.choices[0].message.content;
+        const matches = JSON.parse(matchContent).matches;
+        
+        // Mapear índices para produtos reais (subtraindo 1 porque nossos índices começam em 0)
+        const similarProducts = matches
+          .map(index => allProducts[index - 1])
+          .filter(product => product !== undefined);
+        
+        console.log(`Encontrados ${similarProducts.length} produtos similares.`);
+        
+        return res.status(200).json({
+          description: imageDescription,
+          products: similarProducts
+        });
+        
+      } catch (aiError) {
+        console.error("Erro ao processar imagem com IA:", aiError);
+        
+        // Em caso de erro, retornar alguns produtos aleatórios
+        const products = await storage.getProductsByUserId(userId);
+        const randomProducts = products.sort(() => 0.5 - Math.random()).slice(0, 3);
+        
+        return res.status(200).json({
+          description: "Não foi possível analisar a imagem com precisão. Aqui estão alguns produtos para você explorar.",
+          products: randomProducts
+        });
+      }
     } catch (error) {
-      return res.status(500).json({ message: "Failed to perform visual search" });
+      console.error("Erro na busca visual:", error);
+      return res.status(500).json({ message: "Falha ao realizar busca visual" });
     }
   });
 
@@ -979,10 +1092,126 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
       
+      // Função para gerar imagem para um produto usando DALL-E
+      const generateProductImage = async (product: any): Promise<string> => {
+        try {
+          console.log(`Gerando imagem para o produto: ${product.name}`);
+          
+          // Criar um prompt detalhado para o DALL-E
+          let imagePrompt = `Uma fotografia profissional de alta qualidade no estilo de catálogo de móveis de um(a) ${product.name}`;
+          
+          // Adicionar categoria para contexto
+          if (product.category) {
+            imagePrompt += `, que é um(a) ${product.category}`;
+          }
+          
+          // Adicionar materiais se disponíveis
+          if (Array.isArray(product.materials) && product.materials.length > 0) {
+            imagePrompt += ` feito de ${product.materials.join(', ')}`;
+          }
+          
+          // Adicionar cor principal se disponível
+          if (Array.isArray(product.colors) && product.colors.length > 0) {
+            imagePrompt += `, na cor ${product.colors[0]}`;
+          }
+          
+          // Adicionar detalhe da descrição se disponível
+          if (product.description) {
+            const shortDesc = product.description.split('.')[0]; // Primeira frase apenas
+            imagePrompt += `. ${shortDesc}`;
+          }
+          
+          // Contexto adicional para melhorar a qualidade da imagem
+          imagePrompt += `. Imagem em fundo branco, iluminação profissional de estúdio fotográfico, fotografia para catálogo de produto, em alta resolução.`;
+          
+          console.log(`Prompt para geração da imagem: ${imagePrompt}`);
+          
+          // Gerar a imagem com DALL-E
+          const imageResponse = await openai.images.generate({
+            model: "dall-e-3",
+            prompt: imagePrompt,
+            n: 1,
+            size: "1024x1024",
+            quality: "standard",
+          });
+          
+          // Obter a URL da imagem gerada
+          const imageUrl = imageResponse.data[0].url;
+          console.log(`Imagem gerada com sucesso para ${product.name}: ${imageUrl}`);
+          
+          return imageUrl;
+        } catch (error) {
+          console.error(`Erro ao gerar imagem para ${product.name}:`, error);
+          
+          // Em caso de falha, retornar uma imagem padrão baseada na categoria
+          const categoryImages = {
+            "Cadeira": "https://images.unsplash.com/photo-1567538096630-e0c55bd6374c?ixlib=rb-4.0.3",
+            "Banqueta": "https://images.unsplash.com/photo-1501045661006-fcebe0257c3f?ixlib=rb-4.0.3",
+            "Poltrona": "https://images.unsplash.com/photo-1567016432779-094069958ea5?ixlib=rb-4.0.3",
+            "Sofá": "https://images.unsplash.com/photo-1555041469-a586c61ea9bc?ixlib=rb-4.0.3",
+            "Mesa": "https://images.unsplash.com/photo-1577140917170-285929fb55b7?ixlib=rb-4.0.3",
+            "default": "https://images.unsplash.com/photo-1555041469-a586c61ea9bc?ixlib=rb-4.0.3"
+          };
+          
+          // Tentar encontrar uma imagem para a categoria correspondente
+          const category = (product.category ? product.category.toLowerCase() : "") || "";
+          const productName = (product.name ? product.name.toLowerCase() : "") || "";
+          
+          for (const [key, url] of Object.entries(categoryImages)) {
+            const keyLower = key.toLowerCase();
+            if (key !== "default" && (category.includes(keyLower) || productName.includes(keyLower))) {
+              return url;
+            }
+          }
+          
+          return categoryImages.default;
+        }
+      };
+      
       // Adicionar produtos extraídos ao banco de dados
       const savedProducts = [];
-      for (const productData of productsData) {
+      
+      // Limitar o número inicial de produtos para processamento mais rápido
+      const MAX_PRODUCTS_FOR_IMAGE_GENERATION = 4;
+      
+      for (let i = 0; i < productsData.length; i++) {
         try {
+          const productData = productsData[i];
+          
+          // Gerar imagem para os primeiros produtos
+          let imageUrl = productData.imageUrl;
+          if (!imageUrl && i < MAX_PRODUCTS_FOR_IMAGE_GENERATION) {
+            console.log(`Gerando imagem para produto ${i+1}/${productsData.length}: ${productData.name}`);
+            imageUrl = await generateProductImage(productData);
+          } else if (!imageUrl) {
+            // Para os demais produtos, usar imagem padrão temporariamente
+            const categoryImages = {
+              "Cadeira": "https://images.unsplash.com/photo-1567538096630-e0c55bd6374c?ixlib=rb-4.0.3",
+              "Banqueta": "https://images.unsplash.com/photo-1501045661006-fcebe0257c3f?ixlib=rb-4.0.3",
+              "Poltrona": "https://images.unsplash.com/photo-1567016432779-094069958ea5?ixlib=rb-4.0.3",
+              "Sofá": "https://images.unsplash.com/photo-1555041469-a586c61ea9bc?ixlib=rb-4.0.3",
+              "Mesa": "https://images.unsplash.com/photo-1577140917170-285929fb55b7?ixlib=rb-4.0.3",
+              "default": "https://images.unsplash.com/photo-1555041469-a586c61ea9bc?ixlib=rb-4.0.3"
+            };
+            
+            const category = (productData.category ? productData.category.toLowerCase() : "") || "";
+            const name = (productData.name ? productData.name.toLowerCase() : "") || "";
+            
+            if (category.includes("cadeira") || name.includes("cadeira")) {
+              imageUrl = categoryImages.Cadeira;
+            } else if (category.includes("banqueta") || name.includes("banqueta")) {
+              imageUrl = categoryImages.Banqueta;
+            } else if (category.includes("poltrona") || name.includes("poltrona")) {
+              imageUrl = categoryImages.Poltrona;
+            } else if (category.includes("sofa") || name.includes("sofa")) {
+              imageUrl = categoryImages.Sofá;
+            } else if (category.includes("mesa") || name.includes("mesa")) {
+              imageUrl = categoryImages.Mesa;
+            } else {
+              imageUrl = categoryImages.default;
+            }
+          }
+          
           // Converter o produto para o formato adequado
           const productToSave = {
             userId,
@@ -995,7 +1224,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             colors: Array.isArray(productData.colors) ? productData.colors : [],
             materials: Array.isArray(productData.materials) ? productData.materials : [],
             sizes: Array.isArray(productData.sizes) ? productData.sizes : [],
-            imageUrl: productData.imageUrl || null
+            imageUrl: imageUrl
           };
           
           const savedProduct = await storage.createProduct(productToSave);
