@@ -73,6 +73,16 @@ export class MemStorage implements IStorage {
       password: "password123",
       companyName: "Móveis Elegance"
     });
+    
+    // Add sample catalog
+    const demoFratiniCatalog = {
+      userId: 1,
+      fileName: "Tabela Fratini - Fevereiro 2025.pdf",
+      fileUrl: "/uploads/sample-fratini-catalog.pdf",
+      processedStatus: "completed",
+      createdAt: new Date()
+    };
+    this.createCatalog(demoFratiniCatalog);
 
     // Add sample products
     const demoProducts = [
