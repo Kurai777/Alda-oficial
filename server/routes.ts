@@ -19,6 +19,7 @@ import { z } from "zod";
 // Importar procesadores especializados
 import { extractTextFromPDF } from "./pdf-processor";
 import { extractProductsWithAI } from "./ai-extractor";
+import { determineProductCategory, extractMaterialsFromDescription } from "./utils";
 
 // Configurar OpenAI
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -701,30 +702,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
       
-      // Utilitário para determinar a categoria de um produto com base no nome
-      const determineProductCategory = (productName: string): string => {
-        if (!productName) return "Outros";
-        
-        const nameLower = productName.toLowerCase();
-        
-        if (nameLower.includes('cadeira') && (nameLower.includes('gamer') || nameLower.includes('gaming'))) {
-          return 'Cadeiras Gamer';
-        } else if (nameLower.includes('cadeira')) {
-          return 'Cadeiras';
-        } else if (nameLower.includes('banqueta')) {
-          return 'Banquetas';
-        } else if (nameLower.includes('poltrona')) {
-          return 'Poltronas';
-        } else if (nameLower.includes('sofá') || nameLower.includes('sofa')) {
-          return 'Sofás';
-        } else if (nameLower.includes('mesa')) {
-          return 'Mesas';
-        } else if (nameLower.includes('apoio')) {
-          return 'Acessórios';
-        } else {
-          return 'Outros';
-        }
-      }
+      // Utilizando a função determineProductCategory importada de utils.ts
       
       // Função para gerar imagem para um produto usando DALL-E
       const generateProductImage = async (product: any): Promise<string> => {
