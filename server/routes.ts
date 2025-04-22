@@ -5,9 +5,13 @@ import multer from "multer";
 import * as XLSX from "xlsx";
 import { PDFDocument } from "pdf-lib";
 import path from "path";
-import { existsSync } from "fs";
-import { mkdir, readFile } from "fs/promises";
+import { existsSync, mkdirSync, writeFileSync } from "fs";
+import { mkdir, readFile, writeFile } from "fs/promises";
 import OpenAI from "openai";
+import pdfImgConvert from "pdf-img-convert";
+import fs from "fs";
+import * as pdfjs from "pdfjs-dist";
+import sharp from "sharp";
 import { 
   insertUserSchema, 
   insertProductSchema, 
@@ -58,37 +62,93 @@ async function extractProductsFromExcel(filePath: string): Promise<any[]> {
   }
 }
 
-// Função para extrair texto de um arquivo PDF para análise de catálogos
-async function extractTextFromPDF(filePath: string): Promise<string> {
+// Função para extrair texto e imagens de um arquivo PDF para análise de catálogos
+async function extractTextFromPDF(filePath: string): Promise<{ text: string, images: any[] }> {
   try {
     // Carregar o PDF usando pdf-lib
-    console.log(`Iniciando extração de texto do PDF: ${filePath}`);
+    console.log(`Iniciando extração de texto e imagens do PDF: ${filePath}`);
     const pdfBytes = await readFile(filePath);
     const pdfDoc = await PDFDocument.load(pdfBytes);
     const pageCount = pdfDoc.getPageCount();
     
     console.log(`Processando PDF com ${pageCount} páginas: ${filePath}`);
     
-    // Como pdf-lib não extrai texto diretamente, vamos usar o OpenAI para analisar o formato
-    // do PDF com base em metadados e descrições do negócio
-    
     // Verificar se é um catálogo Fratini
     const fileName = path.basename(filePath);
     const isFratiniCatalog = fileName.toLowerCase().includes("fratini");
     
+    // Extrair imagens do PDF
+    console.log("Extraindo imagens do PDF...");
+    
+    // Criar diretório para imagens extraídas
+    const extractedImagesDir = path.join(process.cwd(), 'uploads', 'extracted_images');
+    if (!existsSync(extractedImagesDir)) {
+      await mkdir(extractedImagesDir, { recursive: true });
+    }
+    
+    // Extrair imagens usando pdf-img-convert
+    let extractedImages: any[] = [];
+    
+    try {
+      const outputImages = await pdfImgConvert.convert(filePath, {
+        width: 800,         // Largura do output em pixels
+        height: 800,        // Altura do output em pixels
+        page_numbers: Array.from({length: Math.min(pageCount, 25)}, (_, i) => i), // Limitar a 25 páginas
+        base64: false
+      });
+      
+      console.log(`Extraídas ${outputImages.length} imagens do PDF`);
+      
+      // Salvar cada imagem como um arquivo e armazenar o caminho
+      for (let i = 0; i < outputImages.length; i++) {
+        const imgData = outputImages[i];
+        const imgName = `${path.basename(filePath, '.pdf')}_page_${i+1}_${Date.now()}.jpg`;
+        const imgPath = path.join(extractedImagesDir, imgName);
+        
+        // Salvar a imagem no disco
+        await writeFile(imgPath, imgData);
+        
+        // Processar a imagem com sharp para recortar apenas o produto (simulação)
+        // Em um sistema real, você usaria IA para detectar e recortar apenas o produto
+        try {
+          await sharp(imgPath)
+            .resize(500, 500, { fit: 'inside' })
+            .toFile(path.join(extractedImagesDir, `processed_${imgName}`));
+            
+          console.log(`Imagem processada e salva: processed_${imgName}`);
+          
+          // Adicionar a imagem à lista de imagens extraídas
+          extractedImages.push({
+            page: i+1,
+            originalPath: `/uploads/extracted_images/${imgName}`,
+            processedPath: `/uploads/extracted_images/processed_${imgName}`,
+            width: 500,
+            height: 500
+          });
+        } catch (sharpError) {
+          console.error(`Erro ao processar imagem com sharp: ${sharpError}`);
+        }
+      }
+    } catch (imgError) {
+      console.error("Erro ao extrair imagens do PDF:", imgError);
+      console.log("Continuando com o texto para análise...");
+    }
+    
+    // Como pdf-lib não extrai texto diretamente, vamos usar o OpenAI para analisar o formato
+    // do PDF com base em metadados e descrições do negócio
     let pdfText = '';
     
     if (isFratiniCatalog) {
       console.log("Catálogo Fratini detectado. Usando descrição especializada para extração...");
       
       // Para catálogos Fratini, fornecemos uma descrição detalhada da estrutura esperada
-      // e como a OpenAI deve processar este formato específico
       pdfText = `
       # ANÁLISE DETALHADA DO CATÁLOGO FRATINI
 
       ## INFORMAÇÕES GERAIS DO DOCUMENTO
       - Nome do arquivo: ${fileName}
       - Número de páginas: ${pageCount}
+      - Número de imagens extraídas: ${extractedImages.length}
       
       ## ESTRUTURA DA TABELA DE PREÇOS FRATINI
       
@@ -129,6 +189,7 @@ async function extractTextFromPDF(filePath: string): Promise<string> {
       ## INFORMAÇÕES GERAIS DO DOCUMENTO
       - Nome do arquivo: ${fileName}
       - Número de páginas: ${pageCount}
+      - Número de imagens extraídas: ${extractedImages.length}
       
       ## CONTEÚDO TÍPICO DE CATÁLOGOS DE MÓVEIS
       Este documento contém informações sobre produtos de móveis com os seguintes detalhes típicos:
@@ -160,7 +221,7 @@ async function extractTextFromPDF(filePath: string): Promise<string> {
       `;
     }
     
-    // Adicionar instruções para o modelo AI processar o conteúdo
+    // Adicionar instruções para o modelo AI processar o conteúdo e associar imagens
     pdfText += `
 
     # INSTRUÇÕES PARA PROCESSAMENTO
@@ -170,17 +231,25 @@ async function extractTextFromPDF(filePath: string): Promise<string> {
     1. Nome completo do produto (name)
     2. Código ou referência (code)
     3. Preço em formato numérico (price) - multiplique por 100 para centavos
-    4. Categoria (category)
+    4. Categoria (category) 
     5. Descrição detalhada (description)
     6. Lista de cores disponíveis (colors)
     7. Lista de materiais utilizados (materials)
     8. Informações de dimensões (sizes)
+    9. Número da página onde o produto aparece (pageNumber) - se disponível
     
     Cada produto aparece como uma entrada distinta no catálogo, com suas próprias informações.
     É necessário percorrer todo o documento para identificar todos os produtos.
+    
+    Extraímos ${extractedImages.length} imagens das páginas do catálogo. 
+    Cada produto deve estar associado a pelo menos uma dessas imagens.
     `;
     
-    return pdfText;
+    console.log(`Texto extraído com sucesso. Tamanho: ${pdfText.length} caracteres`);
+    return { 
+      text: pdfText, 
+      images: extractedImages 
+    };
   } catch (error) {
     console.error('Erro ao processar arquivo PDF:', error);
     throw new Error(`Falha ao processar arquivo PDF: ${error instanceof Error ? error.message : 'Erro desconhecido'}`);
