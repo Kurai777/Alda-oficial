@@ -40,10 +40,13 @@ export default function UploadCard() {
 
   const handleFileUpload = async (file: File) => {
     // Check file type
-    if (!file.name.endsWith('.xlsx') && !file.name.endsWith('.xls') && !file.name.endsWith('.pdf')) {
+    const allowedExtensions = ['.xlsx', '.xls', '.pdf', '.jpg', '.jpeg', '.png', '.gif', '.webp'];
+    const fileExtension = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
+    
+    if (!allowedExtensions.includes(fileExtension)) {
       toast({
         title: "Tipo de arquivo inválido",
-        description: "Por favor, envie um arquivo Excel (.xlsx, .xls) ou PDF.",
+        description: "Por favor, envie um arquivo Excel (.xlsx, .xls), PDF ou imagem (.jpg, .png, .gif, .webp).",
         variant: "destructive",
       });
       return;
@@ -115,7 +118,7 @@ export default function UploadCard() {
             <CloudUpload className="h-10 w-10 mx-auto text-gray-400" />
             <h3 className="text-lg font-medium text-gray-900">Importe seu catálogo</h3>
             <p className="text-sm text-gray-500">
-              Arraste e solte um arquivo Excel ou PDF do seu catálogo aqui, ou
+              Arraste e solte um arquivo Excel, PDF ou imagem do seu catálogo aqui, ou
             </p>
             <div>
               <label htmlFor="file-upload" className="cursor-pointer rounded-md font-medium text-primary-600 hover:text-primary-500 focus-within:outline-none focus-within:ring-2 focus-within:ring-offset-2 focus-within:ring-primary-500">
@@ -125,14 +128,14 @@ export default function UploadCard() {
                   name="file-upload" 
                   type="file" 
                   className="sr-only"
-                  accept=".xlsx,.xls,.pdf"
+                  accept=".xlsx,.xls,.pdf,.jpg,.jpeg,.png,.gif,.webp"
                   onChange={handleFileChange}
                   disabled={isUploading}
                 />
               </label>
             </div>
             <p className="text-xs text-gray-500">
-              Excel, PDF, até 10MB
+              Excel, PDF, imagens (JPG, PNG), até 10MB
             </p>
             {isUploading && (
               <div className="mt-2">
