@@ -120,9 +120,17 @@ export default function Navigation() {
           <div className="pt-4 pb-3 border-t border-gray-200">
             <div className="flex items-center px-4">
               <div className="flex-shrink-0">
-                <div className="h-10 w-10 rounded-full bg-primary-100 flex items-center justify-center text-primary-600">
-                  <User className="h-6 w-6" />
-                </div>
+                {user?.photoURL ? (
+                  <img 
+                    src={user.photoURL} 
+                    alt={user.companyName || 'Usuário'} 
+                    className="h-10 w-10 rounded-full object-cover"
+                  />
+                ) : (
+                  <div className="h-10 w-10 rounded-full bg-primary-100 flex items-center justify-center text-primary-600">
+                    <User className="h-6 w-6" />
+                  </div>
+                )}
               </div>
               <div className="ml-3">
                 <div className="text-base font-medium text-gray-800">{user?.companyName}</div>

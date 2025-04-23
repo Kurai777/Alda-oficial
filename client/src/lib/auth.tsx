@@ -55,28 +55,32 @@ const AuthContext = createContext<AuthContextType>({
 
 // Função para transformar usuário do Firebase em nosso modelo de usuário
 const transformFirebaseUser = async (firebaseUser: FirebaseUser): Promise<User> => {
-  // Buscar dados adicionais do usuário no Firestore
-  const userDocRef = doc(db, "users", firebaseUser.uid);
-  const userDoc = await getDoc(userDocRef);
+  // Criar modelo base com dados do Firebase Auth
+  const baseUser: User = {
+    uid: firebaseUser.uid,
+    email: firebaseUser.email,
+    companyName: firebaseUser.displayName || "Empresa",
+    photoURL: firebaseUser.photoURL
+  };
   
-  if (userDoc.exists()) {
-    // Usar dados do Firestore + Firebase Auth
-    const userData = userDoc.data();
-    return {
-      uid: firebaseUser.uid,
-      email: firebaseUser.email,
-      companyName: userData.companyName || "Empresa",
-      photoURL: firebaseUser.photoURL
-    };
-  } else {
-    // Caso o documento ainda não exista (improvável após registro, mas possível em outros cenários)
-    return {
-      uid: firebaseUser.uid,
-      email: firebaseUser.email,
-      companyName: firebaseUser.displayName || "Empresa",
-      photoURL: firebaseUser.photoURL
-    };
+  // Tentar buscar dados adicionais do usuário no Firestore (sem bloquear em caso de erro)
+  try {
+    const userDocRef = doc(db, "users", firebaseUser.uid);
+    const userDoc = await getDoc(userDocRef);
+    
+    if (userDoc.exists()) {
+      // Adicionar dados do Firestore se existirem
+      const userData = userDoc.data();
+      if (userData.companyName) {
+        baseUser.companyName = userData.companyName;
+      }
+    }
+  } catch (error) {
+    console.warn("Não foi possível acessar dados do Firestore:", error);
+    // Continuar com os dados básicos do Firebase Auth
   }
+  
+  return baseUser;
 };
 
 // Provider de autenticação
@@ -92,22 +96,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setLoading(true);
       try {
         if (firebaseUser) {
-          // Usuário autenticado
-          const userData = await transformFirebaseUser(firebaseUser);
+          // Usuário autenticado - criar objeto de usuário apenas com informações do Auth
+          const userData: User = {
+            uid: firebaseUser.uid,
+            email: firebaseUser.email,
+            companyName: firebaseUser.displayName || "Empresa",
+            photoURL: firebaseUser.photoURL
+          };
+          
+          // Definir usuário imediatamente para melhorar UX
           setUser(userData);
           
-          // Atualizar informações na API para manter compatibilidade com backend existente
-          await apiRequest('POST', '/api/auth/firebase-sync', { 
-            uid: userData.uid,
-            email: userData.email,
-            companyName: userData.companyName
-          });
+          // Tentar sincronizar com backend em background (sem bloquear a interface)
+          setTimeout(() => {
+            // Não precisa ser await porque estamos em um setTimeout
+            apiRequest('POST', '/api/auth/firebase-sync', { 
+              uid: userData.uid,
+              email: userData.email,
+              companyName: userData.companyName
+            }).catch(syncError => {
+              console.warn("Background sync error:", syncError);
+              // Não mostrar erro ao usuário, pois isso acontece em background
+            });
+          }, 1000);
         } else {
           // Usuário não autenticado
           setUser(null);
         }
       } catch (error) {
         console.error("Auth state change error:", error);
+        // Não impedir a navegação em caso de erro
       } finally {
         setLoading(false);
       }
@@ -162,22 +180,58 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setLoading(true);
     try {
       const result = await signInWithPopup(auth, googleProvider);
+      const firebaseUser = result.user;
       
-      // Verificar se é o primeiro login
-      const userDocRef = doc(db, "users", result.user.uid);
-      const userDoc = await getDoc(userDocRef);
+      // Construir modelo de usuário com base nos dados do Firebase Auth
+      const userData: User = {
+        uid: firebaseUser.uid,
+        email: firebaseUser.email,
+        companyName: firebaseUser.displayName || "Empresa",
+        photoURL: firebaseUser.photoURL
+      };
       
-      if (!userDoc.exists()) {
-        // Criar documento de usuário no Firestore para novos usuários
-        await setDoc(userDocRef, {
-          email: result.user.email,
-          companyName: result.user.displayName || "Empresa",
-          createdAt: new Date()
-        });
+      // Tentar obter ou criar documento no Firestore, mas não bloquear login se falhar
+      try {
+        // Verificar se é o primeiro login
+        const userDocRef = doc(db, "users", firebaseUser.uid);
+        const userDoc = await getDoc(userDocRef);
+        
+        if (!userDoc.exists()) {
+          // Tentar criar documento de usuário no Firestore para novos usuários
+          try {
+            await setDoc(userDocRef, {
+              email: firebaseUser.email,
+              companyName: firebaseUser.displayName || "Empresa",
+              createdAt: new Date()
+            });
+            console.log("Documento do usuário criado no Firestore para login com Google");
+          } catch (firestoreError) {
+            console.warn("Não foi possível criar documento no Firestore para Google login:", firestoreError);
+            // Continuar com o login mesmo sem documento no Firestore
+          }
+        } else {
+          // Usar dados do Firestore se disponíveis
+          const firestoreData = userDoc.data();
+          userData.companyName = firestoreData.companyName || userData.companyName;
+        }
+      } catch (firestoreError) {
+        console.warn("Erro ao acessar o Firestore durante login com Google:", firestoreError);
       }
       
-      const userData = await transformFirebaseUser(result.user);
+      // Sincronizar com o backend
+      try {
+        await apiRequest('POST', '/api/auth/firebase-sync', { 
+          uid: userData.uid,
+          email: userData.email,
+          companyName: userData.companyName
+        });
+      } catch (syncError) {
+        console.warn("Erro na sincronização com backend para login Google:", syncError);
+      }
       
+      setUser(userData);
+      
+      // Limpar e atualizar cache de consultas
       queryClient.invalidateQueries({ queryKey: ['/api/products'] });
       queryClient.invalidateQueries({ queryKey: ['/api/catalogs'] });
       
@@ -189,9 +243,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       navigate("/");
     } catch (error: any) {
       console.error("Google login error:", error);
+      
+      let errorMessage = "Falha ao efetuar login com Google";
+      if (error.code === 'auth/popup-closed-by-user') {
+        errorMessage = "Pop-up fechado antes de concluir o login";
+      } else if (error.code === 'auth/popup-blocked') {
+        errorMessage = "Pop-up bloqueado pelo navegador. Por favor, permita pop-ups para este site";
+      } else if (error.code === 'permission-denied') {
+        errorMessage = "Permissão negada. Por favor, entre em contato com o administrador.";
+      }
+      
       toast({
         title: "Erro no login com Google",
-        description: error.message || "Falha ao efetuar login com Google",
+        description: errorMessage,
         variant: "destructive",
       });
       throw error;
@@ -210,20 +274,39 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       const firebaseUser = userCredential.user;
       
-      // Criar documento de usuário no Firestore
-      const userDocRef = doc(db, "users", firebaseUser.uid);
-      await setDoc(userDocRef, {
-        email,
-        companyName,
-        createdAt: new Date()
-      });
-      
-      // Transformar para nosso modelo de usuário
+      // Construir modelo de usuário independente do Firestore
       const userData: User = {
         uid: firebaseUser.uid,
         email: firebaseUser.email,
         companyName
       };
+      
+      // Tentar criar documento no Firestore, mas não impedir login se falhar
+      try {
+        // Criar documento de usuário no Firestore
+        const userDocRef = doc(db, "users", firebaseUser.uid);
+        await setDoc(userDocRef, {
+          email,
+          companyName,
+          createdAt: new Date()
+        });
+        console.log("Documento do usuário criado no Firestore");
+      } catch (firestoreError) {
+        // Apenas log, não impede o fluxo de registro
+        console.warn("Não foi possível criar documento no Firestore:", firestoreError);
+        // Continuar com o registro mesmo sem documento no Firestore
+      }
+      
+      // Sincronizar com o backend através da API
+      try {
+        await apiRequest('POST', '/api/auth/firebase-sync', { 
+          uid: userData.uid,
+          email: userData.email,
+          companyName: userData.companyName
+        });
+      } catch (syncError) {
+        console.warn("Erro na sincronização com backend:", syncError);
+      }
       
       setUser(userData);
       
@@ -243,6 +326,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         errorMessage = "Email inválido";
       } else if (error.code === 'auth/weak-password') {
         errorMessage = "Senha muito fraca";
+      } else if (error.code === 'permission-denied') {
+        errorMessage = "Permissão negada. Por favor, entre em contato com o administrador.";
       }
       
       toast({
