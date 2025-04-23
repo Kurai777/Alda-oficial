@@ -41,14 +41,20 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
 
   // Buscar produtos do catálogo
   const { data: products = [], isLoading, refetch, isError } = useQuery({
-    queryKey: ["/api/products", { catalogId }],
+    queryKey: ["/api/products", { catalogId, userId: user?.uid }],
     queryFn: async () => {
-      const userId = user?.id || 1;
+      const userId = user?.uid;
       console.log(`Fetching products for userId=${userId} and catalogId=${catalogId}`);
-      const response = await apiRequest("GET", `/api/products?userId=${userId}&catalogId=${catalogId}`);
-      console.log("API response:", response);
-      return response || [];
-    }
+      try {
+        const response = await apiRequest("GET", `/api/products?catalogId=${catalogId}`);
+        console.log("API response:", response);
+        return response || [];
+      } catch (error) {
+        console.error("Error fetching products:", error);
+        return [];
+      }
+    },
+    enabled: !!catalogId && !!user
   });
 
   // Garantir que products é sempre um array antes de filtrar

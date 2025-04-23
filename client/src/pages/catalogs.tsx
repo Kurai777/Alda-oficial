@@ -62,9 +62,9 @@ export default function Catalogs() {
   const [selectedCatalog, setSelectedCatalog] = useState<Catalog | null>(null);
 
   // Fetch catalogs
-  const { data: catalogs, isLoading } = useQuery({
-    queryKey: ["/api/catalogs", { userId: user?.id }],
-    enabled: !!user?.id,
+  const { data: catalogs = [], isLoading } = useQuery({
+    queryKey: ["/api/catalogs"],
+    enabled: !!user?.uid,
   });
 
   // Mutation to process catalog
@@ -101,7 +101,7 @@ export default function Catalogs() {
     },
     onSuccess: (catalogId) => {
       queryClient.setQueryData(
-        ["/api/catalogs", { userId: user?.id }],
+        ["/api/catalogs"],
         (oldData: Catalog[] | undefined) => {
           if (!oldData) return [];
           return oldData.filter((catalog) => catalog.id !== catalogId);
@@ -251,10 +251,10 @@ export default function Catalogs() {
                         <Button 
                           variant="outline" 
                           size="sm"
-                          onClick={() => navigate(`/catalog/${catalog.id}`)}
+                          onClick={() => setSelectedCatalog(catalog)}
                         >
-                          <EyeIcon className="h-4 w-4 mr-1" />
-                          Ver Detalhes
+                          <ListIcon className="h-4 w-4 mr-1" />
+                          Ver Produtos
                         </Button>
                         
                         {catalog.processedStatus === "pending" && (
