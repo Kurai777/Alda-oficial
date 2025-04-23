@@ -44,7 +44,7 @@ export async function processFileWithAdvancedAI(filePath: string, fileName: stri
         // Primeiro tentar o método wrapper, se falhar, usar o método alternativo
         let pdfImages: Buffer[];
         try {
-          pdfImages = await convertPdfToImages(filePath, {
+          pdfImages = await pdfConverterWrapper.convert(filePath, {
             format: 'jpeg',
             quality: 95
           });
