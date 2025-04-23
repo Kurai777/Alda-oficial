@@ -661,180 +661,213 @@ export async function registerRoutes(app: Express): Promise<Server> {
           extractionInfo = `Extraídos ${productsData.length} produtos do arquivo Excel.`;
         } else if (fileType === 'pdf') {
           try {
-            // Tentar primeiro o método PaddleOCR para melhor precisão e extração de imagens
-            console.log(`Iniciando processamento OCR avançado do PDF: ${filePath}`);
+            // Usar o processador avançado com IA multimodal (GPT-4o)
+            console.log(`Iniciando processamento avançado com IA multimodal: ${filePath}`);
             
-            // Importar o módulo de processamento OCR
-            const { processPdfWithOcr, convertOcrProductsToAppFormat } = await import('./ocr-pdf-processor');
+            // Importar o módulo de processamento avançado
+            const { processFileWithAdvancedAI } = await import('./advanced-ai-extractor');
             
-            // Processar o PDF com OCR
-            const ocrProducts = await processPdfWithOcr(filePath);
+            // Processar o PDF diretamente com IA multimodal
+            productsData = await processFileWithAdvancedAI(filePath, fileName, userId, catalog.id);
             
-            // Converter para o formato da aplicação
-            productsData = convertOcrProductsToAppFormat(ocrProducts, userId, catalog.id);
+            console.log(`IA multimodal extraiu ${productsData.length} produtos do PDF`);
+            extractionInfo = `PDF processado com IA multimodal GPT-4o. Extraídos ${productsData.length} produtos com suas imagens reais.`;
             
-            console.log(`OCR extraiu ${productsData.length} produtos com imagens do PDF`);
-            extractionInfo = `PDF processado com OCR. Extraídos ${productsData.length} produtos com suas imagens reais.`;
+          } catch (aiError) {
+            console.error("Erro ao processar PDF com IA multimodal:", aiError);
+            console.log("Tentando métodos alternativos...");
             
-          } catch (ocrError) {
-            console.error("Erro ao processar PDF com OCR:", ocrError);
-            console.log("Tentando método alternativo com IA...");
-            
-            // Método alternativo se o OCR falhar
-            // Extrair texto e imagens do PDF
-            console.log(`Iniciando extração de texto e imagens do PDF: ${filePath}`);
-            const { text: extractedText, images: extractedImages } = await extractTextFromPDF(filePath);
-            console.log(`Texto extraído com sucesso. Tamanho: ${extractedText.length} caracteres`);
-            console.log(`Imagens extraídas com sucesso. Total: ${extractedImages.length} imagens`);
-            
-            // Usar IA para extrair produtos do texto
-            console.log("Iniciando análise de produtos com IA...");
-            const extractedProducts = await extractProductsWithAI(extractedText, fileName);
-            
-            // Mapa para rastrear as imagens por número de página
-            const imagesByPage: { [key: number]: any[] } = {};
-            
-            // Organizar imagens por página
-            extractedImages.forEach(img => {
-              if (!imagesByPage[img.page]) {
-                imagesByPage[img.page] = [];
-              }
-              imagesByPage[img.page].push(img);
-            });
-            
-            // Associar imagens aos produtos com base no número da página ou índice
-            productsData = extractedProducts.map((product: any, index: number) => {
-              // Verificar se o produto tem um número de página identificado
-              const productPage = product.pageNumber || Math.floor(index / 2) + 1; // Estimativa baseada no índice
+            try {
+              // Tentar o método OCR tradicional (PaddleOCR)
+              console.log(`Tentando processamento OCR do PDF: ${filePath}`);
               
-              // Encontrar imagens para essa página
-              const pageImages = imagesByPage[productPage] || [];
+              // Importar o módulo de processamento OCR
+              const { processPdfWithOcr, convertOcrProductsToAppFormat } = await import('./ocr-pdf-processor');
               
-              // Se temos imagens para essa página, adicionar a primeira à URL do produto
-              if (pageImages.length > 0) {
-                product.imageUrl = pageImages[0].processedPath;
-                console.log(`Associada imagem da página ${productPage} ao produto "${product.name}"`);
-              }
+              // Processar o PDF com OCR
+              const ocrProducts = await processPdfWithOcr(filePath);
               
-              return product;
-            });
-            
-            extractionInfo = `PDF processado com método alternativo. Identificados ${productsData.length} produtos e extraídas ${extractedImages.length} imagens.`;
-          }
-        } else if (['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(fileType)) {
-          // Processar imagem diretamente com OCR
-          console.log(`Processando imagem com OCR: ${filePath}`);
-          
-          try {
-            // Importar o módulo de processamento de imagens
-            const { processImageWithOcr, convertOcrProductsToAppFormat } = await import('./image-ocr-processor');
-            
-            // Processar a imagem com OCR
-            const ocrProducts = await processImageWithOcr(filePath);
-            
-            if (ocrProducts && ocrProducts.length > 0) {
               // Converter para o formato da aplicação
               productsData = convertOcrProductsToAppFormat(ocrProducts, userId, catalog.id);
               
-              console.log(`OCR extraiu ${productsData.length} produtos da imagem`);
-              extractionInfo = `Imagem processada com OCR. Extraídos ${productsData.length} produtos.`;
-            } else {
-              // Se não encontrou produtos, usar IA para analisar a imagem
-              console.log("OCR não encontrou produtos, usando IA para análise visual...");
+              console.log(`OCR extraiu ${productsData.length} produtos do PDF`);
+              extractionInfo = `PDF processado com OCR. Extraídos ${productsData.length} produtos.`;
               
-              // Converter a imagem para base64
+            } catch (ocrError) {
+              console.error("Erro ao processar PDF com OCR:", ocrError);
+              console.log("Tentando método alternativo final...");
+              
+              // Método alternativo final se os anteriores falharem
+              // Extrair texto e imagens do PDF
+              console.log(`Iniciando extração de texto e imagens do PDF: ${filePath}`);
+              const { text: extractedText, images: extractedImages } = await extractTextFromPDF(filePath);
+              console.log(`Texto extraído com sucesso. Tamanho: ${extractedText.length} caracteres`);
+              console.log(`Imagens extraídas com sucesso. Total: ${extractedImages.length} imagens`);
+              
+              // Usar IA para extrair produtos do texto
+              console.log("Iniciando análise de produtos com IA...");
+              const extractedProducts = await extractProductsWithAI(extractedText, fileName);
+              
+              // Mapa para rastrear as imagens por número de página
+              const imagesByPage: { [key: number]: any[] } = {};
+              
+              // Organizar imagens por página
+              extractedImages.forEach(img => {
+                if (!imagesByPage[img.page]) {
+                  imagesByPage[img.page] = [];
+                }
+                imagesByPage[img.page].push(img);
+              });
+              
+              // Associar imagens aos produtos com base no número da página ou índice
+              productsData = extractedProducts.map((product: any, index: number) => {
+                // Verificar se o produto tem um número de página identificado
+                const productPage = product.pageNumber || Math.floor(index / 2) + 1; // Estimativa baseada no índice
+                
+                // Encontrar imagens para essa página
+                const pageImages = imagesByPage[productPage] || [];
+                
+                // Se temos imagens para essa página, adicionar a primeira à URL do produto
+                if (pageImages.length > 0) {
+                  product.imageUrl = pageImages[0].processedPath;
+                  console.log(`Associada imagem da página ${productPage} ao produto "${product.name}"`);
+                }
+                
+                return product;
+              });
+              
+              extractionInfo = `PDF processado com método alternativo final. Identificados ${productsData.length} produtos e extraídas ${extractedImages.length} imagens.`;
+            }
+          }
+        } else if (['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(fileType)) {
+          // Processar imagem diretamente com IA multimodal
+          console.log(`Processando imagem com IA multimodal GPT-4o: ${filePath}`);
+          
+          try {
+            // Importar o módulo de processamento avançado
+            const { processFileWithAdvancedAI } = await import('./advanced-ai-extractor');
+            
+            // Processar a imagem diretamente com IA multimodal
+            productsData = await processFileWithAdvancedAI(filePath, fileName, userId, catalog.id);
+            
+            console.log(`IA multimodal extraiu ${productsData.length} produtos da imagem`);
+            extractionInfo = `Imagem processada com IA multimodal GPT-4o. Extraídos ${productsData.length} produtos.`;
+            
+          } catch (aiError) {
+            console.error("Erro ao processar imagem com IA multimodal:", aiError);
+            console.log("Tentando método alternativo com OCR...");
+            
+            try {
+              // Importar o módulo de processamento de imagens
+              const { processImageWithOcr, convertOcrProductsToAppFormat } = await import('./image-ocr-processor');
+              
+              // Processar a imagem com OCR
+              const ocrProducts = await processImageWithOcr(filePath);
+              
+              if (ocrProducts && ocrProducts.length > 0) {
+                // Converter para o formato da aplicação
+                productsData = convertOcrProductsToAppFormat(ocrProducts, userId, catalog.id);
+                
+                console.log(`OCR extraiu ${productsData.length} produtos da imagem`);
+                extractionInfo = `Imagem processada com OCR. Extraídos ${productsData.length} produtos.`;
+              } else {
+                // Se não encontrou produtos, usar IA para análise visual simplificada
+                console.log("OCR não encontrou produtos, usando IA para análise visual simples...");
+                
+                // Converter a imagem para base64
+                const imageBuffer = await readFile(filePath);
+                const base64Image = `data:image/${fileType};base64,${imageBuffer.toString('base64')}`;
+                
+                // Chamar a API da OpenAI para análise visual
+                const response = await openai.chat.completions.create({
+                  model: "gpt-4o",
+                  messages: [
+                    {
+                      role: "user",
+                      content: [
+                        {
+                          type: "text",
+                          text: "Descreva este móvel em detalhes, incluindo nome, categoria, preço (se visível), cores, materiais. Formate como JSON com campos: nome, categoria, descricao, preco, cores, materiais."
+                        },
+                        {
+                          type: "image_url",
+                          image_url: {
+                            url: base64Image
+                          }
+                        }
+                      ],
+                    },
+                  ],
+                  response_format: { type: "json_object" }
+                });
+                
+                const aiDescription = response.choices[0].message.content || '{}';
+                
+                try {
+                  const productInfo = JSON.parse(aiDescription);
+                  
+                  // Criar um produto a partir da descrição da IA
+                  productsData = [{
+                    userId,
+                    catalogId: catalog.id,
+                    name: productInfo.nome || "Produto em Imagem",
+                    description: productInfo.descricao || "",
+                    code: `IMG-${Math.floor(Math.random() * 10000)}`,
+                    price: productInfo.preco || 0,
+                    category: productInfo.categoria || determineProductCategory(productInfo.nome || ""),
+                    colors: Array.isArray(productInfo.cores) ? productInfo.cores : 
+                            typeof productInfo.cores === 'string' ? [productInfo.cores] : [],
+                    materials: Array.isArray(productInfo.materiais) ? productInfo.materiais :
+                               typeof productInfo.materiais === 'string' ? [productInfo.materiais] : [],
+                    sizes: [],
+                    imageUrl: base64Image
+                  }];
+                  
+                  extractionInfo = "Imagem processada com análise visual de IA.";
+                } catch (jsonError) {
+                  console.error("Erro ao processar a resposta da IA:", jsonError);
+                  
+                  // Criar um produto simples com a imagem
+                  productsData = [{
+                    userId,
+                    catalogId: catalog.id,
+                    name: "Produto em Imagem",
+                    description: "",
+                    code: `IMG-${Math.floor(Math.random() * 10000)}`,
+                    price: 0,
+                    category: "Outros",
+                    colors: [],
+                    materials: [],
+                    sizes: [],
+                    imageUrl: base64Image
+                  }];
+                  
+                  extractionInfo = "Imagem processada como produto único.";
+                }
+              }
+            } catch (imageError) {
+              console.error("Erro ao processar imagem:", imageError);
+              
+              // Criar um produto simples com a imagem original
               const imageBuffer = await readFile(filePath);
               const base64Image = `data:image/${fileType};base64,${imageBuffer.toString('base64')}`;
               
-              // Chamar a API da OpenAI para análise visual
-              const response = await openai.chat.completions.create({
-                model: "gpt-4o",
-                messages: [
-                  {
-                    role: "user",
-                    content: [
-                      {
-                        type: "text",
-                        text: "Descreva este móvel em detalhes, incluindo nome, categoria, preço (se visível), cores, materiais. Formate como JSON com campos: nome, categoria, descricao, preco, cores, materiais."
-                      },
-                      {
-                        type: "image_url",
-                        image_url: {
-                          url: base64Image
-                        }
-                      }
-                    ],
-                  },
-                ],
-                response_format: { type: "json_object" }
-              });
+              productsData = [{
+                userId,
+                catalogId: catalog.id,
+                name: path.basename(filePath, path.extname(filePath)),
+                description: "",
+                code: `IMG-${Math.floor(Math.random() * 10000)}`,
+                price: 0,
+                category: "Outros",
+                colors: [],
+                materials: [],
+                sizes: [],
+                imageUrl: base64Image
+              }];
               
-              const aiDescription = response.choices[0].message.content || '{}';
-              
-              try {
-                const productInfo = JSON.parse(aiDescription);
-                
-                // Criar um produto a partir da descrição da IA
-                productsData = [{
-                  userId,
-                  catalogId: catalog.id,
-                  name: productInfo.nome || "Produto em Imagem",
-                  description: productInfo.descricao || "",
-                  code: `IMG-${Math.floor(Math.random() * 10000)}`,
-                  price: 0, // Preço padrão
-                  category: productInfo.categoria || determineProductCategory(productInfo.nome || ""),
-                  colors: Array.isArray(productInfo.cores) ? productInfo.cores : 
-                          typeof productInfo.cores === 'string' ? [productInfo.cores] : [],
-                  materials: Array.isArray(productInfo.materiais) ? productInfo.materiais :
-                             typeof productInfo.materiais === 'string' ? [productInfo.materiais] : [],
-                  sizes: [],
-                  imageUrl: base64Image
-                }];
-                
-                extractionInfo = "Imagem processada com análise visual de IA.";
-              } catch (jsonError) {
-                console.error("Erro ao processar a resposta da IA:", jsonError);
-                
-                // Criar um produto simples com a imagem
-                productsData = [{
-                  userId,
-                  catalogId: catalog.id,
-                  name: "Produto em Imagem",
-                  description: "",
-                  code: `IMG-${Math.floor(Math.random() * 10000)}`,
-                  price: 0,
-                  category: "Outros",
-                  colors: [],
-                  materials: [],
-                  sizes: [],
-                  imageUrl: base64Image
-                }];
-                
-                extractionInfo = "Imagem processada como produto único.";
-              }
+              extractionInfo = "Imagem processada como produto único (fallback).";
             }
-          } catch (imageError) {
-            console.error("Erro ao processar imagem:", imageError);
-            
-            // Criar um produto simples com a imagem original
-            const imageBuffer = await readFile(filePath);
-            const base64Image = `data:image/${fileType};base64,${imageBuffer.toString('base64')}`;
-            
-            productsData = [{
-              userId,
-              catalogId: catalog.id,
-              name: path.basename(filePath, path.extname(filePath)),
-              description: "",
-              code: `IMG-${Math.floor(Math.random() * 10000)}`,
-              price: 0,
-              category: "Outros",
-              colors: [],
-              materials: [],
-              sizes: [],
-              imageUrl: base64Image
-            }];
-            
-            extractionInfo = "Imagem processada como produto único (fallback).";
           }
         } else {
           throw new Error("Formato de arquivo não suportado. Use Excel, PDF ou imagens (JPG, PNG, etc)");
