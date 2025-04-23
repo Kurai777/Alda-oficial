@@ -10,6 +10,7 @@ import Catalogs from "@/pages/catalogs";
 import CatalogDetails from "@/pages/catalog-details";
 import Quotes from "@/pages/quotes";
 import Moodboards from "@/pages/moodboards";
+import Profile from "@/pages/profile";
 import Layout from "@/components/layout/layout";
 import { AuthProvider } from "@/lib/auth";
 
@@ -47,6 +48,12 @@ function Router() {
       <ProtectedRoute path="/moodboards">
         <Layout>
           <Moodboards />
+        </Layout>
+      </ProtectedRoute>
+      
+      <ProtectedRoute path="/profile">
+        <Layout>
+          <Profile />
         </Layout>
       </ProtectedRoute>
       
