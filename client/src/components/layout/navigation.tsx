@@ -61,9 +61,17 @@ export default function Navigation() {
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" className="flex items-center gap-2">
-                  <div className="h-8 w-8 rounded-full bg-primary-100 flex items-center justify-center text-primary-600">
-                    <User className="h-4 w-4" />
-                  </div>
+                  {user?.photoURL ? (
+                    <img 
+                      src={user.photoURL} 
+                      alt={user.companyName || 'Usuário'} 
+                      className="h-8 w-8 rounded-full object-cover"
+                    />
+                  ) : (
+                    <div className="h-8 w-8 rounded-full bg-primary-100 flex items-center justify-center text-primary-600">
+                      <User className="h-4 w-4" />
+                    </div>
+                  )}
                   <span className="text-sm font-medium text-gray-700 max-w-[150px] truncate">
                     {user?.companyName}
                   </span>

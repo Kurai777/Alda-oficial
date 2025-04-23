@@ -15,9 +15,11 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardFooter } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Lock } from "lucide-react";
+import { Separator } from "@/components/ui/separator";
+import { Lock, Mail } from "lucide-react";
+import { FcGoogle } from "react-icons/fc";
 
 const loginSchema = z.object({
   email: z.string().email({ message: "Email inválido" }),
@@ -35,9 +37,10 @@ type LoginFormValues = z.infer<typeof loginSchema>;
 type RegisterFormValues = z.infer<typeof registerSchema>;
 
 export default function Login() {
-  const { user, login, register, loading } = useAuth();
+  const { user, login, loginWithGoogle, register, loading } = useAuth();
   const [, navigate] = useLocation();
   const [activeTab, setActiveTab] = useState<string>("login");
+  const [isGoogleLoading, setIsGoogleLoading] = useState(false);
 
   // Redirect if already logged in
   useEffect(() => {
@@ -74,6 +77,22 @@ export default function Login() {
       // O redirecionamento é feito dentro da função login
     } catch (error) {
       console.error("Login failed:", error);
+      // Erros são tratados dentro da função login
+    }
+  };
+
+  const onGoogleLogin = async () => {
+    if (isGoogleLoading) return;
+    
+    setIsGoogleLoading(true);
+    try {
+      await loginWithGoogle();
+      // O redirecionamento é feito dentro da função loginWithGoogle
+    } catch (error) {
+      console.error("Google login failed:", error);
+      // Erros são tratados dentro da função loginWithGoogle
+    } finally {
+      setIsGoogleLoading(false);
     }
   };
 
@@ -87,13 +106,14 @@ export default function Login() {
       // O redirecionamento é feito dentro da função register
     } catch (error) {
       console.error("Registration failed:", error);
+      // Erros são tratados dentro da função register
     }
   };
 
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary-500"></div>
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary"></div>
       </div>
     );
   }
@@ -170,18 +190,46 @@ export default function Login() {
                     />
 
                     <div className="text-sm">
-                      <a href="#" className="font-medium text-primary-600 hover:text-primary-500">
+                      <a href="#" className="font-medium text-primary hover:text-primary/80">
                         Esqueceu sua senha?
                       </a>
                     </div>
                   </div>
 
                   <Button type="submit" className="w-full" disabled={loginForm.formState.isSubmitting}>
-                    <Lock className="mr-2 h-4 w-4" />
-                    Entrar
+                    <Mail className="mr-2 h-4 w-4" />
+                    Entrar com Email
                   </Button>
                 </form>
               </Form>
+              
+              <div className="mt-6">
+                <div className="relative">
+                  <div className="absolute inset-0 flex items-center">
+                    <Separator className="w-full" />
+                  </div>
+                  <div className="relative flex justify-center text-xs">
+                    <span className="bg-card px-2 text-muted-foreground">Ou continue com</span>
+                  </div>
+                </div>
+                
+                <div className="mt-6">
+                  <Button 
+                    variant="outline" 
+                    type="button" 
+                    className="w-full" 
+                    onClick={onGoogleLogin}
+                    disabled={isGoogleLoading}
+                  >
+                    {isGoogleLoading ? (
+                      <div className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <FcGoogle className="mr-2 h-5 w-5" />
+                    )}
+                    Google
+                  </Button>
+                </div>
+              </div>
             </TabsContent>
             
             <TabsContent value="register" className="mt-4">
@@ -230,13 +278,48 @@ export default function Login() {
                   />
 
                   <Button type="submit" className="w-full" disabled={registerForm.formState.isSubmitting}>
+                    <Lock className="mr-2 h-4 w-4" />
                     Criar Conta
                   </Button>
                 </form>
               </Form>
+              
+              <div className="mt-6">
+                <div className="relative">
+                  <div className="absolute inset-0 flex items-center">
+                    <Separator className="w-full" />
+                  </div>
+                  <div className="relative flex justify-center text-xs">
+                    <span className="bg-card px-2 text-muted-foreground">Ou registre-se com</span>
+                  </div>
+                </div>
+                
+                <div className="mt-6">
+                  <Button 
+                    variant="outline" 
+                    type="button" 
+                    className="w-full" 
+                    onClick={onGoogleLogin}
+                    disabled={isGoogleLoading}
+                  >
+                    {isGoogleLoading ? (
+                      <div className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <FcGoogle className="mr-2 h-5 w-5" />
+                    )}
+                    Google
+                  </Button>
+                </div>
+              </div>
             </TabsContent>
           </Tabs>
         </CardContent>
+        
+        <CardFooter className="flex justify-center pb-6 pt-0">
+          <p className="mt-2 text-xs text-gray-500">
+            Ao continuar, você concorda com os Termos de Serviço e Política de Privacidade.
+          </p>
+        </CardFooter>
       </Card>
     </div>
   );

@@ -7,6 +7,8 @@ import path from "path";
 import { existsSync } from "fs";
 import { mkdir, readFile } from "fs/promises";
 import OpenAI from "openai";
+import { DecodedIdToken } from "firebase-admin/auth";
+import { auth as firebaseAuth, adminDb } from './firebase-admin';
 import { 
   insertUserSchema, 
   insertProductSchema, 
@@ -21,6 +23,15 @@ import "express-session";
 declare module "express-session" {
   interface SessionData {
     userId?: number;
+  }
+}
+
+// Estender a interface Request do Express para incluir o usuário do Firebase
+declare global {
+  namespace Express {
+    interface Request {
+      firebaseUser?: DecodedIdToken;
+    }
   }
 }
 
@@ -77,6 +88,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Auth endpoints
+  const extractFirebaseUser = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const authHeader = req.headers.authorization;
+      
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        const idToken = authHeader.split('Bearer ')[1];
+        const decodedToken = await firebaseAuth.verifyIdToken(idToken);
+        
+        if (decodedToken) {
+          req.firebaseUser = decodedToken;
+          
+          // Verificar se o usuário existe no banco local
+          const localUser = await storage.getUserByEmail(decodedToken.email || '');
+          if (localUser) {
+            req.session.userId = localUser.id;
+          }
+        }
+      }
+      
+      next();
+    } catch (error) {
+      // Ignorar erros e continuar (usuário não autenticado)
+      next();
+    }
+  };
+  
+  // Aplicar o middleware onde for necessário
+  app.use(['/api/auth/me', '/api/products', '/api/catalogs'], extractFirebaseUser);
+
+  // Rota para registrar um usuário (mantida para compatibilidade)
   app.post("/api/auth/register", async (req: Request, res: Response) => {
     try {
       const data = insertUserSchema.parse(req.body);
@@ -89,6 +130,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       const user = await storage.createUser(data);
+      
+      // Definir o userId na sessão
+      req.session.userId = user.id;
+      
       return res.status(201).json(user);
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -98,6 +143,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Rota para autenticação tradicional (mantida para compatibilidade)
   app.post("/api/auth/login", async (req: Request, res: Response) => {
     try {
       const { email, password } = req.body;
@@ -125,33 +171,80 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
   
-  // Rota para verificar se o usuário está autenticado
-  app.get("/api/auth/me", async (req: Request, res: Response) => {
+  // Nova rota para sincronização de usuários do Firebase com o sistema local
+  app.post("/api/auth/firebase-sync", async (req: Request, res: Response) => {
     try {
-      // Verificar se existe uma sessão (userId)
-      const userId = req.session?.userId;
+      const { uid, email, companyName } = req.body;
       
-      if (!userId) {
-        return res.status(401).json({ message: "Not authenticated" });
+      if (!uid || !email) {
+        return res.status(400).json({ message: "UID and email are required" });
       }
       
-      const user = await storage.getUser(userId);
+      // Verificar se o usuário já existe
+      let user = await storage.getUserByEmail(email);
       
       if (!user) {
-        return res.status(401).json({ message: "User not found" });
+        // Criar um novo usuário se não existir
+        user = await storage.createUser({
+          email,
+          companyName: companyName || 'Empresa',
+          password: `firebase-${uid}`, // Senha não será usada, mas é necessária para o schema
+        });
+        
+        console.log(`Criado novo usuário para conta Firebase: ${email}`);
       }
+      
+      // Definir o userId na sessão
+      req.session.userId = user.id;
       
       return res.status(200).json({ 
         id: user.id,
-        companyName: user.companyName || 'Empresa',
+        companyName: user.companyName,
         email: user.email
       });
     } catch (error) {
+      console.error("Firebase sync error:", error);
+      return res.status(500).json({ message: "Failed to sync Firebase user" });
+    }
+  });
+  
+  // Rota para verificar se o usuário está autenticado
+  app.get("/api/auth/me", async (req: Request, res: Response) => {
+    try {
+      // Verificar se existe uma sessão ou usuário do Firebase
+      const userId = req.session?.userId;
+      
+      if (!userId && !req.firebaseUser) {
+        return res.status(401).json({ message: "Not authenticated" });
+      }
+      
+      if (userId) {
+        const user = await storage.getUser(userId);
+        
+        if (!user) {
+          return res.status(401).json({ message: "User not found" });
+        }
+        
+        return res.status(200).json({ 
+          id: user.id,
+          companyName: user.companyName || 'Empresa',
+          email: user.email
+        });
+      } else if (req.firebaseUser) {
+        // Se temos usuário Firebase mas não encontramos no banco local
+        return res.status(200).json({ 
+          id: req.firebaseUser.uid,
+          companyName: req.firebaseUser.name || 'Empresa',
+          email: req.firebaseUser.email
+        });
+      }
+    } catch (error) {
+      console.error("Auth me error:", error);
       return res.status(500).json({ message: "Failed to get user" });
     }
   });
   
-  // Rota para logout
+  // Rota para logout (mantida para compatibilidade)
   app.post("/api/auth/logout", (req: Request, res: Response) => {
     try {
       // Limpar a sessão
