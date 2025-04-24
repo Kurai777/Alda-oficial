@@ -734,11 +734,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.log(`Processando arquivo: ${fileName}, tipo: ${fileType}, para usuário: ${userId}, caminho: ${filePath}`);
       
       // Criar o catálogo com status "processando" no banco local
+      let firestoreCatalogId = ""; // Será populado logo abaixo
+      
       const catalog = await storage.createCatalog({
         userId,
         fileName,
         fileUrl: filePath,
-        processedStatus: "processing"
+        processedStatus: "processing",
+        firestoreCatalogId
       });
       
       console.log(`Catálogo criado com ID: ${catalog.id}, status: ${catalog.processedStatus}`);
@@ -756,10 +759,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       };
       
       // Salvar catálogo no Firestore e obter o ID
-      let firestoreCatalogId: string;
       try {
         firestoreCatalogId = await saveCatalogToFirestore(firebaseCatalog, userId);
         console.log(`Catálogo salvo no Firestore com ID: ${firestoreCatalogId}`);
+        
+        // Atualizar o catálogo local com o ID do Firestore
+        await storage.updateCatalogStatus(catalog.id, "processing", firestoreCatalogId);
+        console.log(`Catálogo local atualizado com o ID do Firestore: ${firestoreCatalogId}`);
       } catch (firebaseError) {
         console.error("Erro ao salvar catálogo no Firestore:", firebaseError);
         // Continuar mesmo se não conseguir salvar no Firestore

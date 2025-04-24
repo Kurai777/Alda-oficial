@@ -52,6 +52,7 @@ export const catalogs = pgTable("catalogs", {
   fileName: text("file_name").notNull(),
   fileUrl: text("file_url").notNull(),
   processedStatus: text("processed_status").default("pending"),
+  firestoreCatalogId: text("firestore_catalog_id"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -60,6 +61,7 @@ export const insertCatalogSchema = createInsertSchema(catalogs).pick({
   fileName: true,
   fileUrl: true,
   processedStatus: true,
+  firestoreCatalogId: true,
 });
 
 export const quotes = pgTable("quotes", {

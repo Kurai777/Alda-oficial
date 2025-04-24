@@ -29,7 +29,7 @@ export interface IStorage {
   getCatalog(id: number): Promise<Catalog | undefined>;
   getCatalogsByUserId(userId: number | string): Promise<Catalog[]>;
   createCatalog(catalog: InsertCatalog): Promise<Catalog>;
-  updateCatalogStatus(id: number, status: string): Promise<Catalog | undefined>;
+  updateCatalogStatus(id: number, status: string, firestoreCatalogId?: string): Promise<Catalog | undefined>;
 
   // Quote methods
   getQuote(id: number): Promise<Quote | undefined>;
@@ -407,11 +407,17 @@ export class MemStorage implements IStorage {
     return catalog;
   }
 
-  async updateCatalogStatus(id: number, status: string): Promise<Catalog | undefined> {
+  async updateCatalogStatus(id: number, status: string, firestoreCatalogId?: string): Promise<Catalog | undefined> {
     const existingCatalog = this.catalogs.get(id);
     if (!existingCatalog) return undefined;
 
-    const updatedCatalog = { ...existingCatalog, processedStatus: status };
+    const updatedCatalog = { 
+      ...existingCatalog, 
+      processedStatus: status,
+      // Atualizar firestoreCatalogId se fornecido
+      ...(firestoreCatalogId ? { firestoreCatalogId } : {})
+    };
+    
     this.catalogs.set(id, updatedCatalog);
     return updatedCatalog;
   }
