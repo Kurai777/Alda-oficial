@@ -19,7 +19,10 @@ import {
   SearchIcon,
   FileTextIcon,
   PlusIcon,
-  ImageIcon
+  ImageIcon,
+  FilterIcon,
+  XIcon,
+  EuroIcon
 } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
@@ -106,19 +109,46 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
   // Garantir que products é sempre um array antes de filtrar
   const productsArray = Array.isArray(products) ? products : [];
   
-  // Filtrar produtos por termo de busca
+  // Filtrar produtos por termo de busca e filtros
   const filteredProducts = productsArray.filter((product: Product) => {
-    if (!searchTerm) return true;
+    // Filtro por texto de busca
+    if (searchTerm) {
+      const searchLower = searchTerm.toLowerCase();
+      const matchesSearch = (
+        product.name?.toLowerCase().includes(searchLower) ||
+        product.code?.toLowerCase().includes(searchLower) ||
+        product.category?.toLowerCase().includes(searchLower) ||
+        String(product.price).includes(searchTerm) ||
+        product.description?.toLowerCase().includes(searchLower) ||
+        (Array.isArray(product.materials) && product.materials?.some(m => m?.toLowerCase().includes(searchLower)))
+      );
+      
+      if (!matchesSearch) return false;
+    }
     
-    const searchLower = searchTerm.toLowerCase();
-    return (
-      product.name?.toLowerCase().includes(searchLower) ||
-      product.code?.toLowerCase().includes(searchLower) ||
-      product.category?.toLowerCase().includes(searchLower) ||
-      String(product.price).includes(searchTerm) ||
-      product.description?.toLowerCase().includes(searchLower) ||
-      (Array.isArray(product.materials) && product.materials?.some(m => m?.toLowerCase().includes(searchLower)))
-    );
+    // Filtro por categoria (segmento)
+    if (filters.category && product.category !== filters.category) {
+      return false;
+    }
+    
+    // Filtro por fabricante
+    if (filters.manufacturer && product.manufacturer !== filters.manufacturer) {
+      return false;
+    }
+    
+    // Filtro por preço mínimo
+    if (filters.minPrice) {
+      const minPrice = parseInt(filters.minPrice) * 100; // Converter para centavos
+      if (product.price < minPrice) return false;
+    }
+    
+    // Filtro por preço máximo
+    if (filters.maxPrice) {
+      const maxPrice = parseInt(filters.maxPrice) * 100; // Converter para centavos
+      if (product.price > maxPrice) return false;
+    }
+    
+    return true;
   });
 
   // Produtos paginados
@@ -251,6 +281,39 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
             <PlusIcon className="h-4 w-4 mr-1" />
             Adicionar Produto
           </Button>
+          
+          <Button 
+            variant="outline"
+            onClick={() => setIsFilterDialogOpen(true)}
+            className={filters.category || filters.manufacturer || filters.minPrice || filters.maxPrice ? "mr-2 bg-primary/10" : "mr-2"}
+          >
+            <FilterIcon className="h-4 w-4 mr-1" />
+            Filtrar
+          </Button>
+          
+          {(filters.category || filters.manufacturer || filters.minPrice || filters.maxPrice) && (
+            <Button 
+              variant="ghost"
+              onClick={() => {
+                setFilters({
+                  category: "",
+                  manufacturer: "",
+                  minPrice: "",
+                  maxPrice: "",
+                });
+                toast({
+                  title: "Filtros limpos",
+                  description: "Todos os filtros foram removidos."
+                });
+              }}
+              className="mr-2"
+              size="sm"
+            >
+              <XIcon className="h-4 w-4 mr-1" />
+              Limpar Filtros
+            </Button>
+          )}
+          
           <div className="relative">
             <SearchIcon className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
             <Input
@@ -262,6 +325,75 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
           </div>
         </div>
       </div>
+
+      {/* Indicadores de filtros ativos */}
+      {(filters.category || filters.manufacturer || filters.minPrice || filters.maxPrice) && (
+        <div className="flex flex-wrap gap-2 mb-4">
+          <div className="text-sm text-muted-foreground mr-2 flex items-center">
+            Filtros ativos:
+          </div>
+          
+          {filters.category && (
+            <Badge variant="secondary" className="flex items-center gap-1">
+              <span>Segmento: {filters.category}</span>
+              <XIcon 
+                className="h-3 w-3 cursor-pointer" 
+                onClick={() => setFilters({...filters, category: ""})}
+              />
+            </Badge>
+          )}
+          
+          {filters.manufacturer && (
+            <Badge variant="secondary" className="flex items-center gap-1">
+              <span>Fabricante: {filters.manufacturer}</span>
+              <XIcon 
+                className="h-3 w-3 cursor-pointer" 
+                onClick={() => setFilters({...filters, manufacturer: ""})}
+              />
+            </Badge>
+          )}
+          
+          {filters.minPrice && (
+            <Badge variant="secondary" className="flex items-center gap-1">
+              <span>Preço mínimo: R$ {filters.minPrice}</span>
+              <XIcon 
+                className="h-3 w-3 cursor-pointer" 
+                onClick={() => setFilters({...filters, minPrice: ""})}
+              />
+            </Badge>
+          )}
+          
+          {filters.maxPrice && (
+            <Badge variant="secondary" className="flex items-center gap-1">
+              <span>Preço máximo: R$ {filters.maxPrice}</span>
+              <XIcon 
+                className="h-3 w-3 cursor-pointer" 
+                onClick={() => setFilters({...filters, maxPrice: ""})}
+              />
+            </Badge>
+          )}
+          
+          <Button 
+            variant="ghost" 
+            size="sm" 
+            className="h-6 px-2 text-xs"
+            onClick={() => {
+              setFilters({
+                category: "",
+                manufacturer: "",
+                minPrice: "",
+                maxPrice: "",
+              });
+              toast({
+                title: "Filtros limpos",
+                description: "Todos os filtros foram removidos."
+              });
+            }}
+          >
+            Limpar todos
+          </Button>
+        </div>
+      )}
 
       {isLoading ? (
         <div className="flex justify-center p-8">
@@ -422,6 +554,17 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
                   value={selectedProduct.category || ""}
                   onChange={(e) => setSelectedProduct({...selectedProduct, category: e.target.value})}
                   className="col-span-3"
+                  placeholder="Ex: Sofá, Poltrona, Mesa, etc."
+                />
+              </div>
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label htmlFor="manufacturer" className="text-right">Fabricante</Label>
+                <Input
+                  id="manufacturer"
+                  value={selectedProduct.manufacturer || ""}
+                  onChange={(e) => setSelectedProduct({...selectedProduct, manufacturer: e.target.value})}
+                  className="col-span-3"
+                  placeholder="Ex: Sierra, Estúdio Bola, etc."
                 />
               </div>
               <div className="grid grid-cols-4 items-center gap-4">
@@ -510,6 +653,77 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
         </Dialog>
       )}
       
+      {/* Dialog de filtro */}
+      <Dialog open={isFilterDialogOpen} onOpenChange={setIsFilterDialogOpen}>
+        <DialogContent className="sm:max-w-[500px]">
+          <DialogHeader>
+            <DialogTitle>Filtrar Produtos</DialogTitle>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="filter-category" className="text-right">Segmento</Label>
+              <Input
+                id="filter-category"
+                value={filters.category}
+                onChange={(e) => setFilters({...filters, category: e.target.value})}
+                className="col-span-3"
+                placeholder="Ex: Sofá, Poltrona, Mesa, etc."
+              />
+            </div>
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="filter-manufacturer" className="text-right">Fabricante</Label>
+              <Input
+                id="filter-manufacturer"
+                value={filters.manufacturer}
+                onChange={(e) => setFilters({...filters, manufacturer: e.target.value})}
+                className="col-span-3"
+                placeholder="Ex: Sierra, Estúdio Bola, etc."
+              />
+            </div>
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="filter-min-price" className="text-right">Preço Mínimo</Label>
+              <Input
+                id="filter-min-price"
+                type="number"
+                value={filters.minPrice}
+                onChange={(e) => setFilters({...filters, minPrice: e.target.value})}
+                className="col-span-3"
+                placeholder="Ex: 1000"
+              />
+            </div>
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="filter-max-price" className="text-right">Preço Máximo</Label>
+              <Input
+                id="filter-max-price"
+                type="number"
+                value={filters.maxPrice}
+                onChange={(e) => setFilters({...filters, maxPrice: e.target.value})}
+                className="col-span-3"
+                placeholder="Ex: 5000"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button 
+              variant="destructive" 
+              onClick={() => {
+                setFilters({
+                  category: "",
+                  manufacturer: "",
+                  minPrice: "",
+                  maxPrice: "",
+                });
+              }}
+            >
+              Limpar Filtros
+            </Button>
+            <Button onClick={() => setIsFilterDialogOpen(false)}>
+              Aplicar Filtros
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Dialog para adicionar produto */}
       <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
         <DialogContent className="sm:max-w-[500px]">
@@ -545,6 +759,16 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
                 onChange={(e) => setNewProduct({...newProduct, category: e.target.value})}
                 className="col-span-3"
                 placeholder="Sofá, Mesa, Cadeira, etc."
+              />
+            </div>
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="new-manufacturer" className="text-right">Fabricante</Label>
+              <Input
+                id="new-manufacturer"
+                value={newProduct.manufacturer || ""}
+                onChange={(e) => setNewProduct({...newProduct, manufacturer: e.target.value})}
+                className="col-span-3"
+                placeholder="Sierra, Estúdio Bola, etc."
               />
             </div>
             <div className="grid grid-cols-4 items-center gap-4">
