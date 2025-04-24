@@ -1147,14 +1147,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         try {
           const productData = productsData[i];
           
-          // Verificar se já tem imagem, caso contrário, gerar/buscar imagem apropriada
+          // Verificar se já tem imagem, caso contrário, usar imagem da categoria
           let imageUrl = productData.imageUrl;
           if (!imageUrl) {
-            if (i < 4) { // Limitar geração de imagens para os primeiros produtos
-              imageUrl = await generateProductImage(productData);
-            } else {
-              imageUrl = getCategoryDefaultImage(productData.category || "default");
-            }
+            // Não geramos mais imagens fictícias, usamos apenas a imagem padrão da categoria
+            imageUrl = getCategoryDefaultImage(productData.category || "default");
           }
           
           // Converter o produto para o formato adequado para o banco local

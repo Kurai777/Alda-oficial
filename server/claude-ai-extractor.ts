@@ -175,19 +175,9 @@ export async function processImageWithClaude(
       console.error("Erro ao analisar resposta JSON do Claude:", parseError);
       console.log("Conteúdo da resposta:", responseContent);
       
-      // Retornar um produto básico com a imagem
-      return processExtractedProducts([{
-        name: `Produto da Página ${pageNumber}`,
-        description: "Produto extraído automaticamente da imagem do catálogo",
-        code: `IMG-${pageNumber}-${Date.now().toString().slice(-5)}`,
-        price: 0,
-        category: "Não categorizado",
-        colors: [],
-        materials: [],
-        sizes: [],
-        imageUrl: `data:image/jpeg;base64,${base64Image}`,
-        pageNumber
-      }], userId, catalogId);
+      // Não gerar mais produtos fictícios, propagar o erro
+      throw new Error(`Falha ao processar resposta do modelo Claude. A resposta não pôde ser interpretada corretamente. Detalhes: ${parseError instanceof Error ? parseError.message : 'Erro ao analisar resposta JSON'}`);
+      
     }
   } catch (error) {
     console.error("Erro no processamento com Claude AI:", error);
