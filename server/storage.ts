@@ -356,7 +356,35 @@ export class MemStorage implements IStorage {
 
   async createProduct(insertProduct: InsertProduct): Promise<Product> {
     const id = this.productId++;
-    const product: Product = { ...insertProduct, id, createdAt: new Date() };
+    
+    // Garantir que arrays sejam tratados corretamente
+    const colors = Array.isArray(insertProduct.colors) ? insertProduct.colors : [];
+    const materials = Array.isArray(insertProduct.materials) ? insertProduct.materials : [];
+    
+    // Garantir que sizes é formatado corretamente
+    const sizes = Array.isArray(insertProduct.sizes) 
+      ? insertProduct.sizes.map(size => ({
+          width: typeof size.width === 'number' ? size.width : undefined,
+          height: typeof size.height === 'number' ? size.height : undefined,
+          depth: typeof size.depth === 'number' ? size.depth : undefined,
+          label: typeof size.label === 'string' ? size.label : undefined
+        }))
+      : [];
+    
+    // Criar produto com tipos corretos
+    const product: Product = { 
+      ...insertProduct, 
+      id, 
+      createdAt: new Date(),
+      colors,
+      materials,
+      sizes,
+      catalogId: insertProduct.catalogId || null,
+      description: insertProduct.description || null,
+      category: insertProduct.category || null,
+      imageUrl: insertProduct.imageUrl || null
+    };
+    
     this.products.set(id, product);
     return product;
   }
@@ -365,7 +393,46 @@ export class MemStorage implements IStorage {
     const existingProduct = this.products.get(id);
     if (!existingProduct) return undefined;
 
-    const updatedProduct = { ...existingProduct, ...productUpdate };
+    // Garantir que arrays sejam tratados corretamente
+    let updatedColors = existingProduct.colors;
+    let updatedMaterials = existingProduct.materials;
+    let updatedSizes = existingProduct.sizes;
+    
+    // Atualizar colors se fornecido
+    if (productUpdate.colors !== undefined) {
+      updatedColors = Array.isArray(productUpdate.colors) ? productUpdate.colors : [];
+    }
+    
+    // Atualizar materials se fornecido
+    if (productUpdate.materials !== undefined) {
+      updatedMaterials = Array.isArray(productUpdate.materials) ? productUpdate.materials : [];
+    }
+    
+    // Atualizar sizes se fornecido
+    if (productUpdate.sizes !== undefined) {
+      updatedSizes = Array.isArray(productUpdate.sizes) 
+        ? productUpdate.sizes.map(size => ({
+            width: typeof size.width === 'number' ? size.width : undefined,
+            height: typeof size.height === 'number' ? size.height : undefined,
+            depth: typeof size.depth === 'number' ? size.depth : undefined,
+            label: typeof size.label === 'string' ? size.label : undefined
+          }))
+        : existingProduct.sizes;
+    }
+    
+    // Criar produto atualizado com tipos corretos
+    const updatedProduct: Product = { 
+      ...existingProduct,
+      ...productUpdate,
+      colors: updatedColors,
+      materials: updatedMaterials,
+      sizes: updatedSizes,
+      catalogId: productUpdate.catalogId !== undefined ? productUpdate.catalogId : existingProduct.catalogId,
+      description: productUpdate.description !== undefined ? productUpdate.description : existingProduct.description,
+      category: productUpdate.category !== undefined ? productUpdate.category : existingProduct.category,
+      imageUrl: productUpdate.imageUrl !== undefined ? productUpdate.imageUrl : existingProduct.imageUrl
+    };
+    
     this.products.set(id, updatedProduct);
     return updatedProduct;
   }

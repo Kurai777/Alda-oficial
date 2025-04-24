@@ -370,6 +370,16 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
                 />
               </div>
               <div className="grid grid-cols-4 items-center gap-4">
+                <Label htmlFor="colors" className="text-right">Cores</Label>
+                <Input
+                  id="colors"
+                  value={Array.isArray(selectedProduct.colors) ? selectedProduct.colors.join(", ") : ""}
+                  onChange={(e) => setSelectedProduct({...selectedProduct, colors: e.target.value.split(", ").filter(Boolean)})}
+                  className="col-span-3"
+                  placeholder="Separadas por vírgula"
+                />
+              </div>
+              <div className="grid grid-cols-4 items-center gap-4">
                 <Label htmlFor="price" className="text-right">Preço (R$)</Label>
                 <Input
                   id="price"
