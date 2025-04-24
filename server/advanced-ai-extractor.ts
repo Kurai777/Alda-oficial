@@ -64,25 +64,6 @@ export async function processFileWithAdvancedAI(filePath: string, fileName: stri
     // Array para armazenar produtos extraídos
     let extractedProducts: any[] = [];
     
-    // MÉTODO SIMPLIFICADO: Se estamos tendo problemas com processamento, vamos criar pelo menos um produto mock
-    // para confirmar que a função está sendo chamada e pode retornar dados
-    const mockProduct = {
-      name: fileName.replace(/\.[^/.]+$/, ""), // Remove extensão
-      description: `Produto extraído do catálogo ${fileName}`,
-      code: `CAT-${Date.now().toString().slice(-6)}`,
-      price: 19990, // R$ 199,90
-      category: isFratiniCatalog ? "Cadeira" : "Móvel",
-      colors: ["Preto", "Branco"],
-      materials: ["Madeira", "Metal"],
-      sizes: [],
-      userId,
-      catalogId,
-      page: 1
-    };
-    
-    console.log(`[processFileWithAdvancedAI] Criado produto mock para garantir retorno: ${mockProduct.name}`);
-    extractedProducts.push(mockProduct);
-    
     // Tentativa normal de processamento
     if (isPdf) {
       try {
@@ -106,8 +87,7 @@ export async function processFileWithAdvancedAI(filePath: string, fileName: stri
             console.log(`[processFileWithAdvancedAI] Sucesso no método alternativo: ${pdfImages.length} imagens`);
           } catch (altError) {
             console.error(`[processFileWithAdvancedAI] Ambos os métodos de conversão PDF falharam:`, altError);
-            console.log(`[processFileWithAdvancedAI] Continuando com o produto mock apenas`);
-            return processExtractedProducts(extractedProducts, userId, catalogId);
+            throw new Error("Falha ao converter PDF para imagens. Não foi possível extrair produtos.");
           }
         }
         
@@ -147,16 +127,17 @@ export async function processFileWithAdvancedAI(filePath: string, fileName: stri
               }
             } catch (aiErr) {
               console.error(`[processFileWithAdvancedAI] Erro ao processar imagem com IA:`, aiErr);
-              // Já temos o produto mock, então continuamos
+              // Propagar o erro para forçar o tratamento adequado
+              throw aiErr;
             }
           } catch (pageErr) {
             console.error(`[processFileWithAdvancedAI] Erro ao processar primeira página:`, pageErr);
-            // Já temos o produto mock, então continuamos
+            throw pageErr;
           }
         }
       } catch (error) {
         console.error(`[processFileWithAdvancedAI] Erro ao processar PDF:`, error);
-        // Já temos o produto mock, então continuamos
+        throw error;
       }
     } else {
       // Processar arquivo de imagem único
