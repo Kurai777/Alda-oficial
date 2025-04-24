@@ -41,6 +41,10 @@ import { extractTextFromPDF } from "./pdf-processor";
 import { extractProductsWithAI } from "./ai-extractor";
 import { determineProductCategory, extractMaterialsFromDescription } from "./utils";
 
+// Importar os novos processadores e Firebase
+import { processExcelFile } from './excel-processor';
+import { saveCatalogToFirestore, saveProductsToFirestore, updateCatalogStatusInFirestore } from './firebase-admin';
+
 // Verificar chave da API
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || 'sk-mock-key-for-development-only';
 if (!process.env.OPENAI_API_KEY) {
@@ -741,7 +745,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       console.log(`Processando arquivo: ${fileName}, tipo: ${fileType}, para usuário: ${userId}, caminho: ${filePath}`);
       
-      // Criar o catálogo com status "processando"
+      // Criar o catálogo com status "processando" no banco local
       const catalog = await storage.createCatalog({
         userId,
         fileName,
@@ -751,6 +755,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       console.log(`Catálogo criado com ID: ${catalog.id}, status: ${catalog.processedStatus}`);
       
+      // Criar catálogo no Firestore para obter o ID do Firestore
+      const firebaseCatalog = {
+        name: fileName,
+        fileName: fileName,
+        filePath: filePath,
+        fileType: fileType,
+        status: "processing",
+        userId: userId,
+        localCatalogId: catalog.id,
+        createdAt: new Date()
+      };
+      
+      // Salvar catálogo no Firestore e obter o ID
+      let firestoreCatalogId: string;
+      try {
+        firestoreCatalogId = await saveCatalogToFirestore(firebaseCatalog, userId);
+        console.log(`Catálogo salvo no Firestore com ID: ${firestoreCatalogId}`);
+      } catch (firebaseError) {
+        console.error("Erro ao salvar catálogo no Firestore:", firebaseError);
+        // Continuar mesmo se não conseguir salvar no Firestore
+        firestoreCatalogId = `local-${catalog.id}`;
+      }
+      
       // Processar o arquivo com base no tipo
       let productsData = [];
       let extractionInfo = "";
@@ -758,9 +785,49 @@ export async function registerRoutes(app: Express): Promise<Server> {
       try {
         // Processar o arquivo com base no tipo
         if (fileType === 'xlsx' || fileType === 'xls') {
-          // Extrair dados do Excel
-          productsData = await extractProductsFromExcel(filePath);
-          extractionInfo = `Extraídos ${productsData.length} produtos do arquivo Excel.`;
+          try {
+            // Extrair dados do Excel usando o novo processador
+            console.log(`Iniciando processamento do arquivo Excel: ${filePath}`);
+            productsData = await processExcelFile(filePath);
+            extractionInfo = `Extraídos ${productsData.length} produtos do arquivo Excel.`;
+            
+            // Salvar produtos no Firestore
+            try {
+              const productIds = await saveProductsToFirestore(
+                productsData.map(p => ({ ...p, userId, catalogId: firestoreCatalogId })), 
+                userId, 
+                firestoreCatalogId
+              );
+              console.log(`${productIds.length} produtos do Excel salvos no Firestore`);
+              
+              // Atualizar status do catálogo no Firestore
+              await updateCatalogStatusInFirestore(userId, firestoreCatalogId, "completed", productsData.length);
+            } catch (firestoreError) {
+              console.error("Erro ao salvar produtos do Excel no Firestore:", firestoreError);
+              // Continuar mesmo se não conseguir salvar no Firestore
+            }
+          } catch (excelError) {
+            console.error("Erro ao processar Excel:", excelError);
+            // Tentar método alternativo com código existente
+            productsData = await extractProductsFromExcel(filePath);
+            extractionInfo = `Extraídos ${productsData.length} produtos do arquivo Excel (método alternativo).`;
+            
+            // Salvar produtos no Firestore
+            try {
+              const productIds = await saveProductsToFirestore(
+                productsData.map(p => ({ ...p, userId, catalogId: firestoreCatalogId })), 
+                userId, 
+                firestoreCatalogId
+              );
+              console.log(`${productIds.length} produtos do Excel salvos no Firestore (método alternativo)`);
+              
+              // Atualizar status do catálogo no Firestore
+              await updateCatalogStatusInFirestore(userId, firestoreCatalogId, "completed", productsData.length);
+            } catch (firestoreError) {
+              console.error("Erro ao salvar produtos do Excel no Firestore:", firestoreError);
+              // Continuar mesmo se não conseguir salvar no Firestore
+            }
+          }
         } else if (fileType === 'pdf') {
           // Processar PDF usando múltiplos métodos com fallback
           try {
@@ -1041,6 +1108,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
         } else {
           throw new Error("Formato de arquivo não suportado. Use Excel, PDF ou imagens (JPG, PNG, etc)");
         }
+
+        // Adicionar integração Firestore após processamento de PDF
+        try {
+          // Depois que os produtos foram extraídos com sucesso (qualquer um dos métodos)
+          const productsToSave = productsData.map(p => ({ 
+            ...p, 
+            userId, 
+            catalogId: firestoreCatalogId,
+            // Garantir que campos obrigatórios existam
+            name: p.name || "Produto sem nome",
+            description: p.description || "",
+            price: typeof p.price === 'number' ? p.price : 0,
+            category: p.category || "Não categorizado"
+          }));
+          
+          // Salvar produtos no Firestore
+          const productIds = await saveProductsToFirestore(productsToSave, userId, firestoreCatalogId);
+          console.log(`${productIds.length} produtos do PDF salvos no Firestore`);
+          
+          // Atualizar status do catálogo no Firestore
+          await updateCatalogStatusInFirestore(userId, firestoreCatalogId, "completed", productsToSave.length);
+        } catch (firestoreError) {
+          console.error("Erro ao salvar produtos do PDF no Firestore:", firestoreError);
+          // Continuar mesmo se não conseguir salvar no Firestore
+        }
       } catch (processingError) {
         console.error("Erro durante o processamento do arquivo:", processingError);
         
@@ -1049,135 +1141,50 @@ export async function registerRoutes(app: Express): Promise<Server> {
         productsData = createDemoProductsFromCatalog(fileName, userId, catalog.id);
         extractionInfo = `Processamento original falhou, mas criamos produtos de demonstração para você visualizar. Erro: ${processingError instanceof Error ? processingError.message : "Erro desconhecido"}`;
         
-        // Não atualizar o status do catálogo para "erro", mas sim para "completed" com os produtos de demonstração
-        // await storage.updateCatalogStatus(catalog.id, "error");
-        
-        // Continuar o processamento normalmente
+        // Atualizar o status do catálogo no Firestore para falha, mas com produtos de demonstração
+        try {
+          // Salvar produtos de demonstração no Firestore
+          const demoProductsToSave = productsData.map(p => ({ 
+            ...p, 
+            userId, 
+            catalogId: firestoreCatalogId,
+            isDemoProduct: true // Marcar produtos como demonstração
+          }));
+          
+          const productIds = await saveProductsToFirestore(demoProductsToSave, userId, firestoreCatalogId);
+          console.log(`${productIds.length} produtos de demonstração salvos no Firestore`);
+          
+          // Atualizar status do catálogo no Firestore
+          await updateCatalogStatusInFirestore(
+            userId, 
+            firestoreCatalogId, 
+            "completed_with_demo_products", 
+            demoProductsToSave.length
+          );
+        } catch (firestoreError) {
+          console.error("Erro ao salvar produtos de demonstração no Firestore:", firestoreError);
+          // Continuar mesmo se não conseguir salvar no Firestore
+        }
       }
       
-      // Utilizando a função determineProductCategory importada de utils.ts
-      
-      // Função para gerar imagem para um produto usando DALL-E
-      const generateProductImage = async (product: any): Promise<string> => {
-        try {
-          console.log(`Gerando imagem para o produto: ${product.name}`);
-          
-          // Criar um prompt detalhado para o DALL-E
-          let imagePrompt = `Uma fotografia profissional de alta qualidade no estilo de catálogo de móveis de um(a) ${product.name}`;
-          
-          // Adicionar categoria para contexto
-          if (product.category) {
-            imagePrompt += `, que é um(a) ${product.category}`;
-          }
-          
-          // Adicionar materiais se disponíveis
-          if (Array.isArray(product.materials) && product.materials.length > 0) {
-            imagePrompt += ` feito de ${product.materials.join(', ')}`;
-          }
-          
-          // Adicionar cor principal se disponível
-          if (Array.isArray(product.colors) && product.colors.length > 0) {
-            imagePrompt += `, na cor ${product.colors[0]}`;
-          }
-          
-          // Adicionar detalhe da descrição se disponível
-          if (product.description) {
-            const shortDesc = product.description.split('.')[0]; // Primeira frase apenas
-            imagePrompt += `. ${shortDesc}`;
-          }
-          
-          // Contexto adicional para melhorar a qualidade da imagem
-          imagePrompt += `. Imagem em fundo branco, iluminação profissional de estúdio fotográfico, fotografia para catálogo de produto, em alta resolução.`;
-          
-          console.log(`Prompt para geração da imagem: ${imagePrompt}`);
-          
-          // Gerar a imagem com DALL-E
-          const imageResponse = await openai.images.generate({
-            model: "dall-e-3",
-            prompt: imagePrompt,
-            n: 1,
-            size: "1024x1024",
-            quality: "standard",
-          });
-          
-          // Obter a URL da imagem gerada
-          const imageUrl = imageResponse.data[0].url;
-          console.log(`Imagem gerada com sucesso para ${product.name}: ${imageUrl}`);
-          
-          return imageUrl || '';
-        } catch (error) {
-          console.error(`Erro ao gerar imagem para ${product.name}:`, error);
-          
-          // Em caso de falha, retornar uma imagem padrão baseada na categoria
-          const categoryImages = {
-            "Cadeira": "https://images.unsplash.com/photo-1567538096630-e0c55bd6374c?ixlib=rb-4.0.3",
-            "Banqueta": "https://images.unsplash.com/photo-1501045661006-fcebe0257c3f?ixlib=rb-4.0.3",
-            "Poltrona": "https://images.unsplash.com/photo-1567016432779-094069958ea5?ixlib=rb-4.0.3",
-            "Sofá": "https://images.unsplash.com/photo-1555041469-a586c61ea9bc?ixlib=rb-4.0.3",
-            "Mesa": "https://images.unsplash.com/photo-1577140917170-285929fb55b7?ixlib=rb-4.0.3",
-            "default": "https://images.unsplash.com/photo-1555041469-a586c61ea9bc?ixlib=rb-4.0.3"
-          };
-          
-          // Tentar encontrar uma imagem para a categoria correspondente
-          const category = (product.category ? product.category.toLowerCase() : "") || "";
-          const productName = (product.name ? product.name.toLowerCase() : "") || "";
-          
-          for (const [key, url] of Object.entries(categoryImages)) {
-            const keyLower = key.toLowerCase();
-            if (key !== "default" && (category.includes(keyLower) || productName.includes(keyLower))) {
-              return url;
-            }
-          }
-          
-          return categoryImages.default;
-        }
-      };
-      
-      // Adicionar produtos extraídos ao banco de dados
+      // Adicionar produtos ao banco de dados local
       const savedProducts = [];
-      
-      // Limitar o número inicial de produtos para processamento mais rápido
-      const MAX_PRODUCTS_FOR_IMAGE_GENERATION = 4;
       
       for (let i = 0; i < productsData.length; i++) {
         try {
           const productData = productsData[i];
           
-          // Gerar imagem para os primeiros produtos
+          // Verificar se já tem imagem, caso contrário, gerar/buscar imagem apropriada
           let imageUrl = productData.imageUrl;
-          if (!imageUrl && i < MAX_PRODUCTS_FOR_IMAGE_GENERATION) {
-            console.log(`Gerando imagem para produto ${i+1}/${productsData.length}: ${productData.name}`);
-            imageUrl = await generateProductImage(productData);
-          } else if (!imageUrl) {
-            // Para os demais produtos, usar imagem padrão temporariamente
-            const categoryImages = {
-              "Cadeira": "https://images.unsplash.com/photo-1567538096630-e0c55bd6374c?ixlib=rb-4.0.3",
-              "Banqueta": "https://images.unsplash.com/photo-1501045661006-fcebe0257c3f?ixlib=rb-4.0.3",
-              "Poltrona": "https://images.unsplash.com/photo-1567016432779-094069958ea5?ixlib=rb-4.0.3",
-              "Sofá": "https://images.unsplash.com/photo-1555041469-a586c61ea9bc?ixlib=rb-4.0.3",
-              "Mesa": "https://images.unsplash.com/photo-1577140917170-285929fb55b7?ixlib=rb-4.0.3",
-              "default": "https://images.unsplash.com/photo-1555041469-a586c61ea9bc?ixlib=rb-4.0.3"
-            };
-            
-            const category = (productData.category ? productData.category.toLowerCase() : "") || "";
-            const name = (productData.name ? productData.name.toLowerCase() : "") || "";
-            
-            if (category.includes("cadeira") || name.includes("cadeira")) {
-              imageUrl = categoryImages.Cadeira;
-            } else if (category.includes("banqueta") || name.includes("banqueta")) {
-              imageUrl = categoryImages.Banqueta;
-            } else if (category.includes("poltrona") || name.includes("poltrona")) {
-              imageUrl = categoryImages.Poltrona;
-            } else if (category.includes("sofa") || name.includes("sofa")) {
-              imageUrl = categoryImages.Sofá;
-            } else if (category.includes("mesa") || name.includes("mesa")) {
-              imageUrl = categoryImages.Mesa;
+          if (!imageUrl) {
+            if (i < 4) { // Limitar geração de imagens para os primeiros produtos
+              imageUrl = await generateProductImage(productData);
             } else {
-              imageUrl = categoryImages.default;
+              imageUrl = getCategoryDefaultImage(productData.category || "default");
             }
           }
           
-          // Converter o produto para o formato adequado
+          // Converter o produto para o formato adequado para o banco local
           const productToSave = {
             userId,
             catalogId: catalog.id,
@@ -1189,7 +1196,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
             colors: Array.isArray(productData.colors) ? productData.colors : [],
             materials: Array.isArray(productData.materials) ? productData.materials : [],
             sizes: Array.isArray(productData.sizes) ? productData.sizes : [],
-            imageUrl: imageUrl || "https://images.unsplash.com/photo-1555041469-a586c61ea9bc?ixlib=rb-4.0.3"
+            imageUrl: imageUrl || "https://images.unsplash.com/photo-1555041469-a586c61ea9bc?ixlib=rb-4.0.3",
+            firestoreId: productData.firestoreId || null, // Manter referência ao ID do Firestore, se disponível
+            firestoreCatalogId: firestoreCatalogId // Referência ao ID do catálogo no Firestore
           };
           
           const savedProduct = await storage.createProduct(productToSave);
@@ -1199,7 +1208,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
       
-      // Atualizar o status do catálogo para "concluído"
+      // Atualizar o status do catálogo para "concluído" no banco local
       const updatedCatalog = await storage.updateCatalogStatus(catalog.id, "completed");
       
       return res.status(201).json({
@@ -1207,7 +1216,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         catalog: updatedCatalog,
         extractionInfo,
         totalProductsSaved: savedProducts.length,
-        sampleProducts: savedProducts.slice(0, 3) // Retornar apenas alguns produtos como amostra
+        sampleProducts: savedProducts.slice(0, 3), // Retornar apenas alguns produtos como amostra
+        firestoreCatalogId, // Incluir ID do Firestore na resposta
+        metadata: {
+          storedInFirestore: true,
+          firestoreProductCount: productsData.length
+        }
       });
       
     } catch (error) {
