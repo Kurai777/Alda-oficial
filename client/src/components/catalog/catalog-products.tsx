@@ -17,7 +17,9 @@ import {
   CheckCircleIcon,
   XCircleIcon,
   SearchIcon,
-  FileTextIcon
+  FileTextIcon,
+  PlusIcon,
+  ImageIcon
 } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
@@ -35,7 +37,18 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
   const [page, setPage] = useState(1);
   const [searchTerm, setSearchTerm] = useState("");
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
+  const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+  const [newProduct, setNewProduct] = useState<Partial<Product>>({
+    name: '',
+    description: '',
+    code: '',
+    price: 0,
+    category: '',
+    colors: [],
+    materials: [],
+    imageUrl: ''
+  });
   const pageSize = 10;
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('grid');
 
@@ -47,13 +60,26 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
       
       try {
         // Buscar produtos através da API do backend
-        const response = await apiRequest("GET", `/api/products?catalogId=${catalogId}`);
-        console.log("API response:", response);
+        const response = await fetch(`/api/products?catalogId=${catalogId}`, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        });
+        
+        // Se a resposta não for ok, lançar erro
+        if (!response.ok) {
+          throw new Error(`Erro HTTP: ${response.status}`);
+        }
+        
+        // Converter a resposta para JSON
+        const data = await response.json();
+        console.log("API response:", data);
         
         // Se encontrou produtos, retorná-los
-        if (response && Array.isArray(response)) {
-          console.log(`Encontrados ${response.length} produtos na API local`);
-          return response;
+        if (data && Array.isArray(data)) {
+          console.log(`Encontrados ${data.length} produtos na API local`);
+          return data;
         }
         
         console.log("Nenhum produto encontrado para este catálogo");
@@ -117,6 +143,50 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
       });
     }
   };
+  
+  // Adicionar novo produto
+  const handleAddProduct = async () => {
+    try {
+      // Adicionar catalogId ao novo produto
+      const productToAdd = {
+        ...newProduct,
+        catalogId,
+        price: typeof newProduct.price === 'string' 
+          ? parseInt(newProduct.price.replace(/\D/g, '')) 
+          : Math.round(Number(newProduct.price || 0) * 100)
+      };
+      
+      await apiRequest("POST", "/api/products", productToAdd);
+      
+      toast({
+        title: "Produto adicionado",
+        description: "O produto foi adicionado com sucesso ao catálogo.",
+      });
+      
+      // Limpar formulário e fechar diálogo
+      setNewProduct({
+        name: '',
+        description: '',
+        code: '',
+        price: 0,
+        category: '',
+        colors: [],
+        materials: [],
+        imageUrl: ''
+      });
+      setIsAddDialogOpen(false);
+      
+      // Atualizar lista de produtos
+      refetch();
+    } catch (error) {
+      console.error("Erro ao adicionar produto:", error);
+      toast({
+        title: "Erro ao adicionar",
+        description: "Não foi possível adicionar o produto.",
+        variant: "destructive",
+      });
+    }
+  };
 
   // Excluir produto
   const handleDelete = async (id: number) => {
@@ -162,6 +232,14 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
           <h2 className="text-2xl font-bold">{fileName ? `Produtos de: ${fileName}` : "Produtos do Catálogo"}</h2>
         </div>
         <div className="flex items-center gap-2">
+          <Button 
+            variant="outline"
+            onClick={() => setIsAddDialogOpen(true)}
+            className="mr-2"
+          >
+            <PlusIcon className="h-4 w-4 mr-1" />
+            Adicionar Produto
+          </Button>
           <div className="relative">
             <SearchIcon className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
             <Input
