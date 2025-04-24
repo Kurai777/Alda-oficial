@@ -42,7 +42,7 @@ export default function AiDesignPage() {
       const res = await fetch("/api/ai-design-projects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title, userId: user?.id }),
+        body: JSON.stringify({ title, userId: user?.uid }),
       });
       if (!res.ok) throw new Error('Falha ao criar projeto');
       return res.json();

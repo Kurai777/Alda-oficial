@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAuth } from "@/lib/auth";
 import { queryClient } from "@/lib/queryClient";
-import { AiDesignProject, AiDesignChatMessage } from "@/lib/types";
+import { AiDesignProject, AiDesignChatMessage, User } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
