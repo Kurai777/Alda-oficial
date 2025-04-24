@@ -24,7 +24,8 @@ export const products = pgTable("products", {
   code: text("code").notNull(),
   description: text("description"),
   price: integer("price").notNull(), // price in cents
-  category: text("category"),
+  category: text("category"), // Segmento (sofá, home, poltrona, etc.)
+  manufacturer: text("manufacturer"), // Fabricante (Sierra, Estúdio Bola, etc.)
   imageUrl: text("image_url"),
   colors: json("colors").$type<string[]>().default([]),
   materials: json("materials").$type<string[]>().default([]),
@@ -32,6 +33,7 @@ export const products = pgTable("products", {
   createdAt: timestamp("created_at").defaultNow(),
   firestoreId: text("firestore_id"), // ID do produto no Firestore
   firebaseUserId: text("firebase_user_id"), // ID do usuário no Firebase
+  isEdited: boolean("is_edited").default(false), // Indica se o produto foi editado manualmente
 });
 
 export const insertProductSchema = createInsertSchema(products).pick({
@@ -42,12 +44,14 @@ export const insertProductSchema = createInsertSchema(products).pick({
   description: true,
   price: true,
   category: true,
+  manufacturer: true,
   imageUrl: true,
   colors: true,
   materials: true,
   sizes: true,
   firestoreId: true,
   firebaseUserId: true,
+  isEdited: true,
 });
 
 export const catalogs = pgTable("catalogs", {

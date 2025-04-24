@@ -38,6 +38,16 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
   const [searchTerm, setSearchTerm] = useState("");
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
+  const [isFilterDialogOpen, setIsFilterDialogOpen] = useState(false);
+  
+  // Estado para os filtros
+  const [filters, setFilters] = useState({
+    category: "", // Segmento (sofá, home, poltrona, etc.)
+    manufacturer: "", // Fabricante (Sierra, Estúdio Bola, etc.)
+    minPrice: "", // Preço mínimo
+    maxPrice: "", // Preço máximo
+  });
+  
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [newProduct, setNewProduct] = useState<Partial<Product>>({
     name: '',
@@ -45,6 +55,7 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
     code: '',
     price: 0,
     category: '',
+    manufacturer: '',
     colors: [],
     materials: [],
     imageUrl: ''

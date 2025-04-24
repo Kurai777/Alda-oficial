@@ -589,6 +589,42 @@ function normalizeExcelProducts(rawProducts: ExcelProduct[]): any[] {
         });
       }
       
+      // Extrair informações do fabricante
+      let manufacturer = '';
+      
+      // Verificar campos específicos que podem conter informações do fabricante
+      const manufacturerFields = ['fabricante', 'manufacturer', 'marca', 'brand', 'fornecedor', 'supplier'];
+      
+      for (const field of manufacturerFields) {
+        if (rawProduct[field] && typeof rawProduct[field] === 'string' && rawProduct[field].trim().length > 0) {
+          manufacturer = rawProduct[field].trim();
+          break;
+        }
+      }
+      
+      // Se não encontramos o fabricante nos campos explícitos, tente extraí-lo do nome/descrição
+      if (!manufacturer) {
+        // Lista de fabricantes conhecidos
+        const knownManufacturers = [
+          'Sierra', 'Estúdio Bola', 'Fratini', 'Líder Interiores', 'Artefacto', 'Breton', 
+          'Casual', 'Clami', 'Deco Metal', 'Donatelli', 'Etel', 'Estar Móveis', 
+          'Fermob', 'Flexform', 'Franccino', 'Home Design', 'Kartell', 'La Falaise', 
+          'Lattoog', 'Lovato', 'Marchetaria', 'Micasa', 'Minotti', 'Modalle', 
+          'Natuzzi', 'Orlean', 'Pratice', 'Riflessi', 'Studio Welter', 'Taracea', 
+          'Tissot', 'Todeschini', 'Tunelli', 'Via Star', 'Vitra', 'Wentz'
+        ];
+        
+        // Verificar se o nome ou descrição contém algum fabricante conhecido
+        const textToSearch = `${productName} ${description}`.toLowerCase();
+        
+        for (const knownManufacturer of knownManufacturers) {
+          if (textToSearch.includes(knownManufacturer.toLowerCase())) {
+            manufacturer = knownManufacturer;
+            break;
+          }
+        }
+      }
+      
       // Construir o objeto de produto normalizado
       normalizedProducts.push({
         name: productName || 'Produto sem nome',
@@ -596,11 +632,13 @@ function normalizeExcelProducts(rawProducts: ExcelProduct[]): any[] {
         code: productCode || `AUTO-${Date.now().toString().slice(-8)}`,
         price,
         category,
+        manufacturer, // Adicionar o fabricante
         colors,
         materials,
         sizes,
         imageUrl,
         stock: rawProduct.estoque || rawProduct.stock || null,
+        isEdited: false, // Inicialmente não editado manualmente
         createdAt: new Date(),
         updatedAt: new Date(),
         // Manter campos originais adicionais
