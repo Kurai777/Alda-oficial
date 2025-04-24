@@ -1,31 +1,64 @@
-import * as admin from 'firebase-admin';
+import admin from 'firebase-admin';
 import { getFirestore } from 'firebase-admin/firestore';
 
-// Inicializar o Firebase Admin com as credenciais do ambiente
-const serviceAccount = {
-  type: process.env.FIREBASE_TYPE || "service_account",
-  project_id: process.env.FIREBASE_PROJECT_ID || "",
-  private_key_id: process.env.FIREBASE_PRIVATE_KEY_ID || "",
-  private_key: (process.env.FIREBASE_PRIVATE_KEY || "").replace(/\\n/g, '\n'),
-  client_email: process.env.FIREBASE_CLIENT_EMAIL || "",
-  client_id: process.env.FIREBASE_CLIENT_ID || "",
-  auth_uri: process.env.FIREBASE_AUTH_URI || "https://accounts.google.com/o/oauth2/auth",
-  token_uri: process.env.FIREBASE_TOKEN_URI || "https://oauth2.googleapis.com/token",
-  auth_provider_x509_cert_url: process.env.FIREBASE_AUTH_PROVIDER_X509_CERT_URL || "https://www.googleapis.com/oauth2/v1/certs",
-  client_x509_cert_url: process.env.FIREBASE_CLIENT_X509_CERT_URL || "",
-};
-
-// Inicializar o app do Firebase se ainda não foi inicializado
+// Variável para armazenar a instância do Firebase Admin
 let firebaseApp: admin.app.App;
 
 try {
+  // Tentativa de obter a instância já inicializada
   firebaseApp = admin.app();
+  console.log("Firebase Admin já inicializado");
 } catch (error) {
-  firebaseApp = admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount as admin.ServiceAccount),
-    databaseURL: process.env.FIREBASE_DATABASE_URL || `https://${process.env.FIREBASE_PROJECT_ID}.firebaseio.com`,
-    storageBucket: process.env.FIREBASE_STORAGE_BUCKET || `${process.env.FIREBASE_PROJECT_ID}.appspot.com`
-  });
+  try {
+    console.log("Inicializando Firebase Admin...");
+    
+    // Verificar se as credenciais mínimas estão disponíveis
+    if (!process.env.FIREBASE_PRIVATE_KEY || !process.env.FIREBASE_CLIENT_EMAIL) {
+      console.log("Firebase Admin: credenciais incompletas. Usando modo simulado.");
+      
+      // Inicializar com configuração mínima
+      const dummyApp = admin.initializeApp({
+        projectId: process.env.VITE_FIREBASE_PROJECT_ID || "dummy-project"
+      });
+      
+      firebaseApp = dummyApp;
+    } else {
+      // Inicializar com as credenciais completas
+      const privateKey = process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n');
+      
+      const serviceAccount = {
+        projectId: process.env.VITE_FIREBASE_PROJECT_ID,
+        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+        privateKey: privateKey
+      };
+      
+      console.log("Credenciais Admin configuradas para:", serviceAccount.projectId);
+      
+      // Inicialização completa
+      const configuredApp = admin.initializeApp({
+        credential: admin.credential.cert(serviceAccount as admin.ServiceAccount),
+        databaseURL: `https://${process.env.VITE_FIREBASE_PROJECT_ID}.firebaseio.com`,
+        storageBucket: `${process.env.VITE_FIREBASE_PROJECT_ID}.appspot.com`
+      });
+      
+      firebaseApp = configuredApp;
+    }
+  } catch (initError) {
+    console.error("Erro ao inicializar Firebase Admin:", initError);
+    
+    // Último recurso - criar app dummy para evitar falhas catastróficas
+    try {
+      const fallbackApp = admin.initializeApp({ 
+        projectId: "fallback-project" 
+      }, "fallback-instance");
+      
+      firebaseApp = fallbackApp;
+      console.log("Firebase Admin inicializado em modo de fallback");
+    } catch (fallbackError) {
+      console.error("Falha completa na inicialização do Firebase Admin:", fallbackError);
+      throw new Error("Não foi possível inicializar o Firebase Admin");
+    }
+  }
 }
 
 // Exportar a instância do Firestore

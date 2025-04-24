@@ -68,7 +68,16 @@ export default function UploadCard() {
       // Criar um objeto FormData para enviar o arquivo
       const formData = new FormData();
       formData.append('file', file);
-      formData.append('userId', user?.id?.toString() || '1');
+      
+      // Usar Firebase UID se disponível, caso contrário usar ID local
+      // O servidor está configurado para detectar autenticação Firebase automaticamente
+      if (user?.firebaseId) {
+        formData.append('firebaseId', user.firebaseId);
+        console.log('Usando ID do Firebase: ' + user.firebaseId);
+      } else {
+        formData.append('userId', user?.id?.toString() || '1');
+        console.log('Usando ID local: ' + (user?.id || 1));
+      }
       
       // Enviar o arquivo para o servidor
       const response = await fetch('/api/catalogs/upload', {

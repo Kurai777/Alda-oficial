@@ -368,13 +368,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Product endpoints
   app.get("/api/products", async (req: Request, res: Response) => {
     try {
-      const userId = parseInt(req.query.userId as string) || 1; // Default to userId 1 for mock data
+      let userId: number | string;
+      
+      // Usar o ID do Firebase se disponível, caso contrário usar o userId da query ou default
+      if (req.firebaseUser && req.firebaseUser.uid) {
+        userId = req.firebaseUser.uid;
+        console.log(`Usando Firebase UID: ${userId} para buscar produtos`);
+      } else {
+        userId = parseInt(req.query.userId as string) || 1;
+        console.log(`Usando userId da query: ${userId} para buscar produtos`);
+      }
+      
       const catalogId = req.query.catalogId ? parseInt(req.query.catalogId as string) : undefined;
+      console.log(`Buscando produtos para userId=${userId}, catalogId=${catalogId}`);
       
       const products = await storage.getProductsByUserId(userId, catalogId);
+      console.log(`Encontrados ${products.length} produtos`);
       return res.status(200).json(products);
     } catch (error) {
-      return res.status(500).json({ message: "Failed to fetch products" });
+      console.error("Erro ao buscar produtos:", error);
+      return res.status(500).json({ message: "Failed to fetch products", error: error.message });
     }
   });
 
@@ -455,12 +468,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Catalog endpoints
   app.get("/api/catalogs", async (req: Request, res: Response) => {
     try {
-      const userId = parseInt(req.query.userId as string) || 1; // Default to userId 1 for mock data
+      let userId: number | string;
+      
+      // Usar o ID do Firebase se disponível, caso contrário usar o userId da query ou default
+      if (req.firebaseUser && req.firebaseUser.uid) {
+        userId = req.firebaseUser.uid;
+        console.log(`Usando Firebase UID: ${userId} para buscar catálogos`);
+      } else {
+        userId = parseInt(req.query.userId as string) || 1;
+        console.log(`Usando userId da query: ${userId} para buscar catálogos`);
+      }
       
       const catalogs = await storage.getCatalogsByUserId(userId);
+      console.log(`Encontrados ${catalogs.length} catálogos`);
       return res.status(200).json(catalogs);
     } catch (error) {
-      return res.status(500).json({ message: "Failed to fetch catalogs" });
+      console.error("Erro ao buscar catálogos:", error);
+      return res.status(500).json({ message: "Failed to fetch catalogs", error: error.message });
     }
   });
 
@@ -738,7 +762,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Nenhum arquivo enviado" });
       }
 
-      const userId = req.body.userId ? parseInt(req.body.userId) : 1;
+      // Determinar o userId com base na autenticação Firebase ou fallback para o userId do body
+      let userId: number | string;
+      if (req.firebaseUser && req.firebaseUser.uid) {
+        userId = req.firebaseUser.uid;
+        console.log(`Usando Firebase UID: ${userId} para criar catálogo`);
+      } else {
+        userId = req.body.userId ? parseInt(req.body.userId) : 1;
+        console.log(`Usando userId do body: ${userId} para criar catálogo`);
+      }
+      
       const filePath = (req.file as any).path;
       const fileName = (req.file as any).originalname;
       const fileType = fileName.split('.').pop()?.toLowerCase() || '';

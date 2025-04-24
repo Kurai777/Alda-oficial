@@ -19,15 +19,15 @@ export interface IStorage {
 
   // Product methods
   getProduct(id: number): Promise<Product | undefined>;
-  getProductsByUserId(userId: number, catalogId?: number): Promise<Product[]>;
-  getProductsByCategory(userId: number, category: string): Promise<Product[]>;
+  getProductsByUserId(userId: number | string, catalogId?: number): Promise<Product[]>;
+  getProductsByCategory(userId: number | string, category: string): Promise<Product[]>;
   createProduct(product: InsertProduct): Promise<Product>;
   updateProduct(id: number, product: Partial<InsertProduct>): Promise<Product | undefined>;
   deleteProduct(id: number): Promise<boolean>;
 
   // Catalog methods
   getCatalog(id: number): Promise<Catalog | undefined>;
-  getCatalogsByUserId(userId: number): Promise<Catalog[]>;
+  getCatalogsByUserId(userId: number | string): Promise<Catalog[]>;
   createCatalog(catalog: InsertCatalog): Promise<Catalog>;
   updateCatalogStatus(id: number, status: string): Promise<Catalog | undefined>;
 
@@ -301,11 +301,24 @@ export class MemStorage implements IStorage {
     return this.products.get(id);
   }
 
-  async getProductsByUserId(userId: number, catalogId?: number): Promise<Product[]> {
+  async getProductsByUserId(userId: number | string, catalogId?: number): Promise<Product[]> {
+    // Converter userId para número ou string para comparação
+    const userIdToCompare = typeof userId === 'string' ? userId : userId;
+    
     return Array.from(this.products.values()).filter(
       (product) => {
-        // Filtrar sempre por userId
-        let match = product.userId === userId;
+        // Filtrar sempre por userId, comparando corretamente string com string ou número com número
+        let match = false;
+        
+        if (typeof userIdToCompare === 'string' && typeof product.userId === 'string') {
+          match = product.userId === userIdToCompare;
+        } else if (typeof userIdToCompare === 'number' && typeof product.userId === 'number') {
+          match = product.userId === userIdToCompare;
+        } else if (typeof userIdToCompare === 'string' && typeof product.userId === 'number') {
+          match = product.userId.toString() === userIdToCompare;
+        } else if (typeof userIdToCompare === 'number' && typeof product.userId === 'string') {
+          match = userIdToCompare.toString() === product.userId;
+        }
         
         // Se catalogId foi especificado, filtre também por ele
         if (catalogId !== undefined && match) {
@@ -317,9 +330,27 @@ export class MemStorage implements IStorage {
     );
   }
 
-  async getProductsByCategory(userId: number, category: string): Promise<Product[]> {
+  async getProductsByCategory(userId: number | string, category: string): Promise<Product[]> {
+    // Converter userId para número ou string para comparação
+    const userIdToCompare = typeof userId === 'string' ? userId : userId;
+    
     return Array.from(this.products.values()).filter(
-      (product) => product.userId === userId && product.category === category
+      (product) => {
+        // Verificar userId
+        let userMatch = false;
+        
+        if (typeof userIdToCompare === 'string' && typeof product.userId === 'string') {
+          userMatch = product.userId === userIdToCompare;
+        } else if (typeof userIdToCompare === 'number' && typeof product.userId === 'number') {
+          userMatch = product.userId === userIdToCompare;
+        } else if (typeof userIdToCompare === 'string' && typeof product.userId === 'number') {
+          userMatch = product.userId.toString() === userIdToCompare;
+        } else if (typeof userIdToCompare === 'number' && typeof product.userId === 'string') {
+          userMatch = userIdToCompare.toString() === product.userId;
+        }
+        
+        return userMatch && product.category === category;
+      }
     );
   }
 
@@ -348,9 +379,24 @@ export class MemStorage implements IStorage {
     return this.catalogs.get(id);
   }
 
-  async getCatalogsByUserId(userId: number): Promise<Catalog[]> {
+  async getCatalogsByUserId(userId: number | string): Promise<Catalog[]> {
+    // Converter userId para número ou string para comparação
+    const userIdToCompare = typeof userId === 'string' ? userId : userId;
+    
     return Array.from(this.catalogs.values()).filter(
-      (catalog) => catalog.userId === userId
+      (catalog) => {
+        // Verificar userId
+        if (typeof userIdToCompare === 'string' && typeof catalog.userId === 'string') {
+          return catalog.userId === userIdToCompare;
+        } else if (typeof userIdToCompare === 'number' && typeof catalog.userId === 'number') {
+          return catalog.userId === userIdToCompare;
+        } else if (typeof userIdToCompare === 'string' && typeof catalog.userId === 'number') {
+          return catalog.userId.toString() === userIdToCompare;
+        } else if (typeof userIdToCompare === 'number' && typeof catalog.userId === 'string') {
+          return userIdToCompare.toString() === catalog.userId;
+        }
+        return false;
+      }
     );
   }
 
