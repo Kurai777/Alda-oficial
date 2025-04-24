@@ -52,11 +52,11 @@ export default function UploadCard() {
       return;
     }
 
-    // Check file size (max 10MB)
-    if (file.size > 10 * 1024 * 1024) {
+    // Check file size (max 50MB)
+    if (file.size > 50 * 1024 * 1024) {
       toast({
         title: "Arquivo muito grande",
-        description: "O tamanho máximo permitido é 10MB.",
+        description: "O tamanho máximo permitido é 50MB.",
         variant: "destructive",
       });
       return;
@@ -144,7 +144,7 @@ export default function UploadCard() {
               </label>
             </div>
             <p className="text-xs text-gray-500">
-              Excel, PDF, imagens (JPG, PNG), até 10MB
+              Excel, PDF, imagens (JPG, PNG), até 50MB
             </p>
             {isUploading && (
               <div className="mt-2">
