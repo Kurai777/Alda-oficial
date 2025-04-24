@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+#!/usr/bin/env python
 """
 PaddleOCR Extractor for Product Catalogs
 ----------------------------------------
@@ -14,118 +14,41 @@ Uso:
 import os
 import sys
 import json
-import base64
-import subprocess
-import tempfile
 import re
-import logging
-from typing import List, Dict, Any, Tuple, Optional
-from pathlib import Path
-import argparse
-from collections import defaultdict
 import math
-
-# Configurar logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
-
-# Constantes
-PRICE_PATTERN = r'R\$\s*[\d.,]+|[\d.,]+\s*reais|\d+[.,]\d+|\d+\s*,\s*\d+'
-CODE_PATTERN = r'\d+[\.\-]\d+[\.\-]\d+[\.\-]\d+|\b[A-Z]+\d+\b|\b\d{4,}\b'
-COLOR_LIST = [
-    "preto", "branco", "azul", "vermelho", "verde", "amarelo", "laranja",
-    "roxo", "rosa", "marrom", "cinza", "bege", "dourado", "prateado", "cromado",
-    "transparente", "natural", "cerejeira", "tabaco", "nogueira", "mogno",
-    "carvalho", "imbuia", "pinus", "jequitibá", "jatobá", "cedro",
-    "café", "grafite", "chumbo", "fumê", "caramelo", "nude"
-]
-MATERIAL_LIST = [
-    "madeira", "mdf", "mdp", "melamínico", "melamina", "metalizado", "metal", 
-    "alumínio", "aluminio", "aço", "aco", "ferro", "vidro", "cristal", "espelho",
-    "couro", "corino", "tecido", "linho", "veludo", "suede", "camurça", "camurca",
-    "laca", "polipropileno", "pp", "abs", "plástico", "plastico", "pvc", "poliéster",
-    "poliester", "polietileno", "mármore", "marmore", "granito", "quartzo", 
-    "cerâmica", "ceramica", "porcelanato", "laminado", "ráfia", "rafia", "palhinha",
-    "junco", "vime", "bambu", "rattan", "inox", "cromado", "laqueado"
-]
-CATEGORY_INDICATORS = {
-    "cadeira": "Cadeira",
-    "poltrona": "Poltrona",
-    "sofá": "Sofá", 
-    "sofa": "Sofá",
-    "mesa": "Mesa",
-    "banqueta": "Banqueta",
-    "banco": "Banqueta",
-    "rack": "Rack",
-    "painel": "Painel",
-    "estante": "Estante",
-    "guarda-roupa": "Guarda-roupa", 
-    "armário": "Armário",
-    "armario": "Armário",
-    "buffet": "Buffet",
-    "aparador": "Aparador",
-    "cômoda": "Cômoda",
-    "comoda": "Cômoda",
-    "escrivaninha": "Escrivaninha",
-    "criado-mudo": "Criado-mudo",
-    "cabeceira": "Cabeceira",
-    "cama": "Cama",
-}
-
+import shutil
+import subprocess
+from typing import List, Dict, Any, Tuple, Optional
+import tempfile
 
 def install_dependencies():
     """Instalar as dependências Python necessárias"""
-    dependencies = [
-        "pdf2image",
-        "paddlepaddle", 
-        "paddleocr",
-        "pillow",
-    ]
-    
     try:
-        import importlib.util
-        missing_deps = []
-        
-        for dep in dependencies:
-            try:
-                spec = importlib.util.find_spec(dep.replace('-', '_').split('==')[0])
-                if not spec:
-                    missing_deps.append(dep)
-            except ImportError:
-                missing_deps.append(dep)
-        
-        if missing_deps:
-            logger.info(f"Instalando dependências: {', '.join(missing_deps)}")
-            subprocess.check_call([sys.executable, "-m", "pip", "install"] + missing_deps)
-            logger.info("Todas as dependências instaladas com sucesso")
-        else:
-            logger.info("Todas as dependências já estão instaladas")
-            
-        return True
-    except Exception as e:
-        logger.error(f"Erro ao instalar dependências: {e}")
-        return False
-
+        # Tentar importar PaddleOCR para ver se já está instalado
+        import paddleocr
+        print("PaddleOCR já instalado")
+    except ImportError:
+        print("Instalando PaddleOCR e dependências...")
+        subprocess.check_call([
+            sys.executable, "-m", "pip", "install", 
+            "paddleocr", "pdf2image", "pillow", "numpy", "opencv-python-headless"
+        ])
+        print("Dependências instaladas com sucesso")
 
 def check_poppler():
     """Verificar se o poppler está instalado no sistema"""
     try:
-        result = subprocess.run(
-            ["pdftoppm", "-v"], 
-            stdout=subprocess.PIPE, 
-            stderr=subprocess.PIPE, 
-            check=False
-        )
-        return result.returncode == 0
-    except Exception:
+        # Verificar se o poppler-utils está instalado via shutil
+        if shutil.which("pdftoppm") is None:
+            print("Poppler não encontrado no sistema. Por favor, instale-o antes de continuar.")
+            print("Em sistemas baseados em Debian: sudo apt-get install poppler-utils")
+            print("Em sistemas baseados em Red Hat: sudo yum install poppler-utils")
+            print("Em MacOS: brew install poppler")
+            return False
+        return True
+    except Exception as e:
+        print(f"Erro ao verificar poppler: {e}")
         return False
-
 
 def convert_pdf_to_images(pdf_path: str, output_dir: Optional[str] = None) -> List[str]:
     """
@@ -139,64 +62,32 @@ def convert_pdf_to_images(pdf_path: str, output_dir: Optional[str] = None) -> Li
         Lista de caminhos para as imagens geradas
     """
     try:
-        # Importar aqui para garantir que foi instalado
         from pdf2image import convert_from_path
         
-        # Criar diretório temporário se não foi fornecido
         if output_dir is None:
             output_dir = tempfile.mkdtemp()
         
-        # Criar diretório se não existe
         os.makedirs(output_dir, exist_ok=True)
         
-        logger.info(f"Convertendo PDF para imagens no diretório: {output_dir}")
-        
-        # Obter o nome base do PDF
-        base_name = os.path.splitext(os.path.basename(pdf_path))[0]
-        
-        # Verificar se poppler está instalado
-        if not check_poppler():
-            logger.warning("Poppler não encontrado, os resultados podem ser limitados")
-        
-        # Converter PDF para imagens
+        print(f"Convertendo PDF: {pdf_path}")
         images = convert_from_path(
-            pdf_path,
-            dpi=300,
+            pdf_path, 
+            dpi=300, 
             output_folder=output_dir,
-            fmt="jpeg",
-            output_file=base_name,
-            paths_only=True,
-            use_pdftocairo=True
+            fmt="jpg"
         )
         
-        logger.info(f"Convertidas {len(images)} páginas do PDF para imagens")
-        return images
-    except Exception as e:
-        logger.error(f"Erro ao converter PDF para imagens: {e}")
+        image_paths = []
+        for i, image in enumerate(images):
+            image_path = os.path.join(output_dir, f"page_{i+1}.jpg")
+            image.save(image_path, "JPEG")
+            image_paths.append(image_path)
         
-        # Tentar método alternativo com pdftoppm diretamente
-        try:
-            logger.info("Tentando método alternativo com pdftoppm...")
-            
-            output_pattern = os.path.join(output_dir, f"{base_name}-%d.jpg")
-            subprocess.check_call([
-                'pdftoppm', '-jpeg', '-r', '300',
-                pdf_path, os.path.join(output_dir, base_name)
-            ])
-            
-            # Obter lista de imagens geradas
-            image_paths = sorted([
-                os.path.join(output_dir, f) 
-                for f in os.listdir(output_dir) 
-                if f.startswith(base_name) and f.endswith('.jpg')
-            ])
-            
-            logger.info(f"Método alternativo converteu {len(image_paths)} páginas")
-            return image_paths
-        except Exception as alt_err:
-            logger.error(f"Também falhou o método alternativo: {alt_err}")
-            return []
-
+        print(f"PDF convertido em {len(image_paths)} imagens")
+        return image_paths
+    except Exception as e:
+        print(f"Erro ao converter PDF para imagens: {e}")
+        raise
 
 def run_paddle_ocr(image_path: str, lang: str = "pt") -> List[Dict[str, Any]]:
     """
@@ -210,51 +101,69 @@ def run_paddle_ocr(image_path: str, lang: str = "pt") -> List[Dict[str, Any]]:
         Lista de resultados OCR com texto e caixas delimitadoras
     """
     try:
-        # Importar aqui para garantir que foi instalado
         from paddleocr import PaddleOCR
         
-        logger.info(f"Executando OCR na imagem: {image_path}")
-        
-        # Inicializar PaddleOCR
+        print(f"Executando OCR na imagem: {image_path}")
         ocr = PaddleOCR(use_angle_cls=True, lang=lang)
+        results = ocr.ocr(image_path, cls=True)
         
-        # Executar OCR
-        result = ocr.ocr(image_path, cls=True)
+        # Formatar resultados
+        formatted_results = []
+        for result in results[0]:
+            box = result[0]  # Pontos da caixa delimitadora: [[x1,y1], [x2,y2], [x3,y3], [x4,y4]]
+            text = result[1][0]  # Texto extraído
+            confidence = result[1][1]  # Confiança da extração
+            
+            # Encontrar o centro da caixa
+            center_x = sum(point[0] for point in box) / 4
+            center_y = sum(point[1] for point in box) / 4
+            
+            # Calcular largura e altura da caixa
+            width = max(point[0] for point in box) - min(point[0] for point in box)
+            height = max(point[1] for point in box) - min(point[1] for point in box)
+            
+            # Adicionar informações extraídas
+            formatted_result = {
+                "texto": text,
+                "confianca": confidence,
+                "posicao": {
+                    "centro_x": center_x,
+                    "centro_y": center_y,
+                    "largura": width,
+                    "altura": height
+                },
+                "box": box
+            }
+            
+            # Analisar o texto para extrair informações adicionais
+            is_price, price_value = is_price(text)
+            if is_price:
+                formatted_result["preco"] = price_value
+                formatted_result["é_preço"] = True
+            
+            if is_product_code(text):
+                formatted_result["é_código"] = True
+            
+            # Extrair cores, materiais e categorias
+            colors = extract_colors(text)
+            if colors:
+                formatted_result["cores"] = colors
+            
+            materials = extract_materials(text)
+            if materials:
+                formatted_result["materiais"] = materials
+            
+            category = identify_category(text)
+            if category:
+                formatted_result["categoria"] = category
+            
+            formatted_results.append(formatted_result)
         
-        # Processar resultados
-        ocr_results = []
-        
-        if result and result[0]:
-            for idx, line in enumerate(result[0]):
-                box = line[0]  # Coordenadas: [[x1,y1], [x2,y2], [x3,y3], [x4,y4]]
-                text = line[1][0]  # Conteúdo do texto
-                confidence = line[1][1]  # Pontuação de confiança
-                
-                # Calcular o ponto central da caixa delimitadora
-                center_x = sum(point[0] for point in box) / 4
-                center_y = sum(point[1] for point in box) / 4
-                
-                # Calcular dimensões da caixa
-                width = max(point[0] for point in box) - min(point[0] for point in box)
-                height = max(point[1] for point in box) - min(point[1] for point in box)
-                
-                ocr_results.append({
-                    'id': idx,
-                    'text': text,
-                    'confidence': confidence,
-                    'box': box,
-                    'center': [center_x, center_y],
-                    'width': width,
-                    'height': height,
-                    'area': width * height
-                })
-        
-        logger.info(f"OCR extraiu {len(ocr_results)} blocos de texto")
-        return ocr_results
+        print(f"OCR concluído. Extraídos {len(formatted_results)} blocos de texto.")
+        return formatted_results
     except Exception as e:
-        logger.error(f"Erro ao executar OCR na imagem: {e}")
-        return []
-
+        print(f"Erro ao executar PaddleOCR: {e}")
+        raise
 
 def is_price(text: str) -> Tuple[bool, Optional[float]]:
     """
@@ -263,94 +172,164 @@ def is_price(text: str) -> Tuple[bool, Optional[float]]:
     Returns:
         Tupla com (é_preço, valor_em_centavos)
     """
-    # Remover espaços extras e converter vírgula para ponto
-    clean_text = text.strip().replace(" ", "")
+    # Padrões de preço comuns:
+    # R$ 1.234,56
+    # 1.234,56
+    # R$1234,56
+    # 1234.56
     
-    # Tentar extrair com regex de preço em Real
-    price_match = re.search(r'R\$\s*([\d.,]+)', clean_text)
+    # Padronizar o texto
+    text = text.lower().strip()
+    
+    # Remover R$ e outros símbolos de moeda
+    text = re.sub(r'r\$|\$|€|£', '', text)
+    
+    # Procurar padrões numéricos com vírgula ou ponto
+    price_match = re.search(r'(\d{1,3}(?:\.\d{3})*(?:,\d{2})?|\d+[,.]\d{2}|\d+)', text)
+    
     if price_match:
-        price_str = price_match.group(1).replace(".", "").replace(",", ".")
+        price_str = price_match.group(1)
+        
+        # Converter para formato numérico
         try:
-            # Converter para float e depois para centavos (inteiro)
-            price_value = float(price_str)
-            return True, int(price_value * 100)
-        except ValueError:
-            pass
-    
-    # Tentar encontrar qualquer número que possa ser um preço
-    number_match = re.search(r'([\d,.]+)', clean_text)
-    if number_match:
-        num_str = number_match.group(1).replace(".", "").replace(",", ".")
-        try:
-            value = float(num_str)
-            # Se for um valor muito pequeno ou muito grande, provavelmente não é um preço
-            if 1 <= value <= 100000:
-                return True, int(value * 100)
-        except ValueError:
-            pass
+            # Tratar formato brasileiro (1.234,56)
+            if ',' in price_str:
+                price_str = price_str.replace('.', '')
+                price_str = price_str.replace(',', '.')
+            
+            price = float(price_str)
+            
+            # Verificar se tem características de preço (contexto)
+            price_indicators = ['reais', 'avista', 'a vista', 'preço', 'preco', 'valor', 'por', 'de', 'apenas']
+            has_indicator = any(indicator in text for indicator in price_indicators)
+            
+            # Usar heurísticas para identificar preços
+            # - Valores muito altos ou baixos para móveis são menos prováveis de serem preços
+            is_reasonable_price = 50 <= price <= 50000
+            
+            # Decisão final
+            if has_indicator or (is_reasonable_price and (len(text) < 20 or price_match.group(0) == text)):
+                return True, price
     
     return False, None
 
-
 def is_product_code(text: str) -> bool:
     """Verificar se o texto é provavelmente um código de produto"""
-    # Códigos geralmente têm formato específico
-    if re.search(r'\d+\.\d+\.\d+\.\d+', text):  # Formato 1.00020.01.0001
-        return True
+    text = text.strip()
     
-    # Códigos alfanuméricos
-    if re.search(r'^[A-Z0-9\-\.]{4,}$', text):
-        return True
+    # Padrões típicos de códigos de produtos
+    # Exemplo: ABC-123, REF.123456, COD: XYZ789
+    code_patterns = [
+        r'^[A-Z0-9-]{5,15}$',  # Padrão geral (letras, números e hífens)
+        r'^(ref|cod|código|codigo|cód|ref\.|cod\.)[\s:.]*[A-Z0-9-]+$',  # Prefixos comuns
+        r'^[A-Z]{2,5}[\s-]?\d{3,8}$'  # Letras seguidas de números
+    ]
     
-    # Códigos com prefixo
-    if re.search(r'(REF|COD|SKU)[:.]\s*([A-Z0-9\-\.]+)', text, re.IGNORECASE):
-        return True
-    
-    return False
-
+    return any(re.search(pattern, text, re.IGNORECASE) for pattern in code_patterns)
 
 def extract_colors(text: str) -> List[str]:
     """Extrair nomes de cores do texto"""
-    colors = []
-    text_lower = text.lower()
+    # Lista de cores comuns em português
+    common_colors = [
+        'preto', 'branco', 'cinza', 'vermelho', 'azul', 'verde', 'amarelo', 
+        'laranja', 'roxo', 'rosa', 'marrom', 'bege', 'dourado', 'prateado', 
+        'prata', 'bronze', 'creme', 'gelo', 'grafite', 'natural', 'violeta',
+        'caramelo', 'chocolate', 'ocre', 'turquesa', 'magenta', 'bordô'
+    ]
     
-    for color in COLOR_LIST:
-        if color in text_lower:
-            colors.append(color.capitalize())
+    # Padronizar texto
+    text = text.lower()
     
-    return colors
-
+    # Encontrar cores no texto
+    found_colors = []
+    for color in common_colors:
+        if re.search(r'\b' + color + r'\b', text):
+            found_colors.append(color)
+    
+    return found_colors
 
 def extract_materials(text: str) -> List[str]:
     """Extrair materiais do texto"""
-    materials = []
-    text_lower = text.lower()
+    # Lista de materiais comuns em móveis
+    common_materials = [
+        'madeira', 'pinus', 'mdf', 'melamina', 'mdp', 'couro', 'tecido', 'vidro', 
+        'metal', 'aço', 'alumínio', 'plástico', 'veludo', 'mármore', 'granito',
+        'laminado', 'inox', 'linho', 'algodão', 'sintético', 'pvc', 'napa', 'chenille',
+        'carvalho', 'pinheiro', 'nogal', 'cerejeira', 'jequitibá', 'cedro', 'imbuia',
+        'cobre', 'ferro', 'bronze', 'latão', 'borracha'
+    ]
     
-    for material in MATERIAL_LIST:
-        if material in text_lower:
-            materials.append(material.capitalize())
+    # Padronizar texto
+    text = text.lower()
     
-    return materials
-
+    # Encontrar materiais no texto
+    found_materials = []
+    for material in common_materials:
+        if re.search(r'\b' + material + r'\b', text):
+            found_materials.append(material)
+    
+    return found_materials
 
 def identify_category(text: str) -> Optional[str]:
     """Identificar categoria do produto a partir do texto"""
-    text_lower = text.lower()
+    # Mapeamento de palavras-chave para categorias
+    category_keywords = {
+        'sofá': 'Sofás',
+        'sofa': 'Sofás',
+        'poltrona': 'Poltronas',
+        'cadeira': 'Cadeiras',
+        'mesa': 'Mesas',
+        'rack': 'Racks e Estantes',
+        'estante': 'Racks e Estantes',
+        'prateleira': 'Racks e Estantes',
+        'armário': 'Armários',
+        'armario': 'Armários',
+        'cômoda': 'Cômodas',
+        'comoda': 'Cômodas',
+        'cama': 'Camas',
+        'colchão': 'Colchões',
+        'colchao': 'Colchões',
+        'guarda-roupa': 'Guarda-roupas',
+        'guarda roupa': 'Guarda-roupas',
+        'criado-mudo': 'Criados-mudos',
+        'criado mudo': 'Criados-mudos',
+        'escrivaninha': 'Escrivaninhas',
+        'estofado': 'Estofados',
+        'banco': 'Bancos',
+        'baú': 'Baús',
+        'bau': 'Baús',
+        'aparador': 'Aparadores',
+        'buffet': 'Buffets',
+        'luminária': 'Iluminação',
+        'luminaria': 'Iluminação',
+        'tapete': 'Tapetes',
+        'cortina': 'Cortinas',
+        'persiana': 'Persianas',
+        'espelho': 'Espelhos',
+        'quadro': 'Quadros e Painéis',
+        'painel': 'Quadros e Painéis',
+        'vaso': 'Decoração',
+        'decorativo': 'Decoração'
+    }
     
-    for keyword, category in CATEGORY_INDICATORS.items():
-        if keyword in text_lower:
+    # Padronizar texto
+    text = text.lower()
+    
+    # Procurar palavras-chave no texto
+    for keyword, category in category_keywords.items():
+        if keyword in text:
             return category
     
     return None
 
-
 def calculate_distance(box1: Dict[str, Any], box2: Dict[str, Any]) -> float:
     """Calcular distância entre dois blocos de texto"""
-    center1 = box1['center']
-    center2 = box2['center']
+    x1 = box1["posicao"]["centro_x"]
+    y1 = box1["posicao"]["centro_y"]
+    x2 = box2["posicao"]["centro_x"]
+    y2 = box2["posicao"]["centro_y"]
     
-    return math.sqrt((center1[0] - center2[0])**2 + (center1[1] - center2[1])**2)
-
+    return math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
 
 def group_text_blocks(ocr_results: List[Dict[str, Any]], max_distance: float = 100) -> List[List[Dict[str, Any]]]:
     """
@@ -366,34 +345,35 @@ def group_text_blocks(ocr_results: List[Dict[str, Any]], max_distance: float = 1
     if not ocr_results:
         return []
     
-    # Ordenar por coordenada Y (de cima para baixo)
-    sorted_blocks = sorted(ocr_results, key=lambda x: x['center'][1])
-    
+    # Cópia dos resultados para não modificar o original
+    blocks = ocr_results.copy()
     groups = []
-    current_group = [sorted_blocks[0]]
     
-    for i in range(1, len(sorted_blocks)):
-        current_block = sorted_blocks[i]
-        prev_block = current_group[-1]
+    while blocks:
+        # Pegar o primeiro bloco
+        current_group = [blocks.pop(0)]
         
-        # Se o bloco atual está próximo do anterior, adicionar ao grupo atual
-        if abs(current_block['center'][1] - prev_block['center'][1]) < max_distance:
-            current_group.append(current_block)
-        else:
-            # Caso contrário, começar um novo grupo
-            groups.append(current_group)
-            current_group = [current_block]
-    
-    # Adicionar o último grupo
-    if current_group:
+        # Flag para controlar se ainda estamos encontrando blocos próximos
+        found = True
+        
+        while found:
+            found = False
+            
+            # Verificar blocos restantes
+            i = 0
+            while i < len(blocks):
+                # Verificar se o bloco atual está próximo de qualquer bloco no grupo atual
+                if any(calculate_distance(block, blocks[i]) <= max_distance for block in current_group):
+                    # Adicionar ao grupo atual
+                    current_group.append(blocks.pop(i))
+                    found = True
+                else:
+                    i += 1
+        
+        # Adicionar grupo completo
         groups.append(current_group)
     
-    # Ordenar blocos dentro de cada grupo por coordenada X (da esquerda para direita)
-    for group in groups:
-        group.sort(key=lambda x: x['center'][0])
-    
     return groups
-
 
 def cluster_blocks_into_products(ocr_results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
@@ -405,54 +385,48 @@ def cluster_blocks_into_products(ocr_results: List[Dict[str, Any]]) -> List[Dict
     Returns:
         Lista de produtos extraídos
     """
-    # Passo 1: Identificar títulos de produtos (geralmente texto grande ou em negrito)
-    potential_titles = []
+    # Agrupar blocos por proximidade
+    groups = group_text_blocks(ocr_results, max_distance=150)
     
-    # Ordenar blocos por tamanho (área) de modo decrescente
-    sorted_by_area = sorted(ocr_results, key=lambda x: x['area'], reverse=True)
-    
-    # Os 20% maiores blocos de texto são candidatos a títulos
-    title_candidates = sorted_by_area[:max(1, int(len(sorted_by_area) * 0.2))]
-    
-    # Verificar quais blocos contêm nomes de categorias (ex: "Cadeira", "Mesa")
-    for block in ocr_results:
-        text = block['text'].strip()
-        
-        # Se o bloco é um dos maiores ou contém palavra-chave de categoria
-        if (block in title_candidates or identify_category(text)) and len(text) > 3:
-            potential_titles.append(block)
-    
-    # Se não encontrou títulos, usar divisão por linhas
-    if not potential_titles:
-        logger.info("Nenhum título de produto identificado, usando agrupamento por linhas")
-        return extract_products_by_lines(ocr_results)
-    
-    # Passo 2: Para cada título, encontrar blocos de texto relacionados
     products = []
     
-    # Ordenar títulos por posição Y (de cima para baixo)
-    potential_titles.sort(key=lambda x: x['center'][1])
-    
-    for i, title_block in enumerate(potential_titles):
-        # Definir a região do produto (até o próximo título ou final da página)
-        y_min = title_block['center'][1]
-        y_max = float('inf')
+    for group in groups:
+        # Verificar se este grupo pode ser um produto
+        # Procurar componentes importantes: nome, preço, código
         
-        if i < len(potential_titles) - 1:
-            y_max = potential_titles[i + 1]['center'][1]
+        # Tentar identificar o título/nome do produto
+        title_candidates = []
         
-        # Coletar todos os blocos de texto nesta região
-        product_blocks = [
-            block for block in ocr_results 
-            if y_min <= block['center'][1] < y_max
-        ]
+        for block in group:
+            # Blocos que não são códigos ou preços e têm tamanho de fonte maior
+            if (not block.get("é_código", False) and 
+                not block.get("é_preço", False) and 
+                len(block["texto"]) > 3):
+                
+                # Calcular pontuação heurística:
+                # - Mais alta = mais provável de ser título
+                # - Fatores: altura do texto, comprimento do texto, posição vertical (mais alto = mais importante)
+                font_size_score = block["posicao"]["altura"] * 2
+                text_length_score = min(len(block["texto"]) / 5, 10)  # Limitar influência do comprimento
+                vertical_pos_score = max(0, 800 - block["posicao"]["centro_y"]) / 200
+                
+                score = font_size_score + text_length_score + vertical_pos_score
+                
+                title_candidates.append((block, score))
         
-        # Criar o produto
-        product = extract_product_from_blocks(product_blocks, title_block['text'])
-        products.append(product)
+        # Ordenar candidatos pela pontuação
+        title_candidates.sort(key=lambda x: x[1], reverse=True)
+        
+        if title_candidates:
+            # Usar o texto do candidato com maior pontuação como título
+            title_block = title_candidates[0][0]
+            title_text = title_block["texto"]
+            
+            # Extrair produto usando o título identificado
+            product = extract_product_from_blocks(group, title_text)
+            products.append(product)
     
     return products
-
 
 def extract_products_by_lines(ocr_results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
@@ -464,68 +438,68 @@ def extract_products_by_lines(ocr_results: List[Dict[str, Any]]) -> List[Dict[st
     Returns:
         Lista de produtos extraídos
     """
-    # Agrupar por proximidade vertical
-    line_groups = group_text_blocks(ocr_results)
+    if not ocr_results:
+        return []
     
-    # Processar cada grupo como uma linha de informação
+    # Ordenar blocos por coordenada Y (vertical)
+    blocks_by_y = sorted(ocr_results, key=lambda x: x["posicao"]["centro_y"])
+    
+    # Agrupar blocos em linhas
+    line_height_threshold = 30  # Altura máxima para considerar na mesma linha
+    lines = []
+    current_line = [blocks_by_y[0]]
+    current_y = blocks_by_y[0]["posicao"]["centro_y"]
+    
+    for block in blocks_by_y[1:]:
+        if abs(block["posicao"]["centro_y"] - current_y) <= line_height_threshold:
+            # Mesmo nível (mesma linha)
+            current_line.append(block)
+        else:
+            # Nova linha
+            lines.append(current_line)
+            current_line = [block]
+            current_y = block["posicao"]["centro_y"]
+    
+    # Adicionar última linha
+    if current_line:
+        lines.append(current_line)
+    
+    # Para cada linha, ordene os blocos da esquerda para a direita
+    for i in range(len(lines)):
+        lines[i] = sorted(lines[i], key=lambda x: x["posicao"]["centro_x"])
+    
+    # Analisar linhas para encontrar produtos
     products = []
-    current_product = None
     
-    for line in line_groups:
-        # Concatenar textos da linha
-        line_text = " ".join([block['text'] for block in line])
-        
-        # Verificar se é um título de produto (início de um novo produto)
-        category = identify_category(line_text)
-        
-        if category or (len(line_text) > 3 and line_text[0].isupper()):
-            # Se já temos um produto em processamento, salvar ele
-            if current_product and current_product['nome']:
-                products.append(current_product)
+    # Cada produto tipicamente ocupa 2-4 linhas consecutivas
+    i = 0
+    while i < len(lines):
+        # Verificar se a linha atual pode ser título de produto
+        if i < len(lines) and any(len(block["texto"]) > 3 for block in lines[i]):
+            # Considerar 3 linhas seguintes como parte do mesmo produto
+            product_lines = [lines[i]]
             
-            # Iniciar um novo produto
-            current_product = {
-                'nome': line_text,
-                'descricao': "",
-                'codigo_comercial': [],
-                'cores': [],
-                'preco': "",
-                'pagina': 1,
-                'categoria': category or ""
-            }
-        elif current_product:
-            # Processar informações adicionais para o produto atual
+            for j in range(1, 4):
+                if i + j < len(lines):
+                    product_lines.append(lines[i + j])
             
-            # Verificar se é um código
-            if is_product_code(line_text) and not any(code == line_text for code in current_product['codigo_comercial']):
-                current_product['codigo_comercial'].append(line_text)
+            # Achatando a lista de blocos
+            product_blocks = [block for line in product_lines for block in line]
             
-            # Verificar se é um preço
-            is_price_val, price_cents = is_price(line_text)
-            if is_price_val and price_cents and not current_product['preco']:
-                # Formatar como R$ XXX,XX
-                price_reais = price_cents / 100
-                current_product['preco'] = f"R$ {price_reais:.2f}".replace('.', ',')
+            # Usar o primeiro texto longo na primeira linha como título
+            title_candidates = [block["texto"] for block in lines[i] if len(block["texto"]) > 3]
+            title_text = title_candidates[0] if title_candidates else "Produto"
             
-            # Extrair cores
-            colors = extract_colors(line_text)
-            for color in colors:
-                if color not in current_product['cores']:
-                    current_product['cores'].append(color)
+            # Extrair produto
+            product = extract_product_from_blocks(product_blocks, title_text)
+            products.append(product)
             
-            # Se não foi classificado como outra coisa, adicionar à descrição
-            if not is_price_val and not is_product_code(line_text) and not colors:
-                if current_product['descricao']:
-                    current_product['descricao'] += " " + line_text
-                else:
-                    current_product['descricao'] = line_text
-    
-    # Não esquecer de adicionar o último produto
-    if current_product and current_product['nome']:
-        products.append(current_product)
+            # Avançar
+            i += len(product_lines)
+        else:
+            i += 1
     
     return products
-
 
 def extract_product_from_blocks(blocks: List[Dict[str, Any]], title_text: str) -> Dict[str, Any]:
     """
@@ -539,55 +513,61 @@ def extract_product_from_blocks(blocks: List[Dict[str, Any]], title_text: str) -
         Dicionário com informações do produto
     """
     product = {
-        'nome': title_text,
-        'descricao': "",
-        'codigo_comercial': [],
-        'cores': [],
-        'preco': "",
-        'pagina': 1,
-        'categoria': identify_category(title_text) or ""
+        "nome": title_text,
+        "descricao": "",
+        "codigo": [],
+        "preco": "",
+        "cores": [],
+        "materiais": []
     }
     
-    # Ordenar blocos por posição Y
-    blocks.sort(key=lambda x: x['center'][1])
+    # Textos descritivos (excluindo o título)
+    description_parts = []
     
-    # Processar cada bloco
+    # Coletar informações de todos os blocos
     for block in blocks:
-        text = block['text'].strip()
+        text = block["texto"]
         
-        # Pular o bloco do título, já foi processado
+        # Ignorar o texto do título
         if text == title_text:
             continue
         
-        # Verificar se é um código
-        if is_product_code(text) and not any(code == text for code in product['codigo_comercial']):
-            product['codigo_comercial'].append(text)
-            continue
+        # Verificar preço
+        if block.get("é_preço", False) and block.get("preco") and not product["preco"]:
+            product["preco"] = block.get("preco")
         
-        # Verificar se é um preço
-        is_price_val, price_cents = is_price(text)
-        if is_price_val and price_cents and not product['preco']:
-            # Formatar como R$ XXX,XX
-            price_reais = price_cents / 100
-            product['preco'] = f"R$ {price_reais:.2f}".replace('.', ',')
-            continue
+        # Verificar código
+        if block.get("é_código", False):
+            product["codigo"].append(text)
         
-        # Extrair cores
-        colors = extract_colors(text)
-        if colors:
-            for color in colors:
-                if color not in product['cores']:
-                    product['cores'].append(color)
-            continue
+        # Coletar cores
+        if "cores" in block:
+            for color in block["cores"]:
+                if color not in product["cores"]:
+                    product["cores"].append(color)
         
-        # Se não foi classificado como outra coisa, adicionar à descrição
-        if product['descricao']:
-            product['descricao'] += " " + text
-        else:
-            product['descricao'] = text
+        # Coletar materiais
+        if "materiais" in block:
+            for material in block["materiais"]:
+                if material not in product["materiais"]:
+                    product["materiais"].append(material)
+        
+        # Verificar categoria
+        if "categoria" in block and not product.get("categoria"):
+            product["categoria"] = block["categoria"]
+        
+        # Adicionar à descrição
+        if len(text) > 3 and text != title_text:
+            description_parts.append(text)
+    
+    # Compilar descrição
+    product["descricao"] = " | ".join(description_parts)
+    
+    # Ajustes finais
+    if not product["codigo"]:
+        product["codigo"] = ["UNKNOWN-CODE"]
     
     return product
-
 
 def process_image_for_products(image_path: str, page_number: int = 1, lang: str = "pt") -> List[Dict[str, Any]]:
     """
@@ -601,37 +581,24 @@ def process_image_for_products(image_path: str, page_number: int = 1, lang: str 
     Returns:
         Lista de produtos extraídos
     """
-    # Executar OCR na imagem
-    ocr_results = run_paddle_ocr(image_path, lang)
+    # Executar OCR
+    ocr_results = run_paddle_ocr(image_path, lang=lang)
     
-    if not ocr_results:
-        logger.warning(f"Nenhum texto extraído da imagem: {image_path}")
-        return []
+    # Tentar dois métodos de extração e escolher o melhor resultado
+    # Método 1: Clustering baseado em distância
+    products1 = cluster_blocks_into_products(ocr_results)
     
-    # Agrupar blocos de texto em produtos
-    products = cluster_blocks_into_products(ocr_results)
+    # Método 2: Agrupamento por linhas
+    products2 = extract_products_by_lines(ocr_results)
     
-    # Se não encontrou produtos, tentar método alternativo
-    if not products:
-        logger.info("Tentando método alternativo de extração...")
-        products = extract_products_by_lines(ocr_results)
+    # Escolher o método que extraiu mais produtos
+    products = products1 if len(products1) >= len(products2) else products2
     
-    # Adicionar número da página e URL da imagem
+    # Adicionar número da página
     for product in products:
-        product['pagina'] = page_number
-        
-        # Converter a imagem para base64
-        try:
-            with open(image_path, "rb") as img_file:
-                img_data = base64.b64encode(img_file.read()).decode('utf-8')
-                product['imagem'] = f"data:image/jpeg;base64,{img_data}"
-        except Exception as e:
-            logger.error(f"Erro ao converter imagem para base64: {e}")
-            product['imagem'] = ""
+        product["page"] = page_number
     
-    logger.info(f"Extraídos {len(products)} produtos da página {page_number}")
     return products
-
 
 def process_pdf_with_paddle_ocr(pdf_path: str, output_json_path: Optional[str] = None, lang: str = "pt") -> str:
     """
@@ -645,69 +612,69 @@ def process_pdf_with_paddle_ocr(pdf_path: str, output_json_path: Optional[str] =
     Returns:
         Caminho para o arquivo JSON de saída
     """
-    try:
-        logger.info(f"Iniciando processamento do PDF: {pdf_path}")
-        
-        # Instalar dependências se necessário
-        install_dependencies()
-        
-        # Criar diretório temporário para imagens
-        temp_dir = tempfile.mkdtemp()
-        logger.info(f"Diretório temporário criado: {temp_dir}")
-        
-        # Converter PDF para imagens
-        image_paths = convert_pdf_to_images(pdf_path, temp_dir)
-        
-        if not image_paths:
-            raise Exception("Falha ao converter PDF para imagens")
-        
-        logger.info(f"PDF convertido em {len(image_paths)} imagens")
-        
-        # Processar cada imagem para extrair produtos
-        all_products = []
-        
-        for i, image_path in enumerate(image_paths):
-            logger.info(f"Processando página {i+1}/{len(image_paths)}")
+    # Instalar dependências se necessário
+    install_dependencies()
+    
+    # Verificar poppler
+    if not check_poppler():
+        raise RuntimeError("Poppler não está instalado. Instale-o antes de prosseguir.")
+    
+    # Criar diretório temporário para armazenar imagens
+    with tempfile.TemporaryDirectory() as temp_dir:
+        try:
+            # Converter PDF para imagens
+            image_paths = convert_pdf_to_images(pdf_path, temp_dir)
             
-            # Extrair produtos da imagem
-            products = process_image_for_products(image_path, i+1, lang)
-            all_products.extend(products)
-        
-        # Definir caminho de saída
-        if output_json_path is None:
-            output_json_path = os.path.join(
-                os.path.dirname(pdf_path),
-                f"{os.path.splitext(os.path.basename(pdf_path))[0]}_products.json"
-            )
-        
-        # Salvar resultados em JSON
-        with open(output_json_path, 'w', encoding='utf-8') as f:
-            json.dump(all_products, f, ensure_ascii=False, indent=2)
-        
-        logger.info(f"Extraídos {len(all_products)} produtos no total")
-        logger.info(f"Resultados salvos em: {output_json_path}")
-        
-        return output_json_path
-    except Exception as e:
-        logger.error(f"Erro ao processar PDF: {e}")
-        
-        # Criar JSON vazio em caso de erro
-        if output_json_path:
-            with open(output_json_path, 'w', encoding='utf-8') as f:
-                json.dump([], f)
+            if not image_paths:
+                raise ValueError(f"Não foi possível converter o PDF: {pdf_path}")
             
-            logger.info(f"Arquivo JSON vazio criado em: {output_json_path}")
-            return output_json_path
-        
-        return ""
-
+            # Processar cada imagem
+            all_products = []
+            
+            for i, image_path in enumerate(image_paths):
+                page_number = i + 1
+                print(f"Processando página {page_number}...")
+                
+                # Extrair produtos da imagem
+                products = process_image_for_products(image_path, page_number, lang)
+                
+                print(f"Extraídos {len(products)} produtos da página {page_number}")
+                all_products.extend(products)
+        except Exception as e:
+            print(f"Erro ao processar PDF: {e}")
+            # Se for um caminho de imagem direto, tentar processar como imagem
+            if os.path.isfile(pdf_path) and pdf_path.lower().endswith((".jpg", ".jpeg", ".png")):
+                print("Tentando processar como imagem...")
+                all_products = process_image_for_products(pdf_path, 1, lang)
+            else:
+                raise
+    
+    # Determinar caminho de saída
+    if output_json_path is None:
+        base_name = os.path.splitext(os.path.basename(pdf_path))[0]
+        output_json_path = f"{base_name}_products.json"
+    
+    # Salvar resultados em JSON
+    with open(output_json_path, 'w', encoding='utf-8') as f:
+        json.dump(all_products, f, ensure_ascii=False, indent=2)
+    
+    print(f"Processamento concluído. Total de {len(all_products)} produtos extraídos.")
+    print(f"Resultados salvos em: {output_json_path}")
+    
+    return output_json_path
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Extrator de produtos de PDFs com PaddleOCR")
-    parser.add_argument("pdf_path", help="Caminho para o arquivo PDF")
-    parser.add_argument("output_json_path", nargs="?", help="Caminho para salvar o JSON de saída (opcional)")
-    parser.add_argument("--lang", default="pt", help="Código do idioma para OCR (padrão: pt)")
+    # Verificar argumentos
+    if len(sys.argv) < 2:
+        print("Uso: python paddle_ocr_extractor.py <caminho_do_pdf> [caminho_do_json_saida]")
+        sys.exit(1)
     
-    args = parser.parse_args()
+    pdf_path = sys.argv[1]
+    output_json_path = sys.argv[2] if len(sys.argv) > 2 else None
     
-    process_pdf_with_paddle_ocr(args.pdf_path, args.output_json_path, args.lang) 
+    try:
+        result_path = process_pdf_with_paddle_ocr(pdf_path, output_json_path)
+        sys.exit(0)
+    except Exception as e:
+        print(f"Erro: {e}")
+        sys.exit(1)

@@ -1,27 +1,110 @@
-import { promisify } from 'util';
-import fs from 'fs';
-import path from 'path';
-import { exec } from 'child_process';
+/**
+ * Pipeline completo para processamento automático de catálogos PDF
+ * Combina PDF2Image, PaddleOCR e GPT-4o/Claude para extrair produtos
+ */
+
+import * as fs from 'fs';
+import * as path from 'path';
 import { generateImagesFromPdf } from './alternative-pdf-processor';
-import { saveCatalogToFirestore, saveProductsToFirestore, updateCatalogStatusInFirestore } from './firebase-admin';
 import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
+import { exec } from 'child_process';
+import { promisify } from 'util';
 
-// Promisified functions
-const readFile = promisify(fs.readFile);
-const writeFile = promisify(fs.writeFile);
-const mkdir = promisify(fs.mkdir);
-const execPromise = promisify(exec);
+// Função para extrair dimensões de uma string "LxAxP"
+function extractDimensionsFromString(dimensionString: string): any | null {
+  // Padrões comuns para dimensões: 
+  // - 100x50x30 (LxAxP)
+  // - L: 100 x A: 50 x P: 30
+  // - largura 100 altura 50 profundidade 30
+  
+  try {
+    // Limpar string
+    const cleanString = dimensionString.toLowerCase().trim();
+    
+    // Padrão simples: 000x000x000
+    const simplePattern = /(\d+)[^\d]*x[^\d]*(\d+)[^\d]*x[^\d]*(\d+)/;
+    const simpleMatch = cleanString.match(simplePattern);
+    
+    if (simpleMatch) {
+      return {
+        width: parseInt(simpleMatch[1]),
+        height: parseInt(simpleMatch[2]),
+        depth: parseInt(simpleMatch[3])
+      };
+    }
+    
+    // Padrão com letras: L 000 x A 000 x P 000
+    const labeledPattern = /l[^\d]*(\d+)[^\d]*a[^\d]*(\d+)[^\d]*p[^\d]*(\d+)/;
+    const labeledMatch = cleanString.match(labeledPattern);
+    
+    if (labeledMatch) {
+      return {
+        width: parseInt(labeledMatch[1]),
+        height: parseInt(labeledMatch[2]),
+        depth: parseInt(labeledMatch[3])
+      };
+    }
+    
+    // Palavras-chave
+    const hasDimensions = cleanString.includes('cm') || 
+                         cleanString.includes('largura') || 
+                         cleanString.includes('altura') || 
+                         cleanString.includes('profundidade');
+    
+    if (hasDimensions) {
+      const width = extractNumberAfterKeyword(cleanString, ['largura', 'larg', 'l:']);
+      const height = extractNumberAfterKeyword(cleanString, ['altura', 'alt', 'a:']);
+      const depth = extractNumberAfterKeyword(cleanString, ['profundidade', 'prof', 'p:']);
+      
+      if (width || height || depth) {
+        return {
+          width,
+          height,
+          depth
+        };
+      }
+    }
+    
+    return null;
+  } catch (error) {
+    console.error("Erro ao extrair dimensões:", error);
+    return null;
+  }
+}
 
-// Configurar APIs de IA
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+function extractNumberAfterKeyword(text: string, keywords: string[]): number | null {
+  for (const keyword of keywords) {
+    const regex = new RegExp(keyword + '[^\\d]*(\\d+)', 'i');
+    const match = text.match(regex);
+    
+    if (match) {
+      return parseInt(match[1]);
+    }
+  }
+  
+  return null;
+}
+
+// Inicializar OpenAI API
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
+// Inicializar Anthropic API
+// the newest Anthropic model is "claude-3-7-sonnet-20250219" which was released February 24, 2025
+const anthropic = new Anthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY,
+});
+
+const execAsync = promisify(exec);
 
 /**
  * Pipeline completo para processamento automático de catálogos PDF
  * Combina PDF2Image, PaddleOCR e GPT-4o/Claude para extrair produtos
  * 
  * @param filePath Caminho do arquivo PDF do catálogo
+ * @param fileName Nome do arquivo do catálogo
  * @param userId ID do usuário
  * @param catalogId ID do catálogo no banco local
  * @returns Array de produtos extraídos e processados
@@ -29,143 +112,133 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 export async function processCatalogWithAutomatedPipeline(
   filePath: string, 
   fileName: string,
-  userId: number | string, 
+  userId: number,
   catalogId: number
 ): Promise<any[]> {
+  console.log("Iniciando pipeline automatizado de processamento de catálogo");
+  console.log(`Arquivo: ${filePath}`);
+
+  // Definir diretório temporário para armazenar imagens e arquivos intermediários
+  const tempDir = path.join(process.cwd(), 'uploads', 'temp', `catalog_${Date.now()}`);
+  fs.mkdirSync(tempDir, { recursive: true });
+
   try {
-    console.log(`[PDF-AI-Pipeline] Iniciando processamento do catálogo: ${fileName}`);
-    
-    // 1. Salvar catálogo no Firestore
-    console.log(`[PDF-AI-Pipeline] Salvando catálogo no Firestore`);
-    const firestoreCatalogId = await saveCatalogToFirestore({
-      fileName,
-      userId: userId.toString(),
-      processedStatus: "processing",
-      fileUrl: filePath
-    }, userId);
-    
-    // 2. Converter PDF para imagens
-    console.log(`[PDF-AI-Pipeline] Convertendo PDF para imagens`);
-    const imageBuffers = await generateImagesFromPdf(filePath, { 
+    // Passo 1: Converter PDF para imagens
+    console.log("Passo 1: Convertendo PDF para imagens...");
+    const pdfImages = await generateImagesFromPdf(filePath, {
       width: 1600,
-      height: 2200
+      height: 2000,
+      pagesToProcess: null // Processar todas as páginas
     });
+
+    console.log(`Geradas ${pdfImages.length} imagens a partir do PDF`);
     
-    // Criar diretório para salvar as imagens temporárias
-    const tempDir = path.join(process.cwd(), 'uploads', 'temp');
-    await mkdir(tempDir, { recursive: true });
-    
-    // Salvar imagens em arquivos temporários
-    console.log(`[PDF-AI-Pipeline] Salvando ${imageBuffers.length} imagens temporárias`);
-    const imagePaths: string[] = [];
-    for (let i = 0; i < imageBuffers.length; i++) {
-      const imagePath = path.join(tempDir, `page_${i + 1}.jpg`);
-      await writeFile(imagePath, imageBuffers[i]);
-      imagePaths.push(imagePath);
+    // Salvar imagens para processamento
+    const imageFiles = [];
+    for (let i = 0; i < pdfImages.length; i++) {
+      const outputPath = path.join(tempDir, `page_${i + 1}.jpg`);
+      fs.writeFileSync(outputPath, pdfImages[i]);
+      imageFiles.push({
+        page: i + 1,
+        path: outputPath
+      });
     }
+
+    // Passo 2: Executar PaddleOCR nas imagens para extrair texto e posições
+    console.log("Passo 2: Executando PaddleOCR para extrair texto...");
+    // Primeiro, verificar se o script Python está disponível
+    const pythonScriptPath = path.join(process.cwd(), 'server', 'paddle_ocr_extractor.py');
     
-    // 3. Executar PaddleOCR em cada imagem
-    console.log(`[PDF-AI-Pipeline] Executando PaddleOCR nas imagens`);
-    const extractedTextsByPage: any[] = [];
-    
-    for (let i = 0; i < imagePaths.length; i++) {
-      try {
-        // Chamar o script Python para executar PaddleOCR
-        const pythonScript = path.join(process.cwd(), 'server', 'paddle_ocr_extractor.py');
-        const { stdout } = await execPromise(`python ${pythonScript} "${imagePaths[i]}" --output-format json`);
-        
-        // Processar resultado do OCR
-        const ocrResults = JSON.parse(stdout);
-        extractedTextsByPage.push({
-          page: i + 1,
-          ocrResults,
-          imagePath: imagePaths[i]
-        });
-      } catch (error) {
-        console.error(`[PDF-AI-Pipeline] Erro ao executar OCR na página ${i + 1}:`, error);
-      }
+    if (!fs.existsSync(pythonScriptPath)) {
+      throw new Error("Script PaddleOCR não encontrado: " + pythonScriptPath);
     }
+
+    // Percorrer primeiras 5 páginas para análise (para limitar o tempo de processamento)
+    const pagesToProcess = Math.min(imageFiles.length, 5);
+    const allPageResults = [];
     
-    // 4. Processar os resultados OCR com IA (GPT-4o ou Claude)
-    console.log(`[PDF-AI-Pipeline] Processando resultados OCR com IA`);
-    const products: any[] = [];
-    
-    // Determinar se é um catálogo Fratini
-    const isFratiniCatalog = fileName.toLowerCase().includes("fratini");
-    
-    for (let i = 0; i < extractedTextsByPage.length; i++) {
-      const pageData = extractedTextsByPage[i];
+    for (let i = 0; i < pagesToProcess; i++) {
+      const imagePath = imageFiles[i].path;
+      const pageNum = imageFiles[i].page;
+      console.log(`Processando imagem ${i+1}/${pagesToProcess} (página ${pageNum})...`);
       
+      const outputJsonPath = path.join(tempDir, `page_${pageNum}_ocr.json`);
+      
+      // Executar script Python para OCR
       try {
-        const pageProducts = await processOcrResultsWithAI(
-          pageData.ocrResults,
-          pageData.imagePath,
-          pageData.page,
-          isFratiniCatalog
+        const { stdout, stderr } = await execAsync(
+          `python ${pythonScriptPath} ${imagePath} ${outputJsonPath}`
         );
         
-        products.push(...pageProducts);
-      } catch (aiError) {
-        console.error(`[PDF-AI-Pipeline] Erro ao processar página ${pageData.page} com IA:`, aiError);
-        
-        // Tentar com modelo alternativo se o primário falhar
-        try {
-          console.log(`[PDF-AI-Pipeline] Tentando processar com modelo alternativo`);
-          const pageProducts = await processOcrResultsWithAlternativeAI(
-            pageData.ocrResults,
-            pageData.imagePath,
-            pageData.page,
-            isFratiniCatalog
-          );
-          
-          products.push(...pageProducts);
-        } catch (alternativeAiError) {
-          console.error(`[PDF-AI-Pipeline] Modelo alternativo também falhou:`, alternativeAiError);
+        if (stderr && !stderr.includes('Loaded') && !stderr.includes('Warning')) {
+          console.warn("Avisos do OCR:", stderr);
         }
+        
+        // Verificar se o arquivo JSON foi criado
+        if (fs.existsSync(outputJsonPath)) {
+          const ocrResults = JSON.parse(fs.readFileSync(outputJsonPath, 'utf8'));
+          
+          // Adicionar resultados da página
+          allPageResults.push({
+            page: pageNum,
+            imagePath,
+            ocrResults
+          });
+          
+          console.log(`OCR extraiu ${ocrResults.length} produtos da página ${pageNum}`);
+        } else {
+          console.warn(`OCR não gerou resultados para a página ${pageNum}`);
+        }
+      } catch (ocrError: any) {
+        console.error(`Erro ao executar OCR na página ${pageNum}:`, ocrError);
       }
     }
     
-    // 5. Processar produtos e salvar no Firestore
-    if (products.length === 0) {
-      throw new Error(`Nenhum produto foi extraído do catálogo. Verifique se o formato do PDF é compatível.`);
-    }
+    // Passo 3: Processar resultados OCR com IA para estruturar produtos
+    console.log("Passo 3: Processando resultados OCR com IA...");
     
-    console.log(`[PDF-AI-Pipeline] Extraídos ${products.length} produtos`);
-    
-    // Adicionar IDs e metadados aos produtos
-    const processedProducts = products.map(product => ({
-      ...product,
-      userId: userId.toString(),
-      catalogId: firestoreCatalogId
-    }));
-    
-    // Salvar produtos no Firestore
-    console.log(`[PDF-AI-Pipeline] Salvando produtos no Firestore`);
-    await saveProductsToFirestore(processedProducts, userId, firestoreCatalogId);
-    
-    // Atualizar status do catálogo
-    console.log(`[PDF-AI-Pipeline] Atualizando status do catálogo para completado`);
-    await updateCatalogStatusInFirestore(
-      userId,
-      firestoreCatalogId,
-      "completed",
-      processedProducts.length
-    );
-    
-    // 6. Limpar arquivos temporários
-    console.log(`[PDF-AI-Pipeline] Limpando arquivos temporários`);
-    for (const imagePath of imagePaths) {
+    // Tentar primeiro com OpenAI GPT-4o
+    try {
+      const products = await processOcrResultsWithAI(allPageResults, fileName, userId, catalogId);
+      
+      if (products && products.length > 0) {
+        console.log(`GPT-4o extraiu ${products.length} produtos do catálogo`);
+        return products;
+      } else {
+        throw new Error("Nenhum produto extraído com GPT-4o");
+      }
+    } catch (openaiError: any) {
+      console.error("Erro no processamento com GPT-4o:", openaiError);
+      console.log("Tentando com Claude como alternativa...");
+      
+      // Tentar com Claude como alternativa
       try {
-        fs.unlinkSync(imagePath);
-      } catch (error) {
-        console.error(`[PDF-AI-Pipeline] Erro ao excluir arquivo temporário:`, error);
+        const products = await processOcrResultsWithAlternativeAI(allPageResults, fileName, userId, catalogId);
+        
+        if (products && products.length > 0) {
+          console.log(`Claude extraiu ${products.length} produtos do catálogo`);
+          return products;
+        } else {
+          throw new Error("Nenhum produto extraído com Claude");
+        }
+      } catch (claudeError: any) {
+        console.error("Erro no processamento com Claude:", claudeError);
+        throw new Error("Falha em extrair produtos usando ambos modelos de IA");
       }
     }
     
-    return processedProducts;
-  } catch (error) {
-    console.error(`[PDF-AI-Pipeline] Erro crítico no pipeline:`, error);
+  } catch (error: any) {
+    console.error("Erro no pipeline de processamento de catálogo:", error);
     throw error;
+  } finally {
+    // Limpar diretório temporário após o processamento
+    try {
+      // Comentado por enquanto para depuração
+      // fs.rmSync(tempDir, { recursive: true, force: true });
+      console.log(`Arquivos temporários mantidos em: ${tempDir}`);
+    } catch (cleanupError: any) {
+      console.error("Erro ao limpar diretório temporário:", cleanupError);
+    }
   }
 }
 
@@ -173,236 +246,407 @@ export async function processCatalogWithAutomatedPipeline(
  * Processa resultados OCR com OpenAI GPT-4o
  */
 async function processOcrResultsWithAI(
-  ocrResults: any,
-  imagePath: string,
-  pageNumber: number,
-  isFratiniCatalog: boolean
+  pageResults: Array<{page: number, imagePath: string, ocrResults: any[]}>,
+  fileName: string,
+  userId: number,
+  catalogId: number
 ): Promise<any[]> {
-  try {
-    // Ler a imagem como base64
-    const imageBuffer = await readFile(imagePath);
-    const base64Image = imageBuffer.toString('base64');
-    
-    // Preparar contexto OCR para enviar ao GPT-4
-    const textBlocks = ocrResults.map((item: any) => item.text || '').join("\\n");
-    
-    // Definir prompt baseado no tipo de catálogo
-    const systemPrompt = isFratiniCatalog 
-      ? `Você é um especialista na extração de informações de produtos de catálogos de móveis da marca Fratini.
-         Analise o texto extraído via OCR e a imagem do catálogo para identificar todos os produtos presentes.
-         
-         Para catálogos Fratini:
-         - Os códigos de produtos geralmente seguem o padrão como 1.XXXX.XX
-         - Preços geralmente vêm após o código ou na mesma linha, precedidos por R$
-         - As descrições incluem o tipo de mobiliário (cadeira, poltrona, etc.)
-         - Dimensões geralmente são formatadas como LxAxP ou L x A x P (largura, altura, profundidade)
-         
-         Retorne o resultado como um array JSON com os seguintes campos obrigatórios:
-         - name: nome do produto
-         - code: código comercial ou SKU
-         - price: preço em centavos (valor numérico)
-         - category: categoria do produto (cadeira, mesa, poltrona, etc.)
-         - colors: array de cores disponíveis
-         - materials: array de materiais
-         - sizes: objeto com width, height, depth quando disponível
-         
-         Ignore blocos de texto que não correspondam a produtos.`
-      : `Você é um especialista na extração de informações de produtos de catálogos de móveis.
-         Analise o texto extraído via OCR e a imagem do catálogo para identificar todos os produtos presentes.
-         
-         Retorne o resultado como um array JSON com os seguintes campos obrigatórios:
-         - name: nome do produto
-         - code: código comercial ou SKU
-         - price: preço em centavos (valor numérico)
-         - category: categoria do produto (cadeira, mesa, poltrona, etc.)
-         - colors: array de cores disponíveis
-         - materials: array de materiais
-         - sizes: objeto com width, height, depth quando disponível
-         
-         Ignore blocos de texto que não correspondam a produtos.`;
-    
-    // Enviar para processamento com GPT-4o
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o", // o modelo mais recente da OpenAI que foi lançado após maio de 2023
-      messages: [
-        { role: "system", content: systemPrompt },
-        { 
-          role: "user", 
-          content: [
-            {
-              type: "text",
-              text: `Aqui está o texto extraído via OCR da página ${pageNumber} do catálogo:\n\n${textBlocks}\n\nIdentifique todos os produtos presentes neste texto e converta para o formato JSON solicitado.`
-            },
-            {
-              type: "image_url",
-              image_url: {
-                url: `data:image/jpeg;base64,${base64Image}`
-              }
-            }
-          ] 
-        }
-      ],
-      response_format: { type: "json_object" }
-    });
-    
-    // Processar resposta da IA
-    const responseContent = response.choices[0].message.content;
-    if (!responseContent) {
-      throw new Error("Resposta vazia da IA");
-    }
+  const allProducts = [];
+  
+  // Preparar prompt com contexto e instruções
+  const promptPrefix = `
+Você é um especialista em extração de informações de catálogos de móveis e decoração.
+Analise os dados OCR extraídos das páginas de um catálogo de móveis e extraia todos os produtos presentes.
+
+O formato dos dados OCR é um array de produtos potenciais, onde cada produto contém:
+- texto: texto extraído via OCR
+- categoria: categoria detectada do produto (se houver)
+- é_preço: se o texto parece ser um preço
+- é_código: se o texto parece ser um código de produto
+- cores: possíveis cores mencionadas
+- materiais: possíveis materiais mencionados
+
+Sua tarefa:
+1. Analise os blocos de texto extraídos
+2. Identifique produtos distintos
+3. Para cada produto, extraia:
+   - nome: nome completo do produto
+   - descricao: descrição/detalhes do produto
+   - codigo: código comercial do produto (se disponível, ou "UNKNOWN-CODE")
+   - preco: preço em formato numérico (sem R$ ou outros símbolos)
+   - categoria: categoria do produto (sofá, cadeira, mesa, etc.)
+   - cores: array de cores disponíveis
+   - materiais: array de materiais
+   - dimensoes: objeto com largura, altura, profundidade (quando disponível)
+
+Responda apenas com um array JSON de produtos. Não inclua qualquer outro texto.
+`;
+
+  // Processar no máximo 3 páginas para limitar o tamanho da requisição
+  const maxPagesToProcess = Math.min(pageResults.length, 3);
+  
+  for (let i = 0; i < maxPagesToProcess; i++) {
+    const pageData = pageResults[i];
     
     try {
-      const parsedResponse = JSON.parse(responseContent);
+      // Converter a imagem para base64 para multimodal
+      const imageBuffer = fs.readFileSync(pageData.imagePath);
+      const base64Image = imageBuffer.toString('base64');
       
-      // Verificar se é um array ou está dentro de um objeto
-      const productsArray = Array.isArray(parsedResponse) 
-        ? parsedResponse 
-        : parsedResponse.products || parsedResponse.items || [];
+      // Preparar dados OCR para o prompt
+      const ocrData = JSON.stringify(pageData.ocrResults, null, 2);
       
-      if (productsArray.length === 0) {
-        console.log("[PDF-AI-Pipeline] Nenhum produto identificado na página", pageNumber);
-        return [];
+      // Construir o prompt completo
+      const prompt = `
+${promptPrefix}
+
+Dados OCR da página ${pageData.page} do catálogo ${fileName}:
+${ocrData}
+
+Lembre-se de extrair TODOS os produtos visíveis na imagem, mesmo que os dados OCR estejam incompletos.
+`;
+
+      // Fazer chamada para a API OpenAI com o modelo GPT-4o
+      // the newest OpenAI model is "gpt-4o" which was released May 13, 2024. do not change this unless explicitly requested by the user
+      const response = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+          { role: "system", content: "Você é um assistente especializado na extração de produtos de catálogos." },
+          { 
+            role: "user", 
+            content: [
+              { type: "text", text: prompt },
+              { 
+                type: "image_url", 
+                image_url: {
+                  url: `data:image/jpeg;base64,${base64Image}`,
+                  detail: "high"
+                }
+              }
+            ]
+          }
+        ],
+        max_tokens: 4000,
+        temperature: 0.2,
+        response_format: { type: "json_object" }
+      });
+
+      // Extrair produtos da resposta
+      const jsonContent = response.choices[0].message.content;
+      
+      if (!jsonContent) {
+        console.warn(`IA não retornou conteúdo para a página ${pageData.page}`);
+        continue;
       }
       
-      // Processar e enriquecer os produtos
-      return productsArray.map((product: any) => ({
-        ...product,
-        pageNumber,
-        imageUrl: `data:image/jpeg;base64,${base64Image}`
-      }));
-    } catch (parseError) {
-      console.error("Erro ao analisar resposta JSON:", parseError);
-      console.log("Resposta original:", responseContent);
-      throw new Error(`Erro ao processar resposta da IA: ${parseError.message}`);
+      try {
+        const result = JSON.parse(jsonContent);
+        const extractedProducts = result.produtos || result.products || [];
+        
+        if (extractedProducts && extractedProducts.length > 0) {
+          // Processar produtos e adicionar ao resultado final
+          const processedProducts = extractedProducts.map((product: any) => ({
+            userId,
+            catalogId,
+            name: product.nome || product.name || "Produto sem nome",
+            description: product.descricao || product.description || "",
+            code: product.codigo || product.code || "UNKNOWN-CODE",
+            price: typeof product.preco === 'number' ? product.preco : 
+                  typeof product.price === 'number' ? product.price : 0,
+            category: product.categoria || product.category || "Outros",
+            colors: Array.isArray(product.cores) ? product.cores : 
+                   Array.isArray(product.colors) ? product.colors :
+                   typeof product.cores === 'string' ? [product.cores] :
+                   typeof product.colors === 'string' ? [product.colors] : [],
+            materials: Array.isArray(product.materiais) ? product.materiais :
+                      Array.isArray(product.materials) ? product.materials :
+                      typeof product.materiais === 'string' ? [product.materiais] :
+                      typeof product.materials === 'string' ? [product.materials] : [],
+            // Processar dimensões
+            sizes: processProductDimensions(product),
+            imageUrl: `data:image/jpeg;base64,${base64Image}`,
+            page: pageData.page
+          }));
+          
+          allProducts.push(...processedProducts);
+          console.log(`Extraídos ${processedProducts.length} produtos da página ${pageData.page}`);
+        } else {
+          console.warn(`Nenhum produto extraído da página ${pageData.page}`);
+        }
+      } catch (jsonError: any) {
+        console.error(`Erro ao processar JSON da página ${pageData.page}:`, jsonError);
+      }
+    } catch (pageError: any) {
+      console.error(`Erro ao processar página ${pageData.page}:`, pageError);
     }
-  } catch (error) {
-    console.error("Erro no processamento com GPT-4o:", error);
-    throw error;
   }
+  
+  // Verificar resultados
+  if (allProducts.length === 0) {
+    throw new Error("Nenhum produto extraído do catálogo");
+  }
+  
+  return allProducts;
 }
 
 /**
  * Processa resultados OCR com Claude (modelo alternativo)
  */
 async function processOcrResultsWithAlternativeAI(
-  ocrResults: any,
-  imagePath: string,
-  pageNumber: number,
-  isFratiniCatalog: boolean
+  pageResults: Array<{page: number, imagePath: string, ocrResults: any[]}>,
+  fileName: string,
+  userId: number,
+  catalogId: number
 ): Promise<any[]> {
-  try {
-    // Ler a imagem como base64
-    const imageBuffer = await readFile(imagePath);
-    const base64Image = imageBuffer.toString('base64');
-    
-    // Preparar contexto OCR para enviar ao Claude
-    const textBlocks = ocrResults.map((item: any) => item.text || '').join("\\n");
-    
-    // Definir prompt baseado no tipo de catálogo
-    const systemPrompt = isFratiniCatalog 
-      ? `Você é um especialista na extração de informações de produtos de catálogos de móveis da marca Fratini.
-         Sua tarefa é analisar o texto extraído via OCR e a imagem do catálogo para identificar todos os produtos presentes.
-         
-         Para catálogos Fratini:
-         - Os códigos de produtos geralmente seguem o padrão como 1.XXXX.XX
-         - Preços geralmente vêm após o código ou na mesma linha, precedidos por R$
-         - As descrições incluem o tipo de mobiliário (cadeira, poltrona, etc.)
-         - Dimensões geralmente são formatadas como LxAxP ou L x A x P (largura, altura, profundidade)
-         
-         Retorne APENAS um array JSON estritamente no seguinte formato:
-         [
-           {
-             "name": "Nome do produto",
-             "code": "CÓDIGO-SKU",
-             "price": 10000, (em centavos, valor numérico)
-             "category": "cadeira", (categoria do produto)
-             "colors": ["cor1", "cor2"], (array de cores disponíveis)
-             "materials": ["material1", "material2"], (array de materiais)
-             "sizes": {"width": 60, "height": 90, "depth": 45} (quando disponível)
-           }
-         ]
-         
-         Ignore blocos de texto que não correspondam a produtos.`
-      : `Você é um especialista na extração de informações de produtos de catálogos de móveis.
-         Sua tarefa é analisar o texto extraído via OCR e a imagem do catálogo para identificar todos os produtos presentes.
-         
-         Retorne APENAS um array JSON estritamente no seguinte formato:
-         [
-           {
-             "name": "Nome do produto",
-             "code": "CÓDIGO-SKU",
-             "price": 10000, (em centavos, valor numérico)
-             "category": "cadeira", (categoria do produto)
-             "colors": ["cor1", "cor2"], (array de cores disponíveis)
-             "materials": ["material1", "material2"], (array de materiais)
-             "sizes": {"width": 60, "height": 90, "depth": 45} (quando disponível)
-           }
-         ]
-         
-         Ignore blocos de texto que não correspondam a produtos.`;
-    
-    // Enviar para processamento com Claude
-    const response = await anthropic.messages.create({
-      model: 'claude-3-7-sonnet-20250219', // o modelo mais recente do Anthropic Claude que foi lançado em 24 de fevereiro de 2025
-      max_tokens: 4000,
-      system: systemPrompt,
-      messages: [
-        { 
-          role: "user", 
-          content: [
-            {
-              type: "text",
-              text: `Aqui está o texto extraído via OCR da página ${pageNumber} do catálogo:\n\n${textBlocks}\n\nIdentifique todos os produtos presentes neste texto e converta para o formato JSON solicitado.`
-            },
-            {
-              type: "image",
-              source: {
-                type: "base64",
-                media_type: "image/jpeg",
-                data: base64Image
-              }
-            }
-          ]
-        }
-      ],
-    });
-    
-    // Processar resposta da IA
-    const responseContent = response.content[0].text;
-    if (!responseContent) {
-      throw new Error("Resposta vazia da IA");
-    }
+  const allProducts = [];
+  
+  // Preparar prompt com contexto e instruções
+  const promptPrefix = `
+Você é um assistente especializado em extrair informações de catálogos de móveis.
+Analise os dados OCR extraídos de uma página de catálogo e identifique todos os produtos presentes.
+
+Os dados OCR contêm blocos de texto extraídos da imagem, com as seguintes informações:
+- texto: texto extraído via OCR
+- categoria: categoria potencial do produto
+- é_preço: indicador se o texto parece ser um preço
+- é_código: indicador se o texto parece ser um código de produto
+- cores: possíveis cores mencionadas
+- materiais: possíveis materiais mencionados
+
+Para cada produto na imagem, extraia:
+- nome: nome completo do produto
+- descricao: descrição do produto
+- codigo: código do produto (se disponível, ou "UNKNOWN-CODE")
+- preco: preço em formato numérico
+- categoria: categoria do produto (sofá, mesa, cadeira, etc.)
+- cores: array de cores disponíveis
+- materiais: array de materiais
+- dimensoes: objeto com largura, altura, profundidade (quando disponível)
+
+Responda com um objeto JSON contendo um array 'produtos'. Não inclua explicações adicionais.
+`;
+
+  // Processar no máximo 3 páginas para limitar o tamanho da requisição
+  const maxPagesToProcess = Math.min(pageResults.length, 3);
+  
+  for (let i = 0; i < maxPagesToProcess; i++) {
+    const pageData = pageResults[i];
     
     try {
-      // Extrair apenas o JSON da resposta, removendo qualquer texto adicional
-      let jsonString = responseContent;
-      const jsonStartIndex = responseContent.indexOf('[');
-      const jsonEndIndex = responseContent.lastIndexOf(']') + 1;
+      // Converter a imagem para base64 para multimodal
+      const imageBuffer = fs.readFileSync(pageData.imagePath);
+      const base64Image = imageBuffer.toString('base64');
       
-      if (jsonStartIndex >= 0 && jsonEndIndex > jsonStartIndex) {
-        jsonString = responseContent.substring(jsonStartIndex, jsonEndIndex);
+      // Preparar dados OCR para o prompt
+      const ocrData = JSON.stringify(pageData.ocrResults, null, 2);
+      
+      // Construir o prompt completo
+      const prompt = `
+${promptPrefix}
+
+Dados OCR da página ${pageData.page} do catálogo ${fileName}:
+${ocrData}
+
+Além dos dados OCR, use a imagem anexada para identificar TODOS os produtos visíveis.
+`;
+
+      // Fazer chamada para a API Claude
+      const response = await anthropic.messages.create({
+        model: "claude-3-7-sonnet-20250219",
+        max_tokens: 4000,
+        temperature: 0.2,
+        system: "Você é um assistente especializado na extração de produtos de catálogos de móveis.",
+        messages: [
+          { 
+            role: "user", 
+            content: [
+              { type: "text", text: prompt },
+              { 
+                type: "image", 
+                source: {
+                  type: "base64",
+                  media_type: "image/jpeg",
+                  data: base64Image
+                }
+              }
+            ]
+          }
+        ]
+      });
+
+      // Extrair produtos da resposta
+      // Tratamento especial para os diferentes tipos de blocos de conteúdo na resposta Claude
+      let responseContent = "";
+      
+      if (response.content && response.content.length > 0) {
+        // Verificar o tipo de conteúdo
+        const contentBlock = response.content[0];
+        if ('text' in contentBlock) {
+          responseContent = contentBlock.text;
+        } else {
+          // Se for outro tipo de bloco de conteúdo, tentar obter alguma string útil
+          responseContent = JSON.stringify(contentBlock);
+        }
       }
       
-      const productsArray = JSON.parse(jsonString);
-      
-      if (productsArray.length === 0) {
-        console.log("[PDF-AI-Pipeline] Nenhum produto identificado na página", pageNumber);
-        return [];
+      if (!responseContent) {
+        console.warn(`Claude não retornou conteúdo para a página ${pageData.page}`);
+        continue;
       }
       
-      // Processar e enriquecer os produtos
-      return productsArray.map((product: any) => ({
-        ...product,
-        pageNumber,
-        imageUrl: `data:image/jpeg;base64,${base64Image}`
-      }));
-    } catch (parseError) {
-      console.error("Erro ao analisar resposta JSON do Claude:", parseError);
-      console.log("Resposta original:", responseContent);
-      throw new Error(`Erro ao processar resposta da IA alternativa: ${parseError.message}`);
+      try {
+        // Tentar extrair JSON válido da resposta
+        let jsonMatch = responseContent.match(/```json\s*([\s\S]*?)\s*```/) || 
+                       responseContent.match(/```\s*([\s\S]*?)\s*```/) ||
+                       [null, responseContent];
+                       
+        let jsonContent = jsonMatch[1] || responseContent;
+        
+        // Remover possíveis caracteres inválidos JSON
+        jsonContent = jsonContent.trim();
+        
+        // Analisar JSON
+        const result = JSON.parse(jsonContent);
+        const extractedProducts = result.produtos || result.products || [];
+        
+        if (extractedProducts && extractedProducts.length > 0) {
+          // Processar produtos e adicionar ao resultado final
+          const processedProducts = extractedProducts.map((product: any) => ({
+            userId,
+            catalogId,
+            name: product.nome || product.name || "Produto sem nome",
+            description: product.descricao || product.description || "",
+            code: product.codigo || product.code || "UNKNOWN-CODE",
+            price: typeof product.preco === 'number' ? product.preco : 
+                  typeof product.price === 'number' ? product.price : 0,
+            category: product.categoria || product.category || "Outros",
+            colors: Array.isArray(product.cores) ? product.cores : 
+                   Array.isArray(product.colors) ? product.colors :
+                   typeof product.cores === 'string' ? [product.cores] :
+                   typeof product.colors === 'string' ? [product.colors] : [],
+            materials: Array.isArray(product.materiais) ? product.materiais :
+                      Array.isArray(product.materials) ? product.materials :
+                      typeof product.materiais === 'string' ? [product.materiais] :
+                      typeof product.materials === 'string' ? [product.materials] : [],
+            // Processar dimensões
+            sizes: processProductDimensions(product),
+            imageUrl: `data:image/jpeg;base64,${base64Image}`,
+            page: pageData.page
+          }));
+          
+          allProducts.push(...processedProducts);
+          console.log(`Claude extraiu ${processedProducts.length} produtos da página ${pageData.page}`);
+        } else {
+          console.warn(`Nenhum produto extraído por Claude da página ${pageData.page}`);
+        }
+      } catch (jsonError: any) {
+        console.error(`Erro ao processar JSON da resposta do Claude para página ${pageData.page}:`, jsonError);
+        console.error("Resposta recebida:", responseContent.substring(0, 500) + "...");
+      }
+    } catch (pageError: any) {
+      console.error(`Erro ao processar página ${pageData.page} com Claude:`, pageError);
     }
-  } catch (error) {
-    console.error("Erro no processamento com Claude:", error);
-    throw error;
   }
+  
+  // Verificar resultados
+  if (allProducts.length === 0) {
+    throw new Error("Nenhum produto extraído do catálogo pelo Claude");
+  }
+  
+  return allProducts;
+}
+
+/**
+ * Processa as dimensões do produto a partir de diferentes formatos de input
+ */
+function processProductDimensions(product: any): Array<{name: string, value: string}> {
+  const sizes = [];
+  
+  // Verificar se temos dimensões como objeto
+  if (product.dimensoes || product.dimensions) {
+    const dimensions = product.dimensoes || product.dimensions;
+    
+    // Caso 1: Objeto com propriedades específicas
+    if (typeof dimensions === 'object' && dimensions !== null) {
+      // Largura
+      if (dimensions.largura || dimensions.width) {
+        sizes.push({
+          name: 'Largura',
+          value: `${dimensions.largura || dimensions.width}`
+        });
+      }
+      
+      // Altura
+      if (dimensions.altura || dimensions.height) {
+        sizes.push({
+          name: 'Altura',
+          value: `${dimensions.altura || dimensions.height}`
+        });
+      }
+      
+      // Profundidade
+      if (dimensions.profundidade || dimensions.depth) {
+        sizes.push({
+          name: 'Profundidade',
+          value: `${dimensions.profundidade || dimensions.depth}`
+        });
+      }
+    } 
+    // Caso 2: String com formato "LxAxP"
+    else if (typeof dimensions === 'string') {
+      const extracted = extractDimensionsFromString(dimensions);
+      
+      if (extracted) {
+        if (extracted.width) {
+          sizes.push({
+            name: 'Largura',
+            value: `${extracted.width}`
+          });
+        }
+        
+        if (extracted.height) {
+          sizes.push({
+            name: 'Altura',
+            value: `${extracted.height}`
+          });
+        }
+        
+        if (extracted.depth) {
+          sizes.push({
+            name: 'Profundidade',
+            value: `${extracted.depth}`
+          });
+        }
+      }
+    }
+  }
+  
+  // Caso 3: Dimensões em campos separados
+  else {
+    // Largura
+    if (product.largura || product.width) {
+      sizes.push({
+        name: 'Largura',
+        value: `${product.largura || product.width}`
+      });
+    }
+    
+    // Altura
+    if (product.altura || product.height) {
+      sizes.push({
+        name: 'Altura',
+        value: `${product.altura || product.height}`
+      });
+    }
+    
+    // Profundidade
+    if (product.profundidade || product.depth) {
+      sizes.push({
+        name: 'Profundidade',
+        value: `${product.profundidade || product.depth}`
+      });
+    }
+  }
+  
+  return sizes;
 }
