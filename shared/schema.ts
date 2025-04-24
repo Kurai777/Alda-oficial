@@ -67,6 +67,7 @@ export const insertCatalogSchema = createInsertSchema(catalogs).pick({
   fileUrl: true,
   processedStatus: true,
   firestoreCatalogId: true,
+  firebaseUserId: true,
 });
 
 export const quotes = pgTable("quotes", {

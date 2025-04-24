@@ -382,7 +382,10 @@ export class MemStorage implements IStorage {
       catalogId: insertProduct.catalogId || null,
       description: insertProduct.description || null,
       category: insertProduct.category || null,
-      imageUrl: insertProduct.imageUrl || null
+      imageUrl: insertProduct.imageUrl || null,
+      // Campos de integração com Firebase
+      firestoreId: insertProduct.firestoreId || null,
+      firebaseUserId: insertProduct.firebaseUserId || null
     };
     
     this.products.set(id, product);
@@ -430,7 +433,10 @@ export class MemStorage implements IStorage {
       catalogId: productUpdate.catalogId !== undefined ? productUpdate.catalogId : existingProduct.catalogId,
       description: productUpdate.description !== undefined ? productUpdate.description : existingProduct.description,
       category: productUpdate.category !== undefined ? productUpdate.category : existingProduct.category,
-      imageUrl: productUpdate.imageUrl !== undefined ? productUpdate.imageUrl : existingProduct.imageUrl
+      imageUrl: productUpdate.imageUrl !== undefined ? productUpdate.imageUrl : existingProduct.imageUrl,
+      // Preservar ou atualizar campos de integração com Firebase
+      firestoreId: productUpdate.firestoreId !== undefined ? productUpdate.firestoreId : existingProduct.firestoreId,
+      firebaseUserId: productUpdate.firebaseUserId !== undefined ? productUpdate.firebaseUserId : existingProduct.firebaseUserId
     };
     
     this.products.set(id, updatedProduct);
@@ -469,12 +475,22 @@ export class MemStorage implements IStorage {
 
   async createCatalog(insertCatalog: InsertCatalog): Promise<Catalog> {
     const id = this.catalogId++;
-    const catalog: Catalog = { ...insertCatalog, id, createdAt: new Date() };
+    
+    // Garantir que os campos sejam tratados corretamente
+    const catalog: Catalog = { 
+      ...insertCatalog, 
+      id, 
+      createdAt: new Date(),
+      processedStatus: insertCatalog.processedStatus || "pending",
+      firestoreCatalogId: insertCatalog.firestoreCatalogId || null,
+      firebaseUserId: insertCatalog.firebaseUserId || null
+    };
+    
     this.catalogs.set(id, catalog);
     return catalog;
   }
 
-  async updateCatalogStatus(id: number, status: string, firestoreCatalogId?: string): Promise<Catalog | undefined> {
+  async updateCatalogStatus(id: number, status: string, firestoreCatalogId?: string, firebaseUserId?: string): Promise<Catalog | undefined> {
     const existingCatalog = this.catalogs.get(id);
     if (!existingCatalog) return undefined;
 
@@ -482,7 +498,9 @@ export class MemStorage implements IStorage {
       ...existingCatalog, 
       processedStatus: status,
       // Atualizar firestoreCatalogId se fornecido
-      ...(firestoreCatalogId ? { firestoreCatalogId } : {})
+      ...(firestoreCatalogId ? { firestoreCatalogId } : {}),
+      // Atualizar firebaseUserId se fornecido
+      ...(firebaseUserId ? { firebaseUserId } : { firebaseUserId: existingCatalog.firebaseUserId || null })
     };
     
     this.catalogs.set(id, updatedCatalog);
