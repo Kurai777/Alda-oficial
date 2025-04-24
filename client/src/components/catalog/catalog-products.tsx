@@ -460,15 +460,27 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
                   {paginatedProducts.map((product: Product) => (
                     <Card key={product.id} className="overflow-hidden">
                       <CardContent className="p-4">
-                        <div className="aspect-square bg-muted rounded-md flex items-center justify-center mb-3">
+                        <div className="aspect-square bg-muted rounded-md flex items-center justify-center mb-3 overflow-hidden">
                           {product.imageUrl ? (
                             <img 
-                              src={product.imageUrl} 
+                              src={product.imageUrl.startsWith('data:') 
+                                ? product.imageUrl 
+                                : product.imageUrl.startsWith('/') 
+                                  ? product.imageUrl
+                                  : `/${product.imageUrl}`
+                              } 
                               alt={product.name} 
                               className="w-full h-full object-cover"
+                              onError={(e) => {
+                                console.log(`Erro ao carregar imagem: ${product.imageUrl}`);
+                                (e.target as HTMLImageElement).src = 'https://placehold.co/400x400/e2e8f0/64748b?text=Sem+Imagem';
+                              }}
                             />
                           ) : (
-                            <div className="text-muted-foreground">Sem imagem</div>
+                            <div className="flex flex-col items-center justify-center h-full w-full">
+                              <ImageIcon className="h-10 w-10 text-muted-foreground mb-2" />
+                              <div className="text-muted-foreground text-sm">Sem imagem</div>
+                            </div>
                           )}
                         </div>
                         <h3 className="font-semibold">{product.name}</h3>
