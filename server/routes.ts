@@ -72,6 +72,7 @@ const upload = multer({
   }),
   limits: {
     fileSize: 100 * 1024 * 1024, // 100MB max
+    fieldSize: 100 * 1024 * 1024 // Também aumentar o tamanho do campo
   },
 });
 
