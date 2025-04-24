@@ -434,6 +434,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Rota para buscar um catálogo específico
+  app.get("/api/catalogs/:id", async (req: Request, res: Response) => {
+    try {
+      const id = parseInt(req.params.id);
+      
+      if (isNaN(id)) {
+        return res.status(400).json({ message: "Invalid catalog ID" });
+      }
+      
+      const catalog = await storage.getCatalog(id);
+      
+      if (!catalog) {
+        return res.status(404).json({ message: "Catalog not found" });
+      }
+      
+      return res.status(200).json(catalog);
+    } catch (error) {
+      console.error('Erro ao buscar catálogo:', error);
+      return res.status(500).json({ message: "Failed to fetch catalog" });
+    }
+  });
+
   app.put("/api/catalogs/:id/status", async (req: Request, res: Response) => {
     try {
       const id = parseInt(req.params.id);

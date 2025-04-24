@@ -9,7 +9,8 @@ import {
   where,
   getDocs,
   DocumentData,
-  QueryDocumentSnapshot
+  QueryDocumentSnapshot,
+  orderBy
 } from "firebase/firestore";
 import { db } from "./firebase";
 import { User } from "./auth";
@@ -24,9 +25,30 @@ export interface UserData extends User {
   updatedAt?: Date;
 }
 
+// Interface para produtos do Firestore
+export interface FirestoreProduct {
+  id?: string;
+  firestoreId?: string;
+  name: string;
+  description?: string;
+  code?: string;
+  price: number;
+  category?: string;
+  colors?: string[];
+  materials?: string[];
+  sizes?: any[];
+  imageUrl?: string;
+  userId?: string | number;
+  catalogId?: string | number;
+  createdAt?: any;
+  updatedAt?: any;
+}
+
 // Constantes para coleções
 const COLLECTIONS = {
   USERS: 'users',
+  CATALOGS: 'catalogs',
+  PRODUCTS: 'products',
 };
 
 /**
@@ -104,5 +126,74 @@ export async function getUserByEmail(email: string): Promise<UserData | null> {
   } catch (error) {
     console.error("Erro ao buscar usuário por email:", error);
     throw error;
+  }
+}
+
+/**
+ * Busca produtos de um catálogo específico no Firestore
+ * @param userId ID do usuário
+ * @param catalogId ID do catálogo
+ * @returns Lista de produtos
+ */
+export async function getProductsByFirestoreCatalogId(userId: string, catalogId: string): Promise<FirestoreProduct[]> {
+  try {
+    console.log(`Buscando produtos no Firestore para userId=${userId} e catalogId=${catalogId}`);
+    const userDocRef = doc(db, COLLECTIONS.USERS, userId);
+    const catalogDocRef = doc(db, `${COLLECTIONS.USERS}/${userId}/${COLLECTIONS.CATALOGS}`, catalogId);
+    const productsCollection = collection(db, `${COLLECTIONS.USERS}/${userId}/${COLLECTIONS.CATALOGS}/${catalogId}/${COLLECTIONS.PRODUCTS}`);
+    
+    const q = query(productsCollection, orderBy("createdAt", "desc"));
+    const querySnapshot = await getDocs(q);
+    
+    if (querySnapshot.empty) {
+      console.log("Nenhum produto encontrado no Firestore");
+      return [];
+    }
+    
+    const products: FirestoreProduct[] = [];
+    querySnapshot.forEach((doc) => {
+      const productData = doc.data() as FirestoreProduct;
+      products.push({
+        ...productData,
+        firestoreId: doc.id
+      });
+    });
+    
+    console.log(`Encontrados ${products.length} produtos no Firestore`);
+    return products;
+  } catch (error) {
+    console.error("Erro ao buscar produtos no Firestore:", error);
+    return [];
+  }
+}
+
+/**
+ * Busca todos os catálogos de um usuário no Firestore
+ * @param userId ID do usuário
+ * @returns Lista de catálogos
+ */
+export async function getCatalogsByFirestoreUserId(userId: string): Promise<any[]> {
+  try {
+    const catalogsCollection = collection(db, `${COLLECTIONS.USERS}/${userId}/${COLLECTIONS.CATALOGS}`);
+    
+    const q = query(catalogsCollection, orderBy("createdAt", "desc"));
+    const querySnapshot = await getDocs(q);
+    
+    if (querySnapshot.empty) {
+      return [];
+    }
+    
+    const catalogs: any[] = [];
+    querySnapshot.forEach((doc) => {
+      catalogs.push({
+        ...doc.data(),
+        firestoreId: doc.id
+      });
+    });
+    
+    return catalogs;
+  } catch (error) {
+    console.error("Erro ao buscar catálogos no Firestore:", error);
+    return [];
   }
 }

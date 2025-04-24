@@ -39,16 +39,58 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
   const pageSize = 10;
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('grid');
 
-  // Buscar produtos do catálogo
+  // Buscar produtos do catálogo (do Firestore e API local)
   const { data: products = [], isLoading, refetch, isError } = useQuery({
     queryKey: ["/api/products", { catalogId, userId: user?.uid }],
     queryFn: async () => {
       const userId = user?.uid;
       console.log(`Fetching products for userId=${userId} and catalogId=${catalogId}`);
+      
       try {
+        // Primeiro, tentar buscar do banco de dados local
         const response = await apiRequest("GET", `/api/products?catalogId=${catalogId}`);
         console.log("API response:", response);
-        return response || [];
+        
+        // Se encontrou produtos locais, usá-los
+        if (response && Array.isArray(response) && response.length > 0) {
+          return response;
+        }
+        
+        // Caso contrário, tentar buscar do Firestore
+        // Importar dinamicamente para evitar problemas de inicialização
+        const { getProductsByFirestoreCatalogId } = await import('@/lib/firestore');
+        
+        // Buscar produtos do catálogo no Firestore
+        // Precisamos da referência ao documento do catálogo no Firestore
+        const catalogResponse = await apiRequest("GET", `/api/catalogs/${catalogId}`);
+        
+        if (catalogResponse && catalogResponse.firestoreCatalogId && userId) {
+          console.log(`Buscando produtos do Firestore para catalogId=${catalogResponse.firestoreCatalogId}`);
+          const firestoreProducts = await getProductsByFirestoreCatalogId(
+            userId.toString(), 
+            catalogResponse.firestoreCatalogId
+          );
+          
+          if (firestoreProducts && firestoreProducts.length > 0) {
+            // Converter produtos do Firestore para formato local
+            return firestoreProducts.map(product => ({
+              id: product.id || 0,
+              firestoreId: product.firestoreId,
+              userId: userId,
+              catalogId: catalogId,
+              name: product.name || "Produto sem nome",
+              description: product.description || "",
+              code: product.code || "",
+              price: product.price || 0,
+              category: product.category || "",
+              colors: product.colors || [],
+              materials: product.materials || [],
+              imageUrl: product.imageUrl || ""
+            }));
+          }
+        }
+        
+        return [];
       } catch (error) {
         console.error("Error fetching products:", error);
         return [];
