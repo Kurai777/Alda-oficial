@@ -4,7 +4,7 @@ hidden = [".config", ".git", "generated-icon.png", "node_modules", "dist"]
 
 [nix]
 channel = "stable-23_11"
-packages = ["cairo", "giflib", "librsvg", "libuuid", "pango", "poppler"]
+packages = ["cairo", "giflib", "librsvg", "libuuid", "pango", "poppler", "python3"]
 
 [deployment]
 deploymentTarget = "cloudrun"

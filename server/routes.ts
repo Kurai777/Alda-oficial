@@ -795,41 +795,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
             }
           }
         } else if (fileType === 'pdf') {
-          // Processar PDF usando múltiplos métodos com fallback
+          // Processar PDF usando o novo pipeline automatizado (PDF2Image + PaddleOCR + IA)
           try {
-            // Método 1: Usar o processador avançado com IA multimodal (GPT-4o)
-            console.log(`Iniciando processamento avançado com IA multimodal: ${filePath}`);
-            
             // Verificar se o arquivo existe
             if (!fs.existsSync(filePath)) {
               console.error(`ERRO: Arquivo não encontrado: ${filePath}`);
               throw new Error(`Arquivo não encontrado: ${filePath}`);
             }
             
-            console.log("Arquivo encontrado, verificando tamanho...");
+            console.log("Arquivo PDF encontrado, verificando tamanho...");
             const fileStats = fs.statSync(filePath);
             console.log(`Tamanho do arquivo: ${fileStats.size} bytes`);
             
-            // Importar o módulo de processamento avançado
-            console.log("Importando módulo de processamento avançado...");
-            const { processFileWithAdvancedAI } = await import('./advanced-ai-extractor');
+            // Importar o novo pipeline de processamento automatizado
+            console.log("Iniciando pipeline automatizado de processamento...");
+            const { processCatalogWithAutomatedPipeline } = await import('./pdf-ai-pipeline');
             
-            // Processar o PDF diretamente com IA multimodal
-            console.log("Iniciando chamada ao processador com IA multimodal...");
-            // Verificar se o processamento com GPT-4o extrai produtos reais e não mais "mocks"
-            productsData = await processFileWithAdvancedAI(filePath, fileName, userId, catalog.id);
+            // Executar o pipeline completo com PaddleOCR + IA
+            console.log(`Iniciando pipeline automatizado para: ${filePath}`);
+            productsData = await processCatalogWithAutomatedPipeline(filePath, fileName, userId, catalog.id);
             
             // Verificar se temos produtos extraídos
             if (!productsData || productsData.length === 0) {
-              throw new Error("A IA não conseguiu identificar nenhum produto no PDF fornecido");
+              throw new Error("O pipeline automatizado não conseguiu extrair produtos do PDF");
             }
             
-            console.log(`IA multimodal extraiu ${productsData.length} produtos do PDF`);
-            extractionInfo = `PDF processado com IA multimodal GPT-4o. Extraídos ${productsData.length} produtos com suas imagens reais.`;
-          } catch (aiError) {
-            console.error("Erro detalhado ao processar PDF com IA multimodal OpenAI:", aiError);
-            console.log("Stack trace:", aiError instanceof Error ? aiError.stack : "Sem stack trace");
-            console.log("Tentando processamento alternativo com IA Claude...");
+            console.log(`Pipeline automatizado extraiu ${productsData.length} produtos do PDF`);
+            extractionInfo = `PDF processado com pipeline automatizado (PDF2Image + PaddleOCR + IA). Extraídos ${productsData.length} produtos.`;
+          } catch (pipelineError) {
+            console.error("Erro no pipeline automatizado:", pipelineError);
+            console.log("Stack trace:", pipelineError instanceof Error ? pipelineError.stack : "Sem stack trace");
+            console.log("Tentando método alternativo com IA multimodal GPT-4o...");
             
             try {
               // Método 2: Tentar processamento com Claude como fallback

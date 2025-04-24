@@ -1,11 +1,15 @@
-const { spawn } = require('child_process');
-const path = require('path');
-const fs = require('fs');
+import { spawn } from 'child_process';
+import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 /**
  * Instalar dependências necessárias para o PaddleOCR
  */
-function installPaddleDependencies() {
+export function installPaddleDependencies() {
   console.log('Instalando dependências para o PaddleOCR...');
   
   // Verificar se Python está instalado
@@ -35,7 +39,8 @@ function installPaddleDependencies() {
       'paddlepaddle',
       'paddleocr',
       'pdf2image',
-      'pillow'
+      'pillow',
+      'opencv-python-headless'
     ]);
     
     pipProcess.stdout.on('data', (data) => {
@@ -50,7 +55,7 @@ function installPaddleDependencies() {
       if (code !== 0) {
         console.error(`Erro ao instalar dependências Python. Código de saída: ${code}`);
         console.log('Você pode precisar instalar manualmente:');
-        console.log('pip install paddlepaddle paddleocr pdf2image pillow');
+        console.log('pip install paddlepaddle paddleocr pdf2image pillow opencv-python-headless');
       } else {
         console.log('Dependências Python instaladas com sucesso!');
       }
@@ -97,10 +102,10 @@ function checkPoppler() {
 }
 
 // Verificar se o script está sendo executado diretamente
-if (require.main === module) {
+if (import.meta.url === `file://${process.argv[1]}`) {
   installPaddleDependencies();
 }
 
-module.exports = {
+export default {
   installPaddleDependencies
 }; 
