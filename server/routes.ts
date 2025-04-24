@@ -736,12 +736,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Criar o catálogo com status "processando" no banco local
       let firestoreCatalogId = ""; // Será populado logo abaixo
       
+      // Garantir que userId seja numérico para o banco local PostgreSQL
+      const localUserId = typeof userId === 'string' ? 
+        parseInt(userId.replace(/\D/g, '')) || 1 : // Tentar extrair números do UID ou usar 1 como fallback
+        userId;
+      
       const catalog = await storage.createCatalog({
-        userId,
+        userId: localUserId, // Usar ID numérico para o banco local
         fileName,
         fileUrl: filePath,
         processedStatus: "processing",
-        firestoreCatalogId
+        firestoreCatalogId,
+        firebaseUserId: typeof userId === 'string' ? userId : undefined // Preservar o UID do Firebase
       });
       
       console.log(`Catálogo criado com ID: ${catalog.id}, status: ${catalog.processedStatus}`);
@@ -1179,8 +1185,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
           
           // Converter o produto para o formato adequado para o banco local
+          // Garantir que userId seja numérico para o banco local PostgreSQL
+          const localUserId = typeof userId === 'string' ? 
+            parseInt(userId.replace(/\D/g, '')) || 1 : // Tentar extrair números do UID ou usar 1 como fallback
+            userId;
+            
           const productToSave = {
-            userId,
+            userId: localUserId, // Usar o ID numérico para o banco local
             catalogId: catalog.id,
             name: productData.name || "Produto sem nome",
             description: productData.description || "",
@@ -1192,7 +1203,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
             sizes: Array.isArray(productData.sizes) ? productData.sizes : [],
             imageUrl: imageUrl || "https://images.unsplash.com/photo-1555041469-a586c61ea9bc?ixlib=rb-4.0.3",
             firestoreId: productData.firestoreId || null, // Manter referência ao ID do Firestore, se disponível
-            firestoreCatalogId: firestoreCatalogId // Referência ao ID do catálogo no Firestore
+            firestoreCatalogId: firestoreCatalogId, // Referência ao ID do catálogo no Firestore
+            firebaseUserId: typeof userId === 'string' ? userId : undefined // Preservar o UID do Firebase quando disponível
           };
           
           const savedProduct = await storage.createProduct(productToSave);
