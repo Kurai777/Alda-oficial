@@ -63,12 +63,13 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
         // Buscar produtos do catálogo no Firestore
         // Precisamos da referência ao documento do catálogo no Firestore
         const catalogResponse = await apiRequest("GET", `/api/catalogs/${catalogId}`);
+        const catalogData = await catalogResponse.json();
         
-        if (catalogResponse && catalogResponse.firestoreCatalogId && userId) {
-          console.log(`Buscando produtos do Firestore para catalogId=${catalogResponse.firestoreCatalogId}`);
+        if (catalogData && catalogData.firestoreCatalogId && userId) {
+          console.log(`Buscando produtos do Firestore para catalogId=${catalogData.firestoreCatalogId}`);
           const firestoreProducts = await getProductsByFirestoreCatalogId(
             userId.toString(), 
-            catalogResponse.firestoreCatalogId
+            catalogData.firestoreCatalogId
           );
           
           if (firestoreProducts && firestoreProducts.length > 0) {
@@ -388,8 +389,8 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
                 <Label htmlFor="materials" className="text-right">Materiais</Label>
                 <Input
                   id="materials"
-                  value={selectedProduct.materials || ""}
-                  onChange={(e) => setSelectedProduct({...selectedProduct, materials: e.target.value})}
+                  value={Array.isArray(selectedProduct.materials) ? selectedProduct.materials.join(", ") : ""}
+                  onChange={(e) => setSelectedProduct({...selectedProduct, materials: e.target.value.split(", ").filter(Boolean)})}
                   className="col-span-3"
                 />
               </div>
@@ -397,9 +398,23 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
                 <Label htmlFor="dimensions" className="text-right">Dimensões</Label>
                 <Input
                   id="dimensions"
-                  value={selectedProduct.dimensions || ""}
-                  onChange={(e) => setSelectedProduct({...selectedProduct, dimensions: e.target.value})}
+                  value={selectedProduct.sizes && selectedProduct.sizes.length > 0 
+                    ? `${selectedProduct.sizes[0].width || ''}x${selectedProduct.sizes[0].height || ''}x${selectedProduct.sizes[0].depth || ''}`
+                    : ""}
+                  onChange={(e) => {
+                    const parts = e.target.value.split('x').map(p => parseInt(p) || 0);
+                    setSelectedProduct({
+                      ...selectedProduct, 
+                      sizes: [{
+                        width: parts[0] || undefined,
+                        height: parts[1] || undefined,
+                        depth: parts[2] || undefined,
+                        label: selectedProduct.sizes?.[0]?.label || ""
+                      }]
+                    });
+                  }}
                   className="col-span-3"
+                  placeholder="LxAxP em cm"
                 />
               </div>
               <div className="grid grid-cols-4 items-start gap-4">
