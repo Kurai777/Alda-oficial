@@ -95,21 +95,27 @@ export default function Catalogs() {
   // Mutation to delete catalog
   const deleteMutation = useMutation({
     mutationFn: async (catalogId: number) => {
-      // For this demo, we'll just simulate a deletion since the endpoint is not implemented
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      console.log(`Solicitando exclusão do catálogo ID ${catalogId}`);
+      const response = await fetch(`/api/catalogs/${catalogId}`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Erro HTTP ${response.status}: ${await response.text()}`);
+      }
+      
       return catalogId;
     },
     onSuccess: (catalogId) => {
-      queryClient.setQueryData(
-        ["/api/catalogs"],
-        (oldData: Catalog[] | undefined) => {
-          if (!oldData) return [];
-          return oldData.filter((catalog) => catalog.id !== catalogId);
-        }
-      );
+      queryClient.invalidateQueries({ queryKey: ["/api/catalogs"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+      
       toast({
         title: "Catálogo removido",
-        description: "O catálogo foi removido com sucesso.",
+        description: "O catálogo e seus produtos foram removidos com sucesso.",
       });
       setCatalogToDelete(null);
     },

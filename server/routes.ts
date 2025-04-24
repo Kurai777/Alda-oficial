@@ -480,6 +480,38 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.status(500).json({ message: "Failed to update catalog status" });
     }
   });
+  
+  // Rota para excluir um catálogo
+  app.delete("/api/catalogs/:id", async (req: Request, res: Response) => {
+    try {
+      const id = parseInt(req.params.id);
+      
+      if (isNaN(id)) {
+        return res.status(400).json({ message: "ID de catálogo inválido" });
+      }
+      
+      console.log(`Recebida solicitação para excluir catálogo com ID ${id}`);
+      
+      // Obter catálogo para verificar se existe
+      const catalog = await storage.getCatalog(id);
+      if (!catalog) {
+        return res.status(404).json({ message: "Catálogo não encontrado" });
+      }
+      
+      // Excluir o catálogo e seus produtos
+      const success = await storage.deleteCatalog(id);
+      
+      if (!success) {
+        return res.status(500).json({ message: "Falha ao excluir catálogo" });
+      }
+      
+      console.log(`Catálogo ${id} excluído com sucesso`);
+      return res.status(204).send();
+    } catch (error) {
+      console.error("Erro ao excluir catálogo:", error);
+      return res.status(500).json({ message: "Falha ao excluir catálogo", error: String(error) });
+    }
+  });
 
   // Quote endpoints
   app.get("/api/quotes", async (req: Request, res: Response) => {
