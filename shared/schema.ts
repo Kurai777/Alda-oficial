@@ -139,3 +139,51 @@ export type Quote = typeof quotes.$inferSelect;
 export type InsertQuote = z.infer<typeof insertQuoteSchema>;
 export type Moodboard = typeof moodboards.$inferSelect;
 export type InsertMoodboard = z.infer<typeof insertMoodboardSchema>;
+
+// AI Design Projects
+export const aiDesignProjects = pgTable("ai_design_projects", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+  title: text("title").notNull(),
+  status: text("status").notNull().default("pending"), // pending, processing, completed, failed
+  floorPlanImageUrl: text("floor_plan_image_url"),
+  renderImageUrl: text("render_image_url"),
+  generatedFloorPlanUrl: text("generated_floor_plan_url"),
+  generatedRenderUrl: text("generated_render_url"),
+  quoteId: integer("quote_id").references(() => quotes.id),
+  moodboardId: integer("moodboard_id").references(() => moodboards.id),
+});
+
+// AI Design Chat Messages
+export const aiDesignChatMessages = pgTable("ai_design_chat_messages", {
+  id: serial("id").primaryKey(),
+  projectId: integer("project_id").references(() => aiDesignProjects.id).notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+  role: text("role").notNull(), // user, assistant, system
+  content: text("content").notNull(),
+  attachmentUrl: text("attachment_url"),
+});
+
+// Create insert schemas
+export const insertAiDesignProjectSchema = createInsertSchema(aiDesignProjects).pick({
+  userId: true,
+  title: true,
+  floorPlanImageUrl: true,
+  renderImageUrl: true,
+  quoteId: true,
+  moodboardId: true,
+});
+
+export const insertAiDesignChatMessageSchema = createInsertSchema(aiDesignChatMessages).pick({
+  projectId: true,
+  role: true,
+  content: true,
+  attachmentUrl: true,
+});
+
+// Type exports
+export type AiDesignProject = typeof aiDesignProjects.$inferSelect;
+export type InsertAiDesignProject = z.infer<typeof insertAiDesignProjectSchema>;
+export type AiDesignChatMessage = typeof aiDesignChatMessages.$inferSelect;
+export type InsertAiDesignChatMessage = z.infer<typeof insertAiDesignChatMessageSchema>;

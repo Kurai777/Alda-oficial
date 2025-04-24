@@ -3,7 +3,9 @@ import {
   products, type Product, type InsertProduct,
   catalogs, type Catalog, type InsertCatalog,
   quotes, type Quote, type InsertQuote,
-  moodboards, type Moodboard, type InsertMoodboard
+  moodboards, type Moodboard, type InsertMoodboard,
+  aiDesignProjects, type AiDesignProject, type InsertAiDesignProject,
+  aiDesignChatMessages, type AiDesignChatMessage, type InsertAiDesignChatMessage
 } from "@shared/schema";
 import session from "express-session";
 import { pool } from "./db";
@@ -46,6 +48,17 @@ export interface IStorage {
   createMoodboard(moodboard: InsertMoodboard): Promise<Moodboard>;
   updateMoodboard(id: number, moodboard: Partial<InsertMoodboard>): Promise<Moodboard | undefined>;
   deleteMoodboard(id: number): Promise<boolean>;
+  
+  // AI Design Projects methods
+  getAiDesignProject(id: number): Promise<AiDesignProject | undefined>;
+  getAllAiDesignProjects(userId: number): Promise<AiDesignProject[]>;
+  createAiDesignProject(project: InsertAiDesignProject): Promise<AiDesignProject>;
+  updateAiDesignProject(id: number, project: Partial<AiDesignProject>): Promise<AiDesignProject | undefined>;
+  deleteAiDesignProject(id: number): Promise<void>;
+  
+  // AI Design Chat Messages methods
+  getAiDesignChatMessages(projectId: number): Promise<AiDesignChatMessage[]>;
+  createAiDesignChatMessage(message: InsertAiDesignChatMessage): Promise<AiDesignChatMessage>;
 }
 
 import connectPgSimple from "connect-pg-simple";
@@ -55,6 +68,79 @@ const PostgresSessionStore = connectPgSimple(session);
 const MemoryStore = createMemoryStore(session);
 
 export class MemStorage implements IStorage {
+  // AI Design Project methods
+  async getAiDesignProject(id: number): Promise<AiDesignProject | undefined> {
+    return this.aiDesignProjects.get(id);
+  }
+  
+  async getAllAiDesignProjects(userId: number): Promise<AiDesignProject[]> {
+    return Array.from(this.aiDesignProjects.values()).filter(
+      (project) => project.userId === userId
+    );
+  }
+  
+  async createAiDesignProject(insertProject: InsertAiDesignProject): Promise<AiDesignProject> {
+    const id = this.aiDesignProjectId++;
+    const project: AiDesignProject = { 
+      ...insertProject, 
+      id, 
+      createdAt: new Date(),
+      status: "pending",
+      generatedFloorPlanUrl: null,
+      generatedRenderUrl: null,
+      floorPlanImageUrl: insertProject.floorPlanImageUrl || null,
+      renderImageUrl: insertProject.renderImageUrl || null,
+      quoteId: insertProject.quoteId || null,
+      moodboardId: insertProject.moodboardId || null
+    };
+    this.aiDesignProjects.set(id, project);
+    return project;
+  }
+  
+  async updateAiDesignProject(id: number, projectUpdate: Partial<AiDesignProject>): Promise<AiDesignProject | undefined> {
+    const existingProject = this.aiDesignProjects.get(id);
+    if (!existingProject) return undefined;
+    
+    const updatedProject = { ...existingProject, ...projectUpdate };
+    this.aiDesignProjects.set(id, updatedProject);
+    return updatedProject;
+  }
+  
+  async deleteAiDesignProject(id: number): Promise<void> {
+    // Excluir todas as mensagens de chat associadas ao projeto
+    const chatMessages = Array.from(this.aiDesignChatMessages.values())
+      .filter(message => message.projectId === id);
+    
+    chatMessages.forEach(message => {
+      this.aiDesignChatMessages.delete(message.id);
+    });
+    
+    // Excluir o projeto
+    this.aiDesignProjects.delete(id);
+  }
+  
+  // AI Design Chat Messages methods
+  async getAiDesignChatMessages(projectId: number): Promise<AiDesignChatMessage[]> {
+    return Array.from(this.aiDesignChatMessages.values())
+      .filter(message => message.projectId === projectId)
+      .sort((a, b) => {
+        const dateA = a.createdAt instanceof Date ? a.createdAt.getTime() : 0;
+        const dateB = b.createdAt instanceof Date ? b.createdAt.getTime() : 0;
+        return dateA - dateB;
+      });
+  }
+  
+  async createAiDesignChatMessage(insertMessage: InsertAiDesignChatMessage): Promise<AiDesignChatMessage> {
+    const id = this.aiDesignChatMessageId++;
+    const message: AiDesignChatMessage = {
+      ...insertMessage,
+      id,
+      createdAt: new Date(),
+      attachmentUrl: insertMessage.attachmentUrl || null
+    };
+    this.aiDesignChatMessages.set(id, message);
+    return message;
+  }
   sessionStore: session.Store;
   
   private users: Map<number, User>;
@@ -62,12 +148,16 @@ export class MemStorage implements IStorage {
   private catalogs: Map<number, Catalog>;
   private quotes: Map<number, Quote>;
   private moodboards: Map<number, Moodboard>;
+  private aiDesignProjects: Map<number, AiDesignProject>;
+  private aiDesignChatMessages: Map<number, AiDesignChatMessage>;
   
   private userId: number;
   private productId: number;
   private catalogId: number;
   private quoteId: number;
   private moodboardId: number;
+  private aiDesignProjectId: number;
+  private aiDesignChatMessageId: number;
 
   constructor() {
     // Inicializar o sessionStore
@@ -79,12 +169,16 @@ export class MemStorage implements IStorage {
     this.catalogs = new Map();
     this.quotes = new Map();
     this.moodboards = new Map();
+    this.aiDesignProjects = new Map();
+    this.aiDesignChatMessages = new Map();
     
     this.userId = 1;
     this.productId = 1;
     this.catalogId = 1;
     this.quoteId = 1;
     this.moodboardId = 1;
+    this.aiDesignProjectId = 1;
+    this.aiDesignChatMessageId = 1;
 
     // Add demo user
     this.createUser({
