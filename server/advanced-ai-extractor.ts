@@ -362,7 +362,7 @@ function processExtractedProducts(products: any[], userId: number, catalogId: nu
       catalogId,
       name: product.name || "Produto sem nome",
       description: product.description || "",
-      code: product.code || `AUTO-${Math.floor(Math.random() * 10000)}`,
+      code: product.code || 'UNKNOWN-CODE',
       price: typeof product.price === 'number' ? product.price : 0,
       category: category || "Não categorizado",
       colors: Array.isArray(product.colors) ? product.colors : [],

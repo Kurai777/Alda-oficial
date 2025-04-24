@@ -1160,7 +1160,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             catalogId: catalog.id,
             name: productData.name || "Produto sem nome",
             description: productData.description || "",
-            code: productData.code || `AUTO-${Math.floor(Math.random() * 10000)}`,
+            code: productData.code || 'UNKNOWN-CODE',
             price: typeof productData.price === 'number' ? productData.price : 0,
             category: productData.category || "Não categorizado",
             colors: Array.isArray(productData.colors) ? productData.colors : [],

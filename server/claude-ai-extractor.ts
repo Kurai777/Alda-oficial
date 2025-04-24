@@ -215,7 +215,7 @@ function processExtractedProducts(products: any[], userId: number, catalogId: nu
       catalogId,
       name: product.name || "Produto sem nome",
       description: product.description || "",
-      code: product.code || `CLAUDE-${Math.floor(Math.random() * 10000)}`,
+      code: product.code || `UNKNOWN-CODE`,
       price: typeof product.price === 'number' ? product.price : 
             typeof product.price === 'string' ? parseInt(product.price.replace(/\D/g, '')) : 0,
       category: category || "Não categorizado",
