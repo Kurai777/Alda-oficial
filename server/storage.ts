@@ -24,12 +24,14 @@ export interface IStorage {
   createProduct(product: InsertProduct): Promise<Product>;
   updateProduct(id: number, product: Partial<InsertProduct>): Promise<Product | undefined>;
   deleteProduct(id: number): Promise<boolean>;
+  deleteProductsByCatalogId(catalogId: number): Promise<number>; // Retorna número de produtos excluídos
 
   // Catalog methods
   getCatalog(id: number): Promise<Catalog | undefined>;
   getCatalogsByUserId(userId: number | string): Promise<Catalog[]>;
   createCatalog(catalog: InsertCatalog): Promise<Catalog>;
   updateCatalogStatus(id: number, status: string, firestoreCatalogId?: string): Promise<Catalog | undefined>;
+  deleteCatalog(id: number): Promise<boolean>;
 
   // Quote methods
   getQuote(id: number): Promise<Quote | undefined>;
@@ -429,7 +431,27 @@ export class MemStorage implements IStorage {
   }
 
   async deleteProduct(id: number): Promise<boolean> {
+    console.log(`Excluindo produto com ID ${id}`);
     return this.products.delete(id);
+  }
+  
+  async deleteProductsByCatalogId(catalogId: number): Promise<number> {
+    console.log(`Excluindo todos os produtos do catálogo com ID ${catalogId}`);
+    let deletedCount = 0;
+    
+    // Encontrar todos os produtos do catálogo
+    const productsToDelete = Array.from(this.products.values())
+      .filter(product => product.catalogId === catalogId);
+      
+    // Excluir cada produto
+    for (const product of productsToDelete) {
+      if (this.products.delete(product.id)) {
+        deletedCount++;
+      }
+    }
+    
+    console.log(`${deletedCount} produtos excluídos do catálogo ${catalogId}`);
+    return deletedCount;
   }
 
   // Catalog methods
@@ -490,6 +512,19 @@ export class MemStorage implements IStorage {
     
     this.catalogs.set(id, updatedCatalog);
     return updatedCatalog;
+  }
+  
+  async deleteCatalog(id: number): Promise<boolean> {
+    console.log(`Excluindo catálogo com ID ${id}`);
+    
+    // Primeiro, excluir todos os produtos associados a este catálogo
+    await this.deleteProductsByCatalogId(id);
+    
+    // Depois, excluir o catálogo
+    const result = this.catalogs.delete(id);
+    console.log(`Catálogo ${id} ${result ? 'excluído com sucesso' : 'não encontrado'}`);
+    
+    return result;
   }
 
   // Quote methods
