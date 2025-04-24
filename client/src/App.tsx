@@ -11,6 +11,8 @@ import CatalogDetails from "@/pages/catalog-details";
 import Quotes from "@/pages/quotes";
 import Moodboards from "@/pages/moodboards";
 import Profile from "@/pages/profile";
+import AiDesign from "@/pages/ai-design";
+import AiDesignChat from "@/pages/ai-design-chat";
 import Layout from "@/components/layout/layout";
 import { AuthProvider } from "@/lib/auth";
 
@@ -56,6 +58,22 @@ function Router() {
           <Profile />
         </Layout>
       </ProtectedRoute>
+
+      <ProtectedRoute path="/ai-design">
+        <Layout>
+          <AiDesign />
+        </Layout>
+      </ProtectedRoute>
+
+      <Route path="/ai-design/:id">
+        {params => (
+          <ProtectedRoute>
+            <Layout>
+              <AiDesignChat params={params} />
+            </Layout>
+          </ProtectedRoute>
+        )}
+      </Route>
       
       <Route component={NotFound} />
     </Switch>

@@ -1273,6 +1273,283 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Rotas para projetos de design com IA
+  app.get("/api/ai-design-projects", async (req, res) => {
+    try {
+      const userId = parseInt(req.query.userId as string);
+
+      if (isNaN(userId)) {
+        return res.status(400).json({ message: "ID de usuário inválido" });
+      }
+
+      const projects = await storage.getAllAiDesignProjects(userId);
+      res.json(projects);
+    } catch (error) {
+      console.error("Erro ao buscar projetos de design:", error);
+      res.status(500).json({ 
+        message: "Falha ao buscar projetos", 
+        error: error instanceof Error ? error.message : "Erro desconhecido" 
+      });
+    }
+  });
+
+  app.get("/api/ai-design-projects/:id", async (req, res) => {
+    try {
+      const projectId = parseInt(req.params.id);
+      
+      if (isNaN(projectId)) {
+        return res.status(400).json({ message: "ID de projeto inválido" });
+      }
+
+      const project = await storage.getAiDesignProject(projectId);
+      
+      if (!project) {
+        return res.status(404).json({ message: "Projeto não encontrado" });
+      }
+
+      res.json(project);
+    } catch (error) {
+      console.error("Erro ao buscar projeto de design:", error);
+      res.status(500).json({ 
+        message: "Falha ao buscar projeto", 
+        error: error instanceof Error ? error.message : "Erro desconhecido" 
+      });
+    }
+  });
+
+  app.post("/api/ai-design-projects", async (req, res) => {
+    try {
+      const { title, userId, floorPlanImageUrl, renderImageUrl, quoteId, moodboardId } = req.body;
+
+      if (!title || !userId) {
+        return res.status(400).json({ message: "Título e ID do usuário são obrigatórios" });
+      }
+
+      const project = await storage.createAiDesignProject({
+        title,
+        userId,
+        floorPlanImageUrl,
+        renderImageUrl,
+        quoteId,
+        moodboardId
+      });
+
+      // Criar mensagem de sistema inicial
+      await storage.createAiDesignChatMessage({
+        projectId: project.id,
+        role: "system",
+        content: "Bem-vindo ao assistente de design! Envie uma planta baixa e um render do ambiente para encontrar móveis semelhantes em nosso catálogo."
+      });
+
+      res.status(201).json(project);
+    } catch (error) {
+      console.error("Erro ao criar projeto de design:", error);
+      res.status(500).json({ 
+        message: "Falha ao criar projeto", 
+        error: error instanceof Error ? error.message : "Erro desconhecido" 
+      });
+    }
+  });
+
+  app.put("/api/ai-design-projects/:id", async (req, res) => {
+    try {
+      const projectId = parseInt(req.params.id);
+      
+      if (isNaN(projectId)) {
+        return res.status(400).json({ message: "ID de projeto inválido" });
+      }
+
+      const project = await storage.getAiDesignProject(projectId);
+      
+      if (!project) {
+        return res.status(404).json({ message: "Projeto não encontrado" });
+      }
+
+      const updatedProject = await storage.updateAiDesignProject(projectId, req.body);
+      res.json(updatedProject);
+    } catch (error) {
+      console.error("Erro ao atualizar projeto de design:", error);
+      res.status(500).json({ 
+        message: "Falha ao atualizar projeto", 
+        error: error instanceof Error ? error.message : "Erro desconhecido" 
+      });
+    }
+  });
+
+  app.delete("/api/ai-design-projects/:id", async (req, res) => {
+    try {
+      const projectId = parseInt(req.params.id);
+      
+      if (isNaN(projectId)) {
+        return res.status(400).json({ message: "ID de projeto inválido" });
+      }
+
+      const project = await storage.getAiDesignProject(projectId);
+      
+      if (!project) {
+        return res.status(404).json({ message: "Projeto não encontrado" });
+      }
+
+      await storage.deleteAiDesignProject(projectId);
+      res.sendStatus(204);
+    } catch (error) {
+      console.error("Erro ao excluir projeto de design:", error);
+      res.status(500).json({ 
+        message: "Falha ao excluir projeto", 
+        error: error instanceof Error ? error.message : "Erro desconhecido" 
+      });
+    }
+  });
+
+  // Rotas para mensagens de chat de projetos de design
+  app.get("/api/ai-design-projects/:id/messages", async (req, res) => {
+    try {
+      const projectId = parseInt(req.params.id);
+      
+      if (isNaN(projectId)) {
+        return res.status(400).json({ message: "ID de projeto inválido" });
+      }
+
+      const messages = await storage.getAiDesignChatMessages(projectId);
+      res.json(messages);
+    } catch (error) {
+      console.error("Erro ao buscar mensagens de chat:", error);
+      res.status(500).json({ 
+        message: "Falha ao buscar mensagens", 
+        error: error instanceof Error ? error.message : "Erro desconhecido" 
+      });
+    }
+  });
+
+  app.post("/api/ai-design-projects/:id/messages", async (req, res) => {
+    try {
+      const projectId = parseInt(req.params.id);
+      
+      if (isNaN(projectId)) {
+        return res.status(400).json({ message: "ID de projeto inválido" });
+      }
+
+      const { role, content, attachmentUrl } = req.body;
+
+      if (!role || !content) {
+        return res.status(400).json({ message: "Função e conteúdo são obrigatórios" });
+      }
+
+      // Certifique-se de que o projeto existe
+      const project = await storage.getAiDesignProject(projectId);
+      if (!project) {
+        return res.status(404).json({ message: "Projeto não encontrado" });
+      }
+
+      const message = await storage.createAiDesignChatMessage({
+        projectId,
+        role,
+        content,
+        attachmentUrl
+      });
+
+      // Se for uma mensagem do usuário, processe-a com a IA para gerar uma resposta
+      if (role === "user") {
+        // Criar mensagem temporária informando que está processando
+        const processingMessage = await storage.createAiDesignChatMessage({
+          projectId,
+          role: "assistant",
+          content: "Estou processando sua solicitação. Isso pode levar alguns instantes..."
+        });
+        
+        // Iniciar processamento em segundo plano para não bloquear a resposta HTTP
+        import('./ai-design-processor')
+          .then(async (processor) => {
+            try {
+              // Verificar se a mensagem contém uma URL de imagem de planta ou render
+              if (attachmentUrl) {
+                // Atualizar o projeto com a URL da imagem, se não estiver definida
+                const projectUpdate: any = {};
+                
+                // Detectar tipo de imagem baseado na mensagem e no conteúdo
+                const isFloorPlan = content.toLowerCase().includes('planta') || 
+                                  content.toLowerCase().includes('baixa') ||
+                                  content.toLowerCase().includes('floor');
+                
+                const isRender = content.toLowerCase().includes('render') || 
+                               content.toLowerCase().includes('3d') ||
+                               content.toLowerCase().includes('perspective');
+                
+                if (isFloorPlan && !project.floorPlanImageUrl) {
+                  projectUpdate.floorPlanImageUrl = attachmentUrl;
+                  await storage.updateAiDesignProject(projectId, projectUpdate);
+                  
+                  // Reconhecer recebimento da planta baixa
+                  await storage.createAiDesignChatMessage({
+                    projectId,
+                    role: "assistant",
+                    content: "Recebi sua planta baixa! Se você também tiver um render do ambiente, por favor envie para que eu possa analisar completamente."
+                  });
+                } 
+                else if (isRender && !project.renderImageUrl) {
+                  projectUpdate.renderImageUrl = attachmentUrl;
+                  await storage.updateAiDesignProject(projectId, projectUpdate);
+                  
+                  // Reconhecer recebimento do render
+                  await storage.createAiDesignChatMessage({
+                    projectId,
+                    role: "assistant",
+                    content: "Recebi seu render! Se você também tiver uma planta baixa do ambiente, por favor envie para que eu possa analisar completamente."
+                  });
+                }
+                
+                // Se temos ambas as imagens, processar o projeto completo
+                const updatedProject = await storage.getAiDesignProject(projectId);
+                if (updatedProject?.floorPlanImageUrl && updatedProject?.renderImageUrl) {
+                  // Remover a mensagem de processamento
+                  await storage.createAiDesignChatMessage({
+                    projectId,
+                    role: "assistant",
+                    content: "Recebi todas as imagens necessárias! Agora vou processar seu projeto completo. Isso pode levar alguns minutos..."
+                  });
+                  
+                  // Processar o projeto em background
+                  processor.processAiDesignProject(projectId).catch(error => {
+                    console.error("Erro no processamento assíncrono do projeto:", error);
+                  });
+                }
+              } else {
+                // Se não tiver anexo, é uma mensagem de texto normal
+                // Vamos gerar uma resposta genérica
+                
+                // Remover a mensagem de processamento
+                await storage.createAiDesignChatMessage({
+                  projectId,
+                  role: "assistant",
+                  content: "Para que eu possa ajudar a substituir os móveis fictícios por produtos reais do catálogo, preciso que você envie as imagens do ambiente: uma planta baixa e um render em 3D. Você pode anexá-los nas próximas mensagens."
+                });
+              }
+            } catch (processingError) {
+              console.error("Erro no processamento da mensagem:", processingError);
+              
+              // Informar erro ao usuário
+              await storage.createAiDesignChatMessage({
+                projectId,
+                role: "assistant",
+                content: "Ocorreu um erro ao processar sua solicitação. Por favor, tente novamente ou entre em contato com o suporte."
+              });
+            }
+          })
+          .catch(importError => {
+            console.error("Erro ao importar o processador:", importError);
+          });
+      }
+
+      res.status(201).json(message);
+    } catch (error) {
+      console.error("Erro ao criar mensagem de chat:", error);
+      res.status(500).json({ 
+        message: "Falha ao criar mensagem", 
+        error: error instanceof Error ? error.message : "Erro desconhecido" 
+      });
+    }
+  });
+
   const httpServer = createServer(app);
   return httpServer;
 }
