@@ -93,46 +93,61 @@ export async function processFileWithAdvancedAI(filePath: string, fileName: stri
         
         console.log(`[processFileWithAdvancedAI] PDF convertido em ${pdfImages.length} imagens`);
         
-        // Processar apenas a primeira página como amostra para economizar recursos
-        // e garantir que pelo menos um processamento funcione
-        if (pdfImages.length > 0) {
+        // Processar todas as páginas, até um máximo razoável para evitar custos excessivos com API
+        const maxPagesToProcess = Math.min(pdfImages.length, 5); // Limite de 5 páginas por processamento
+        console.log(`[processFileWithAdvancedAI] Processando ${maxPagesToProcess} páginas do PDF`);
+        
+        for (let i = 0; i < maxPagesToProcess; i++) {
           try {
+            const pageNumber = i + 1;
             // Salvar imagem temporariamente
-            const tempImagePath = path.join(tempDir, `page_1.jpg`);
-            console.log(`[processFileWithAdvancedAI] Salvando primeira página em: ${tempImagePath}`);
-            await writeFile(tempImagePath, pdfImages[0]);
+            const tempImagePath = path.join(tempDir, `page_${pageNumber}.jpg`);
+            console.log(`[processFileWithAdvancedAI] Salvando página ${pageNumber} em: ${tempImagePath}`);
+            await writeFile(tempImagePath, pdfImages[i]);
             
-            console.log(`[processFileWithAdvancedAI] Processando página 1 com IA multimodal`);
+            console.log(`[processFileWithAdvancedAI] Processando página ${pageNumber} com IA multimodal`);
             
             try {
               const productsFromPage = await extractProductsFromImage(
                 tempImagePath, 
-                1, 
+                pageNumber, 
                 isFratiniCatalog
               );
               
               if (productsFromPage && productsFromPage.length > 0) {
+                // Verificar se já temos produtos com nome similar para evitar duplicação
+                const filteredProducts = productsFromPage.filter(newProduct => {
+                  // Verificar se o produto é único com base no nome e código
+                  return !extractedProducts.some(existingProduct => 
+                    (existingProduct.name && newProduct.name && 
+                     existingProduct.name.toLowerCase() === newProduct.name.toLowerCase()) ||
+                    (existingProduct.code && newProduct.code && 
+                     existingProduct.code === newProduct.code)
+                  );
+                });
+                
                 // Adicionar os produtos extraídos ao array principal
                 extractedProducts = extractedProducts.concat(
-                  productsFromPage.map(product => ({
+                  filteredProducts.map(product => ({
                     ...product,
                     userId,
                     catalogId,
-                    page: 1
+                    page: pageNumber
                   }))
                 );
-                console.log(`[processFileWithAdvancedAI] Extraídos ${productsFromPage.length} produtos da página 1`);
+                console.log(`[processFileWithAdvancedAI] Extraídos ${productsFromPage.length} produtos da página ${pageNumber}, adicionados ${filteredProducts.length} novos produtos`);
               } else {
-                console.log(`[processFileWithAdvancedAI] Nenhum produto encontrado na página 1`);
+                console.log(`[processFileWithAdvancedAI] Nenhum produto encontrado na página ${pageNumber}`);
               }
             } catch (aiErr) {
-              console.error(`[processFileWithAdvancedAI] Erro ao processar imagem com IA:`, aiErr);
-              // Propagar o erro para forçar o tratamento adequado
-              throw aiErr;
+              console.error(`[processFileWithAdvancedAI] Erro ao processar imagem ${pageNumber} com IA:`, aiErr);
+              // Continuar para a próxima página mesmo com erro
+              continue;
             }
           } catch (pageErr) {
-            console.error(`[processFileWithAdvancedAI] Erro ao processar primeira página:`, pageErr);
-            throw pageErr;
+            console.error(`[processFileWithAdvancedAI] Erro ao processar página ${i+1}:`, pageErr);
+            // Continuar para a próxima página mesmo com erro
+            continue;
           }
         }
       } catch (error) {
@@ -208,23 +223,44 @@ async function extractProductsFromImage(imagePath: string, pageNumber: number, i
          - Os códigos devem ser extraídos exatamente como aparecem na imagem
          - Não tente adivinhar informações que não estão visíveis na imagem`
       : `Você é um especialista em extrair informações sobre produtos de móveis a partir de imagens de catálogos.
-         Sua tarefa é analisar detalhadamente a imagem fornecida e identificar todos os produtos de móveis visíveis.
+         Sua tarefa é analisar detalhadamente a imagem fornecida e identificar TODOS os produtos de móveis visíveis.
          
          Para cada produto, forneça as seguintes informações:
          1. Nome completo do produto
          2. Descrição detalhada
          3. Código/referência do produto (se visível)
-         4. Preço em formato numérico (converta para centavos, ex: R$ 1.234,56 → 123456)
+         4. Preço em formato numérico (MUITO IMPORTANTE: sempre converta para centavos, ex: R$ 1.234,56 → 123456)
+            * Se o preço estiver visível, mesmo que parcialmente, SEMPRE extraia-o
+            * Se o preço estiver escrito como "R$ 4.890,00", converta para 489000 (em centavos)
+            * Se o preço estiver em promoção, use o valor promocional
+            * Nunca use 0 se o preço estiver visível na imagem
          5. Categoria (Sofá, Mesa, Cadeira, Estante, Poltrona, etc.)
          6. Materiais utilizados na fabricação
          7. Cores disponíveis
          8. Dimensões (largura, altura, profundidade em cm)
          
          IMPORTANTE:
-         - Extraia TODOS os produtos visíveis na imagem, não apenas os mais prominentes
+         - Analise TODA a imagem cuidadosamente e extraia TODOS os produtos visíveis
+         - Não ignore nenhum produto, mesmo se estiver parcialmente visível
+         - Examine cuidadosamente tabelas, listas de preços e etiquetas nos móveis
          - Se uma informação não estiver disponível na imagem, use null
          - Não adicione informações que não estejam visíveis na imagem
-         - Retorne os dados em formato estruturado JSON`;
+         - Retorne os dados em formato JSON com a seguinte estrutura:
+           {
+             "products": [
+               {
+                 "name": "Nome do Produto",
+                 "description": "Descrição detalhada",
+                 "code": "CÓDIGO-123",
+                 "price": 489000,
+                 "category": "Sofá",
+                 "materials": ["Madeira", "Tecido"],
+                 "colors": ["Azul", "Cinza"],
+                 "dimensions": {"width": 180, "height": 90, "depth": 70}
+               },
+               {...}
+             ]
+           }`;
     
     // Prompt específico para o usuário
     const userPrompt = isFratiniCatalog
@@ -275,14 +311,29 @@ async function extractProductsFromImage(imagePath: string, pageNumber: number, i
         const products = parsedResponse.products;
         console.log(`Extraídos ${products.length} produtos da imagem (Página ${pageNumber})`);
         
-        // Salvar a imagem base64 em cada produto
-        const imagePathForUrl = `data:image/jpeg;base64,${base64Image}`;
+        // Salvar a imagem em arquivo e criar URL acessível
+        const imageFileName = `processed_${Date.now()}-${Math.floor(Math.random() * 1000000000)}-${path.basename(imagePath)}_${pageNumber}.jpg`;
+        const publicImagePath = path.join(process.cwd(), 'uploads', 'extracted_images', imageFileName);
         
-        // Adicionar atributos especiais a cada produto
-        return products.map((product: any) => ({
-          ...product,
-          imageUrl: imagePathForUrl, // Adicionar a imagem da página
-          pageNumber,
+        try {
+          // Assegurar que o diretório existe
+          const dir = path.dirname(publicImagePath);
+          if (!fs.existsSync(dir)) {
+            await mkdir(dir, { recursive: true });
+          }
+          
+          // Salvar o arquivo de imagem
+          await writeFile(publicImagePath, imageBuffer);
+          console.log(`Imagem salva com sucesso em: ${publicImagePath}`);
+          
+          // URL relativa para acesso web
+          const imageUrl = `/uploads/extracted_images/${imageFileName}`;
+          
+          // Adicionar atributos especiais a cada produto
+          return products.map((product: any) => ({
+            ...product,
+            imageUrl: imageUrl, // Adicionar URL da imagem
+            pageNumber,
           // Garantir que os tipos de dados estejam corretos
           price: typeof product.price === 'number' ? product.price : 
                 typeof product.price === 'string' ? parseInt(product.price.replace(/\D/g, '')) : 0,
