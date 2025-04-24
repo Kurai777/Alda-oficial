@@ -109,9 +109,9 @@ function normalizeExcelProducts(rawProducts: ExcelProduct[]): any[] {
   const normalizedProducts: any[] = [];
   
   // Determinar possíveis nomes de campos com base na primeira linha
-  const nameFields = ['nome', 'name', 'produto', 'product', 'titulo', 'title', 'item'];
-  const codeFields = ['codigo', 'code', 'sku', 'referencia', 'reference', 'id', 'item_id'];
-  const priceFields = ['preco', 'price', 'valor', 'value', 'custo', 'cost', 'preco_venda', 'sale_price'];
+  const nameFields = ['nome', 'name', 'produto', 'product', 'titulo', 'title', 'item', 'descrição', 'description'];
+  const codeFields = ['codigo', 'code', 'sku', 'referencia', 'reference', 'id', 'item_id', 'código', 'cod', 'cod.'];
+  const priceFields = ['preco', 'price', 'valor', 'value', 'custo', 'cost', 'preco_venda', 'sale_price', 'preço', 'preço tabela', 'valor unit', 'preço s/ imp', 'preço venda'];
   
   // Detectar campos adicionais do cabeçalho
   const detectedNameFields: string[] = [];
@@ -120,30 +120,80 @@ function normalizeExcelProducts(rawProducts: ExcelProduct[]): any[] {
   
   if (rawProducts.length > 0) {
     const firstProduct = rawProducts[0];
-    const fields = Object.keys(firstProduct).map(k => k.toLowerCase());
     
-    // Detectar campos por tipo
-    fields.forEach(field => {
-      if (field.includes('nome') || field.includes('name') || field.includes('produto') || 
-         field.includes('product') || field.includes('item') || field.includes('titulo') || 
-         field.includes('title')) {
-        detectedNameFields.push(field);
+    // Analisar todas as propriedades para identificação de campos
+    for (const [key, value] of Object.entries(firstProduct)) {
+      const keyLower = key.toLowerCase();
+      
+      // Detectar campo de nome
+      if (
+        keyLower.includes('nome') || 
+        keyLower.includes('name') || 
+        keyLower.includes('produto') || 
+        keyLower.includes('product') || 
+        keyLower.includes('item') || 
+        keyLower.includes('titulo') || 
+        keyLower.includes('title') ||
+        keyLower.includes('descri')
+      ) {
+        detectedNameFields.push(key);
+      }
+      // Se o campo contém uma descrição longa, provavelmente é um campo de nome/descrição
+      else if (
+        typeof value === 'string' && 
+        value.length > 10 && 
+        !keyLower.includes('obs') && 
+        !keyLower.includes('coment')
+      ) {
+        detectedNameFields.push(key);
       }
       
-      if (field.includes('cod') || field.includes('code') || field.includes('sku') || 
-          field.includes('ref') || field.includes('id')) {
-        detectedCodeFields.push(field);
+      // Detectar campo de código
+      if (
+        keyLower.includes('cod') || 
+        keyLower.includes('code') || 
+        keyLower.includes('sku') || 
+        keyLower.includes('ref') || 
+        keyLower.includes('id')
+      ) {
+        detectedCodeFields.push(key);
+      }
+      // Se o valor parece um código (alfanumérico curto)
+      else if (
+        typeof value === 'string' && 
+        value.length < 20 && 
+        /[A-Z0-9]/.test(value) && 
+        !/[áàãâéèêíìóòõôúùç]/.test(value.toLowerCase())
+      ) {
+        detectedCodeFields.push(key);
       }
       
-      if (field.includes('prec') || field.includes('price') || field.includes('valor') || 
-          field.includes('value') || field.includes('custo') || field.includes('cost')) {
-        detectedPriceFields.push(field);
+      // Detectar campo de preço
+      if (
+        keyLower.includes('prec') || 
+        keyLower.includes('price') || 
+        keyLower.includes('valor') || 
+        keyLower.includes('value') || 
+        keyLower.includes('custo') || 
+        keyLower.includes('cost') ||
+        keyLower.includes('r$')
+      ) {
+        detectedPriceFields.push(key);
       }
-    });
+      // Se o valor parece um preço numérico
+      else if (
+        (typeof value === 'number' || 
+        (typeof value === 'string' && /^[0-9,.]+$/.test(value.trim()))) &&
+        !keyLower.includes('qtd') && 
+        !keyLower.includes('quant')
+      ) {
+        detectedPriceFields.push(key);
+      }
+    }
     
-    console.log('Campos de nome detectados:', [...nameFields, ...detectedNameFields]);
-    console.log('Campos de código detectados:', [...codeFields, ...detectedCodeFields]);
-    console.log('Campos de preço detectados:', [...priceFields, ...detectedPriceFields]);
+    console.log('Campos de nome detectados:', [...new Set([...nameFields, ...detectedNameFields])]);
+    console.log('Campos de código detectados:', [...new Set([...codeFields, ...detectedCodeFields])]);
+    console.log('Campos de preço detectados:', [...new Set([...priceFields, ...detectedPriceFields])]);
   }
   
   // Processamento em lotes para arquivos grandes
@@ -158,30 +208,86 @@ function normalizeExcelProducts(rawProducts: ExcelProduct[]): any[] {
       if (!rawProduct) continue;
       
       // Verificar se é um produto válido
-      const allNameFields = [...nameFields, ...detectedNameFields];
-      const allCodeFields = [...codeFields, ...detectedCodeFields];
-      const allPriceFields = [...priceFields, ...detectedPriceFields];
+      const allNameFields = [...new Set([...nameFields, ...detectedNameFields])];
+      const allCodeFields = [...new Set([...codeFields, ...detectedCodeFields])];
+      const allPriceFields = [...new Set([...priceFields, ...detectedPriceFields])];
       
-      // Determinar o nome do produto
+      // Tentar encontrar qualquer campo que possa ser usado como nome do produto
+      // Primeiro verificar nos campos conhecidos
       let productName = '';
+      
+      // 1. Verificar campos de nome explícitos
       for (const field of allNameFields) {
-        if (rawProduct[field]) {
-          productName = rawProduct[field];
+        if (rawProduct[field] && typeof rawProduct[field] === 'string' && rawProduct[field].trim().length > 0) {
+          productName = rawProduct[field].trim();
           break;
+        }
+      }
+      
+      // 2. Se ainda não temos nome, verificar todas as propriedades para encontrar texto relevante
+      if (!productName) {
+        // Procurar o campo com texto mais longo que possa ser um nome de produto
+        let longestTextLength = 0;
+        
+        for (const [key, value] of Object.entries(rawProduct)) {
+          if (
+            typeof value === 'string' && 
+            value.trim().length > 5 && 
+            value.trim().length > longestTextLength &&
+            !key.toLowerCase().includes('obs') &&
+            !key.toLowerCase().includes('coment')
+          ) {
+            productName = value.trim();
+            longestTextLength = value.trim().length;
+          }
         }
       }
       
       // Determinar o código do produto
       let productCode = '';
+      // 1. Verificar campos de código explícitos
       for (const field of allCodeFields) {
-        if (rawProduct[field]) {
-          productCode = rawProduct[field];
+        if (rawProduct[field] && String(rawProduct[field]).trim().length > 0) {
+          productCode = String(rawProduct[field]).trim();
           break;
         }
       }
       
-      // Se não tivermos nome nem código, pular este produto
-      if (!productName && !productCode) continue;
+      // 2. Se não encontramos código, procurar qualquer valor alfanumérico curto como código
+      if (!productCode) {
+        for (const [key, value] of Object.entries(rawProduct)) {
+          if (
+            typeof value === 'string' || 
+            typeof value === 'number'
+          ) {
+            const strValue = String(value).trim();
+            if (
+              strValue.length > 0 &&
+              strValue.length < 15 &&
+              /^[A-Za-z0-9_\-.]+$/.test(strValue) &&
+              !allNameFields.includes(key)
+            ) {
+              productCode = strValue;
+              break;
+            }
+          }
+        }
+      }
+      
+      // Se o produto não tem nem nome nem código mas tem algumas propriedades, vamos tentar criá-lo mesmo assim
+      if (!productName && !productCode) {
+        // Verificar se tem algum dado que valha a pena processar
+        const hasAnyData = Object.values(rawProduct).some(v => 
+          (typeof v === 'string' && v.trim().length > 0) || 
+          (typeof v === 'number' && !isNaN(v))
+        );
+        
+        if (!hasAnyData) continue;
+        
+        // Se tem dados mas não identificamos nome/código, criar um nome genérico
+        productName = 'Produto ' + (Math.floor(Math.random() * 10000));
+        productCode = 'CODE-' + Date.now().toString().slice(-6);
+      }
       
       // Determinar a descrição
       let description = rawProduct.descricao || rawProduct.description || '';
