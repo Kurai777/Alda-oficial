@@ -165,7 +165,7 @@ export async function processFileWithAdvancedAI(filePath: string, fileName: stri
         }
       } catch (imgError) {
         console.error(`[processFileWithAdvancedAI] Erro ao processar imagem:`, imgError);
-        // Já temos o produto mock, então continuamos
+        throw imgError;
       }
     }
     
@@ -176,20 +176,8 @@ export async function processFileWithAdvancedAI(filePath: string, fileName: stri
     return processedProducts;
   } catch (error) {
     console.error(`[processFileWithAdvancedAI] Erro crítico no processamento avançado com IA:`, error);
-    // Retornar pelo menos um produto mock em caso de erro fatal
-    return [{
-      userId,
-      catalogId,
-      name: `Catálogo ${fileName}`,
-      description: "Produto criado automaticamente devido a erro no processamento",
-      code: `ERR-${Date.now().toString().slice(-6)}`,
-      price: 0,
-      category: "Não categorizado",
-      colors: [],
-      materials: [],
-      sizes: [],
-      imageUrl: ""
-    }];
+    // Não gerar mais produtos mock - propagar o erro para o chamador lidar adequadamente
+    throw new Error(`Falha ao processar o catálogo ${fileName}. A análise de IA não conseguiu extrair produtos. Detalhes do erro: ${error.message}`);
   }
 }
 
@@ -328,37 +316,15 @@ async function extractProductsFromImage(imagePath: string, pageNumber: number, i
         console.warn("Resposta da IA não contém array de produtos no formato esperado:", parsedResponse);
         console.log("Resposta original:", responseContent);
         
-        // Criar produto único baseado na imagem
-        return [{
-          name: `Produto da Página ${pageNumber}`,
-          description: "Produto extraído automaticamente da imagem do catálogo",
-          code: `IMG-${pageNumber}-${Date.now().toString().slice(-5)}`,
-          price: 0,
-          category: "Não categorizado",
-          colors: [],
-          materials: [],
-          sizes: [],
-          imageUrl: `data:image/jpeg;base64,${base64Image}`,
-          pageNumber
-        }];
+        // Não criar produtos mock, lançar erro para forçar o tratamento adequado
+        throw new Error(`A IA não conseguiu extrair produtos da página ${pageNumber} no formato esperado. Resposta inválida.`);
       }
     } catch (parseError) {
       console.error("Erro ao analisar resposta JSON da IA:", parseError);
       console.log("Conteúdo da resposta:", responseContent);
       
-      // Retornar um produto básico com a imagem
-      return [{
-        name: `Produto da Página ${pageNumber}`,
-        description: "Produto extraído automaticamente da imagem do catálogo",
-        code: `IMG-${pageNumber}-${Date.now().toString().slice(-5)}`,
-        price: 0,
-        category: "Não categorizado",
-        colors: [],
-        materials: [],
-        sizes: [],
-        imageUrl: `data:image/jpeg;base64,${base64Image}`,
-        pageNumber
-      }];
+      // Lançar erro para forçar o tratamento adequado
+      throw new Error(`A IA retornou uma resposta malformada para a página ${pageNumber}. Não foi possível analisar como JSON válido.`);
     }
   } catch (error) {
     console.error("Erro na extração de produtos da imagem:", error);

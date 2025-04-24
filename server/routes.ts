@@ -883,7 +883,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
             
             // Processar o PDF diretamente com IA multimodal
             console.log("Iniciando chamada ao processador com IA multimodal...");
+            // Verificar se o processamento com GPT-4o extrai produtos reais e não mais "mocks"
             productsData = await processFileWithAdvancedAI(filePath, fileName, userId, catalog.id);
+            
+            // Verificar se temos produtos extraídos
+            if (!productsData || productsData.length === 0) {
+              throw new Error("A IA não conseguiu identificar nenhum produto no PDF fornecido");
+            }
             
             console.log(`IA multimodal extraiu ${productsData.length} produtos do PDF`);
             extractionInfo = `PDF processado com IA multimodal GPT-4o. Extraídos ${productsData.length} produtos com suas imagens reais.`;
@@ -1018,6 +1024,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
             
             // Processar a imagem diretamente com IA multimodal
             productsData = await processFileWithAdvancedAI(filePath, fileName, userId, catalog.id);
+            
+            // Verificar se temos produtos extraídos
+            if (!productsData || productsData.length === 0) {
+              throw new Error("A IA não conseguiu identificar nenhum produto na imagem fornecida");
+            }
             
             console.log(`IA multimodal extraiu ${productsData.length} produtos da imagem`);
             extractionInfo = `Imagem processada com IA multimodal GPT-4o. Extraídos ${productsData.length} produtos.`;
@@ -1169,35 +1180,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } catch (processingError) {
         console.error("Erro durante o processamento do arquivo:", processingError);
         
-        // Mesmo com erro, vamos criar produtos de demonstração para garantir que o usuário veja algo
-        console.log("Criando produtos de demonstração para o catálogo devido ao erro no processamento");
-        productsData = createDemoProductsFromCatalog(fileName, userId, catalog.id);
-        extractionInfo = `Processamento original falhou, mas criamos produtos de demonstração para você visualizar. Erro: ${processingError instanceof Error ? processingError.message : "Erro desconhecido"}`;
-        
-        // Atualizar o status do catálogo no Firestore para falha, mas com produtos de demonstração
+        // Atualizar o status do catálogo no Firestore para falha
         try {
-          // Salvar produtos de demonstração no Firestore
-          const demoProductsToSave = productsData.map(p => ({ 
-            ...p, 
-            userId, 
-            catalogId: firestoreCatalogId,
-            isDemoProduct: true // Marcar produtos como demonstração
-          }));
-          
-          const productIds = await saveProductsToFirestore(demoProductsToSave, userId, firestoreCatalogId);
-          console.log(`${productIds.length} produtos de demonstração salvos no Firestore`);
-          
-          // Atualizar status do catálogo no Firestore
+          // Atualizar status do catálogo no Firestore para erro
           await updateCatalogStatusInFirestore(
             userId, 
             firestoreCatalogId, 
-            "completed_with_demo_products", 
-            demoProductsToSave.length
+            "failed", 
+            0
           );
         } catch (firestoreError) {
-          console.error("Erro ao salvar produtos de demonstração no Firestore:", firestoreError);
-          // Continuar mesmo se não conseguir salvar no Firestore
+          console.error("Erro ao atualizar status do catálogo no Firestore:", firestoreError);
         }
+        
+        // Atualizar status do catálogo local
+        await storage.updateCatalogStatus(catalog.id, "failed");
+        
+        // Retornar erro para o cliente
+        return res.status(400).json({
+          message: "Falha ao processar o catálogo",
+          error: processingError instanceof Error ? processingError.message : "Erro desconhecido durante o processamento do arquivo",
+          catalog: {
+            id: catalog.id,
+            fileName: fileName
+          }
+        });
       }
       
       // Adicionar produtos ao banco de dados local
