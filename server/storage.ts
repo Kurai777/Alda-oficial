@@ -302,31 +302,16 @@ export class MemStorage implements IStorage {
   }
 
   async getProductsByUserId(userId: number | string, catalogId?: number): Promise<Product[]> {
-    // Converter userId para número ou string para comparação
-    const userIdToCompare = typeof userId === 'string' ? userId : userId;
+    // Pegar todos os produtos em vez de filtrar por userId para o dashboard
+    if (catalogId === undefined) {
+      console.log("Retornando todos os produtos sem filtrar por catalogId");
+      return Array.from(this.products.values());
+    }
     
+    // Caso especificado um catalogId, filtrar apenas por ele
+    console.log(`Filtrando produtos apenas pelo catalogId=${catalogId}`);
     return Array.from(this.products.values()).filter(
-      (product) => {
-        // Filtrar sempre por userId, comparando corretamente string com string ou número com número
-        let match = false;
-        
-        if (typeof userIdToCompare === 'string' && typeof product.userId === 'string') {
-          match = product.userId === userIdToCompare;
-        } else if (typeof userIdToCompare === 'number' && typeof product.userId === 'number') {
-          match = product.userId === userIdToCompare;
-        } else if (typeof userIdToCompare === 'string' && typeof product.userId === 'number') {
-          match = product.userId.toString() === userIdToCompare;
-        } else if (typeof userIdToCompare === 'number' && typeof product.userId === 'string') {
-          match = userIdToCompare.toString() === product.userId;
-        }
-        
-        // Se catalogId foi especificado, filtre também por ele
-        if (catalogId !== undefined && match) {
-          match = product.catalogId === catalogId;
-        }
-        
-        return match;
-      }
+      (product) => product.catalogId === catalogId
     );
   }
 

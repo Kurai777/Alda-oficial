@@ -37,6 +37,7 @@ export default function Dashboard() {
     queryFn: async () => {
       console.log("Buscando todos os produtos para o dashboard");
       try {
+        // Buscar produtos sem filtrar por userId ou catalogId para mostrar tudo
         const response = await fetch(`/api/products`, {
           method: 'GET',
           headers: {
@@ -56,7 +57,7 @@ export default function Dashboard() {
         return [];
       }
     },
-    enabled: !!user?.id,
+    enabled: true, // Sempre habilitado, sem depender de user?.id
   });
 
   const handleAddToQuote = (product: Product, color: string) => {
@@ -161,7 +162,9 @@ export default function Dashboard() {
             case "name_desc":
               return b.name.localeCompare(a.name);
             case "newest":
-              return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+              const dateA = a.createdAt ? new Date(a.createdAt) : new Date();
+              const dateB = b.createdAt ? new Date(b.createdAt) : new Date();
+              return dateB.getTime() - dateA.getTime();
             default:
               return 0;
           }
