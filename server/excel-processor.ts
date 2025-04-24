@@ -108,17 +108,109 @@ function normalizeExcelProducts(rawProducts: ExcelProduct[]): any[] {
   // Arrays para armazenar os produtos normalizados
   const normalizedProducts: any[] = [];
   
-  // Determinar possíveis nomes de campos com base na primeira linha
-  const nameFields = ['nome', 'name', 'produto', 'product', 'titulo', 'title', 'item', 'descrição', 'description'];
-  const codeFields = ['codigo', 'code', 'sku', 'referencia', 'reference', 'id', 'item_id', 'código', 'cod', 'cod.'];
-  const priceFields = ['preco', 'price', 'valor', 'value', 'custo', 'cost', 'preco_venda', 'sale_price', 'preço', 'preço tabela', 'valor unit', 'preço s/ imp', 'preço venda'];
+  // Analisar a estrutura da planilha para identificar o que cada coluna representa
+  // Vamos examinar as primeiras linhas para detectar padrões
   
-  // Detectar campos adicionais do cabeçalho
+  // Primeiro, conseguir uma lista de todas as chaves possíveis em todos os produtos
+  const allKeys = new Set<string>();
+  rawProducts.slice(0, Math.min(20, rawProducts.length)).forEach(product => {
+    Object.keys(product).forEach(key => allKeys.add(key));
+  });
+  const keyList = Array.from(allKeys);
+  
+  // Verificar se a planilha parece ser uma lista de produtos ou outro formato
+  // Para isso, analisamos a estrutura e os valores nas primeiras linhas
+  
+  // Determinar possíveis nomes de campos com base na primeira linha
+  const nameFields = ['nome', 'name', 'produto', 'product', 'titulo', 'title', 'item', 'descrição', 'description', 'descrição do produto', 'desc. produto'];
+  const codeFields = ['codigo', 'code', 'sku', 'referencia', 'reference', 'id', 'item_id', 'código', 'cod', 'cod.', 'código produto'];
+  const priceFields = ['preco', 'price', 'valor', 'value', 'custo', 'cost', 'preco_venda', 'sale_price', 'preço', 'preço tabela', 'valor unit', 'preço s/ imp', 'preço venda', 'valor unit.', 'valor venda'];
+  
+  // Verificar se este é um formato de planilha específico
+  let isDateBasedSheet = false;
+  let productColumnKey = null;
+  let priceColumnKey = null;
+  let codeColumnKey = null;
+  
+  // Verificar se temos padrões que indicam um tipo específico de planilha
+  // Por exemplo, se temos muitas entradas que parecem datas (como "maio./24", "ago./22")
+  let datePatternCount = 0;
+  let possibleDateKeys: string[] = [];
+  
+  for (const key of keyList) {
+    let dateCount = 0;
+    // Verificar primeiras 10 entradas para ver se parecem datas
+    for (let i = 0; i < Math.min(10, rawProducts.length); i++) {
+      const value = rawProducts[i][key];
+      if (typeof value === 'string' && 
+          (value.match(/^[a-z]{3,4}\.\/(2[0-9])$/i) || // padrão como "maio./24"
+           value.match(/^[a-z]{3,4}\.\/[0-9]{2}$/i) || // outros formatos de data
+           value.match(/^Data\s/i))) { // 'Data' seguida de algum texto
+        dateCount++;
+      }
+    }
+    
+    if (dateCount >= 3) { // Se pelo menos 3 das primeiras 10 entradas parecem datas
+      possibleDateKeys.push(key);
+      datePatternCount += dateCount;
+    }
+  }
+  
+  // Se encontramos várias entradas que parecem datas, esta pode ser uma planilha baseada em datas/períodos
+  if (datePatternCount > 5) {
+    isDateBasedSheet = true;
+    console.log("Detectada planilha baseada em datas/períodos");
+    
+    // Agora precisamos identificar quais colunas contêm produtos, preços e códigos
+    
+    // Para planilhas organizadas por data, geralmente outras colunas contêm informações do produto
+    for (const key of keyList) {
+      // Verificar se uma coluna contém valores que parecem preços
+      const priceCount = rawProducts.slice(0, 10).filter(p => {
+        const val = p[key];
+        return (typeof val === 'number' && val > 0) || 
+               (typeof val === 'string' && val.includes('R$')) ||
+               (typeof val === 'string' && /^[0-9.,]+$/.test(val.trim()));
+      }).length;
+      
+      if (priceCount >= 3 && !priceColumnKey) {
+        priceColumnKey = key;
+      }
+      
+      // Verificar se uma coluna contém valores que parecem códigos de produto
+      const codeCount = rawProducts.slice(0, 10).filter(p => {
+        const val = p[key];
+        return typeof val === 'string' && 
+               (val.includes('OUTLET') || val.includes('Piso') || val.includes('Depósito') || 
+                /^[A-Z0-9-]{3,10}$/.test(val.trim()));
+      }).length;
+      
+      if (codeCount >= 3 && !codeColumnKey) {
+        codeColumnKey = key;
+      }
+    }
+    
+    // Se encontramos chaves que parecem datas, usar a primeira como coluna de produtos
+    if (possibleDateKeys.length > 0) {
+      productColumnKey = possibleDateKeys[0];
+      console.log(`Usando coluna "${productColumnKey}" como produtos (baseado em datas/períodos)`);
+    }
+    
+    if (priceColumnKey) {
+      console.log(`Usando coluna "${priceColumnKey}" como preços`);
+    }
+    
+    if (codeColumnKey) {
+      console.log(`Usando coluna "${codeColumnKey}" como códigos`);
+    }
+  }
+  
+  // Detectar campos adicionais do cabeçalho para o método tradicional
   const detectedNameFields: string[] = [];
   const detectedCodeFields: string[] = [];
   const detectedPriceFields: string[] = [];
   
-  if (rawProducts.length > 0) {
+  if (rawProducts.length > 0 && !isDateBasedSheet) {
     const firstProduct = rawProducts[0];
     
     // Analisar todas as propriedades para identificação de campos
@@ -212,64 +304,221 @@ function normalizeExcelProducts(rawProducts: ExcelProduct[]): any[] {
       const allCodeFields = [...new Set([...codeFields, ...detectedCodeFields])];
       const allPriceFields = [...new Set([...priceFields, ...detectedPriceFields])];
       
-      // Tentar encontrar qualquer campo que possa ser usado como nome do produto
-      // Primeiro verificar nos campos conhecidos
+      // Determinar se devemos usar o método específico para planilhas baseadas em datas ou o método genérico
       let productName = '';
+      let productCode = '';
+      let description = '';
+      let price = 0;
       
-      // 1. Verificar campos de nome explícitos
-      for (const field of allNameFields) {
-        if (rawProduct[field] && typeof rawProduct[field] === 'string' && rawProduct[field].trim().length > 0) {
-          productName = rawProduct[field].trim();
-          break;
-        }
-      }
-      
-      // 2. Se ainda não temos nome, verificar todas as propriedades para encontrar texto relevante
-      if (!productName) {
-        // Procurar o campo com texto mais longo que possa ser um nome de produto
-        let longestTextLength = 0;
+      if (isDateBasedSheet && productColumnKey && codeColumnKey) {
+        console.log("Usando processamento específico para planilha baseada em datas");
         
-        for (const [key, value] of Object.entries(rawProduct)) {
-          if (
-            typeof value === 'string' && 
-            value.trim().length > 5 && 
-            value.trim().length > longestTextLength &&
-            !key.toLowerCase().includes('obs') &&
-            !key.toLowerCase().includes('coment')
-          ) {
-            productName = value.trim();
-            longestTextLength = value.trim().length;
+        // Para a planilha de datas, extrair informações dos produtos da tabela "POE"
+        // Neste formato, as linhas contêm produtos e as colunas contêm locais/códigos
+        
+        // 1. Extrair nome do produto da coluna de datas
+        if (productColumnKey && rawProduct[productColumnKey]) {
+          const dateValue = rawProduct[productColumnKey];
+          
+          // Se o valor na coluna de datas é uma data, esta linha representa um produto
+          if (typeof dateValue === 'string' && dateValue.trim().length > 0) {
+            // Vamos extrair um nome de produto real da planilha
+            // Esta linha de dados provavelmente define um produto, então vamos buscar outra coluna
+            // que possa conter o nome real do produto
+            
+            // Buscar um valor que pareça um nome de móvel em todas as colunas
+            let foundProductName = '';
+            
+            for (const key of keyList) {
+              const val = rawProduct[key];
+              if (typeof val === 'string' && 
+                  val.length > 3 && 
+                  !/^[0-9,.]+$/.test(val) && // não é só números
+                  key !== productColumnKey && // não é a coluna de datas
+                  key !== codeColumnKey) {    // não é a coluna de códigos
+                
+                // Verificar se este valor parece um nome de produto (móvel)
+                const isFurnitureKeyword = /mesa|cadeira|poltrona|sofa|sofá|armário|estante|rack|cama|banco|aparador|balcão|buffet|cristaleira|escrivaninha|cômoda|criado-mudo/i.test(val);
+                
+                if (isFurnitureKeyword) {
+                  foundProductName = val;
+                  break;
+                }
+                
+                // Se não encontramos uma palavra-chave específica, use o campo de texto mais longo
+                if (!foundProductName && val.length > foundProductName.length) {
+                  foundProductName = val;
+                }
+              }
+            }
+            
+            // Se encontramos um nome de produto, use-o. Caso contrário, use a data como nome temporário
+            productName = foundProductName || dateValue;
           }
         }
-      }
-      
-      // Determinar o código do produto
-      let productCode = '';
-      // 1. Verificar campos de código explícitos
-      for (const field of allCodeFields) {
-        if (rawProduct[field] && String(rawProduct[field]).trim().length > 0) {
-          productCode = String(rawProduct[field]).trim();
-          break;
+        
+        // 2. Usar a coluna de códigos para definir o código do produto
+        if (codeColumnKey && rawProduct[codeColumnKey]) {
+          productCode = String(rawProduct[codeColumnKey]).trim();
         }
-      }
-      
-      // 2. Se não encontramos código, procurar qualquer valor alfanumérico curto como código
-      if (!productCode) {
-        for (const [key, value] of Object.entries(rawProduct)) {
-          if (
-            typeof value === 'string' || 
-            typeof value === 'number'
-          ) {
-            const strValue = String(value).trim();
-            if (
-              strValue.length > 0 &&
-              strValue.length < 15 &&
-              /^[A-Za-z0-9_\-.]+$/.test(strValue) &&
-              !allNameFields.includes(key)
-            ) {
-              productCode = strValue;
-              break;
+        
+        // 3. Buscar o preço - verificar se temos um campo específico para isso
+        if (priceColumnKey && rawProduct[priceColumnKey] !== undefined) {
+          // Tentar extrair um preço numérico
+          const rawPriceVal = rawProduct[priceColumnKey];
+          
+          if (typeof rawPriceVal === 'number') {
+            price = Math.round(rawPriceVal * 100); // converter para centavos
+          } else if (typeof rawPriceVal === 'string') {
+            // Limpar a string de preço (remover R$, espaços, etc)
+            const cleanPrice = rawPriceVal
+              .replace(/R\$\s*/g, '')
+              .replace(/\s/g, '')
+              .replace(/\./g, '')
+              .replace(',', '.');
+              
+            // Converter para número
+            const numericPrice = parseFloat(cleanPrice);
+            if (!isNaN(numericPrice)) {
+              price = Math.round(numericPrice * 100);
             }
+          }
+        }
+        
+        // 4. Se ainda não temos um preço, procurar em qualquer coluna que possa conter valores numéricos
+        if (price === 0) {
+          for (const [key, value] of Object.entries(rawProduct)) {
+            if (key !== productColumnKey && key !== codeColumnKey) {
+              let numericValue = 0;
+              
+              if (typeof value === 'number') {
+                numericValue = value;
+              } else if (typeof value === 'string' && /^[0-9.,]+$/.test(value.trim())) {
+                // Limpar a string e converter para número
+                const cleanValue = value
+                  .replace(/R\$\s*/g, '')
+                  .replace(/\s/g, '')
+                  .replace(/\./g, '')
+                  .replace(',', '.');
+                  
+                numericValue = parseFloat(cleanValue);
+              }
+              
+              // Se encontramos um valor numérico maior que zero, pode ser um preço
+              if (!isNaN(numericValue) && numericValue > 0 && numericValue < 100000) {
+                price = Math.round(numericValue * 100);
+                break;
+              }
+            }
+          }
+        }
+        
+        // 5. Gerar uma descrição combinando informações disponíveis
+        const descriptions = [];
+        if (productName) descriptions.push(productName);
+        if (productCode) descriptions.push(`Código: ${productCode}`);
+        
+        // Adicionar outras informações à descrição
+        for (const [key, value] of Object.entries(rawProduct)) {
+          if (key !== productColumnKey && key !== codeColumnKey && key !== priceColumnKey &&
+              typeof value === 'string' && value.trim().length > 0) {
+            descriptions.push(`${key}: ${value}`);
+          }
+        }
+        
+        description = descriptions.join(' | ');
+      } else {
+        // Método genérico para planilhas normais
+        
+        // Tentar encontrar qualquer campo que possa ser usado como nome do produto
+        // Primeiro verificar nos campos conhecidos
+        
+        // 1. Verificar campos de nome explícitos
+        for (const field of allNameFields) {
+          if (rawProduct[field] && typeof rawProduct[field] === 'string' && rawProduct[field].trim().length > 0) {
+            productName = rawProduct[field].trim();
+            break;
+          }
+        }
+        
+        // 2. Se ainda não temos nome, verificar todas as propriedades para encontrar texto relevante
+        if (!productName) {
+          // Procurar o campo com texto mais longo que possa ser um nome de produto
+          let longestTextLength = 0;
+          
+          for (const [key, value] of Object.entries(rawProduct)) {
+            if (
+              typeof value === 'string' && 
+              value.trim().length > 5 && 
+              value.trim().length > longestTextLength &&
+              !key.toLowerCase().includes('obs') &&
+              !key.toLowerCase().includes('coment')
+            ) {
+              productName = value.trim();
+              longestTextLength = value.trim().length;
+            }
+          }
+        }
+        
+        // Determinar o código do produto
+        // 1. Verificar campos de código explícitos
+        for (const field of allCodeFields) {
+          if (rawProduct[field] && String(rawProduct[field]).trim().length > 0) {
+            productCode = String(rawProduct[field]).trim();
+            break;
+          }
+        }
+        
+        // 2. Se não encontramos código, procurar qualquer valor alfanumérico curto como código
+        if (!productCode) {
+          for (const [key, value] of Object.entries(rawProduct)) {
+            if (
+              typeof value === 'string' || 
+              typeof value === 'number'
+            ) {
+              const strValue = String(value).trim();
+              if (
+                strValue.length > 0 &&
+                strValue.length < 15 &&
+                /^[A-Za-z0-9_\-.]+$/.test(strValue) &&
+                !allNameFields.includes(key)
+              ) {
+                productCode = strValue;
+                break;
+              }
+            }
+          }
+        }
+        
+        // Determinar a descrição
+        description = rawProduct.descricao || rawProduct.description || '';
+        
+        // Determinar o preço
+        let rawPrice = null;
+        
+        for (const field of allPriceFields) {
+          if (rawProduct[field] !== null && rawProduct[field] !== undefined) {
+            rawPrice = rawProduct[field];
+            break;
+          }
+        }
+        
+        if (typeof rawPrice === 'number') {
+          // Se já for um número, apenas multiplicar por 100 (converter para centavos)
+          price = Math.round(rawPrice * 100);
+        } else if (typeof rawPrice === 'string') {
+          // Se for uma string, precisamos extrair o valor numérico
+          // Remover R$, espaços, e substituir vírgula por ponto
+          const cleanPrice = rawPrice
+            .replace(/R\$\s*/g, '')
+            .replace(/\s/g, '')
+            .replace(/\./g, '')
+            .replace(',', '.');
+          
+          // Converter para número e multiplicar por 100
+          const numericPrice = parseFloat(cleanPrice);
+          if (!isNaN(numericPrice)) {
+            price = Math.round(numericPrice * 100);
           }
         }
       }
@@ -289,38 +538,7 @@ function normalizeExcelProducts(rawProducts: ExcelProduct[]): any[] {
         productCode = 'CODE-' + Date.now().toString().slice(-6);
       }
       
-      // Determinar a descrição
-      let description = rawProduct.descricao || rawProduct.description || '';
-      
-      // Determinar o preço
-      let price = 0;
-      let rawPrice = null;
-      
-      for (const field of allPriceFields) {
-        if (rawProduct[field] !== null && rawProduct[field] !== undefined) {
-          rawPrice = rawProduct[field];
-          break;
-        }
-      }
-      
-      if (typeof rawPrice === 'number') {
-        // Se já for um número, apenas multiplicar por 100 (converter para centavos)
-        price = Math.round(rawPrice * 100);
-      } else if (typeof rawPrice === 'string') {
-        // Se for uma string, precisamos extrair o valor numérico
-        // Remover R$, espaços, e substituir vírgula por ponto
-        const cleanPrice = rawPrice
-          .replace(/R\$\s*/g, '')
-          .replace(/\s/g, '')
-          .replace(/\./g, '')
-          .replace(',', '.');
-        
-        // Converter para número e multiplicar por 100
-        const numericPrice = parseFloat(cleanPrice);
-        if (!isNaN(numericPrice)) {
-          price = Math.round(numericPrice * 100);
-        }
-      }
+
       
       // Normalizar categoria
       let category = rawProduct.categoria || rawProduct.category || '';
