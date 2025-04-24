@@ -51,7 +51,7 @@ export interface IStorage {
   
   // AI Design Projects methods
   getAiDesignProject(id: number): Promise<AiDesignProject | undefined>;
-  getAllAiDesignProjects(userId: number): Promise<AiDesignProject[]>;
+  getAllAiDesignProjects(userId: number | string): Promise<AiDesignProject[]>;
   createAiDesignProject(project: InsertAiDesignProject): Promise<AiDesignProject>;
   updateAiDesignProject(id: number, project: Partial<AiDesignProject>): Promise<AiDesignProject | undefined>;
   deleteAiDesignProject(id: number): Promise<void>;
@@ -73,7 +73,7 @@ export class MemStorage implements IStorage {
     return this.aiDesignProjects.get(id);
   }
   
-  async getAllAiDesignProjects(userId: number): Promise<AiDesignProject[]> {
+  async getAllAiDesignProjects(userId: number | string): Promise<AiDesignProject[]> {
     return Array.from(this.aiDesignProjects.values()).filter(
       (project) => project.userId === userId
     );

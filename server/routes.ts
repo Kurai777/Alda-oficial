@@ -1276,10 +1276,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Rotas para projetos de design com IA
   app.get("/api/ai-design-projects", async (req, res) => {
     try {
-      const userId = parseInt(req.query.userId as string);
+      const userId = req.query.userId as string;
 
-      if (isNaN(userId)) {
-        return res.status(400).json({ message: "ID de usuário inválido" });
+      if (!userId) {
+        return res.status(400).json({ message: "ID de usuário é obrigatório" });
       }
 
       const projects = await storage.getAllAiDesignProjects(userId);
