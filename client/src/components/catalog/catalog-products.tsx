@@ -151,8 +151,8 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
       const productToAdd = {
         ...newProduct,
         catalogId,
-        price: typeof newProduct.price === 'string' 
-          ? parseInt(newProduct.price.replace(/\D/g, '')) 
+        price: typeof newProduct.price === 'string' && typeof (newProduct.price as string).replace === 'function' 
+          ? parseInt((newProduct.price as string).replace(/\D/g, '')) 
           : Math.round(Number(newProduct.price || 0) * 100)
       };
       
@@ -498,6 +498,133 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
           </DialogContent>
         </Dialog>
       )}
+      
+      {/* Dialog para adicionar produto */}
+      <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
+        <DialogContent className="sm:max-w-[500px]">
+          <DialogHeader>
+            <DialogTitle>Adicionar Novo Produto</DialogTitle>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="new-name" className="text-right">Nome</Label>
+              <Input
+                id="new-name"
+                value={newProduct.name || ""}
+                onChange={(e) => setNewProduct({...newProduct, name: e.target.value})}
+                className="col-span-3"
+                placeholder="Nome do produto"
+              />
+            </div>
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="new-code" className="text-right">Código</Label>
+              <Input
+                id="new-code"
+                value={newProduct.code || ""}
+                onChange={(e) => setNewProduct({...newProduct, code: e.target.value})}
+                className="col-span-3"
+                placeholder="Código comercial"
+              />
+            </div>
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="new-category" className="text-right">Categoria</Label>
+              <Input
+                id="new-category"
+                value={newProduct.category || ""}
+                onChange={(e) => setNewProduct({...newProduct, category: e.target.value})}
+                className="col-span-3"
+                placeholder="Sofá, Mesa, Cadeira, etc."
+              />
+            </div>
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="new-colors" className="text-right">Cores</Label>
+              <Input
+                id="new-colors"
+                value={Array.isArray(newProduct.colors) ? newProduct.colors.join(", ") : ""}
+                onChange={(e) => setNewProduct({...newProduct, colors: e.target.value.split(", ").filter(Boolean)})}
+                className="col-span-3"
+                placeholder="Azul, Preto, Branco (separar por vírgula)"
+              />
+            </div>
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="new-price" className="text-right">Preço (R$)</Label>
+              <Input
+                id="new-price"
+                type="number"
+                value={typeof newProduct.price === 'number' ? (newProduct.price / 100).toFixed(2) : ''}
+                onChange={(e) => {
+                  const value = parseFloat(e.target.value);
+                  setNewProduct({
+                    ...newProduct, 
+                    price: isNaN(value) ? 0 : Math.round(value * 100)
+                  });
+                }}
+                className="col-span-3"
+                placeholder="1000.00"
+              />
+            </div>
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="new-materials" className="text-right">Materiais</Label>
+              <Input
+                id="new-materials"
+                value={Array.isArray(newProduct.materials) ? newProduct.materials.join(", ") : ""}
+                onChange={(e) => setNewProduct({...newProduct, materials: e.target.value.split(", ").filter(Boolean)})}
+                className="col-span-3"
+                placeholder="Madeira, Metal, Tecido (separar por vírgula)"
+              />
+            </div>
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="new-dimensions" className="text-right">Dimensões</Label>
+              <Input
+                id="new-dimensions"
+                placeholder="LarguraxAlturaxProfundidade (Ex: 80x120x60)"
+                className="col-span-3"
+                onChange={(e) => {
+                  const parts = e.target.value.split('x').map(p => parseInt(p) || 0);
+                  setNewProduct({
+                    ...newProduct, 
+                    sizes: [{
+                      width: parts[0] || undefined,
+                      height: parts[1] || undefined,
+                      depth: parts[2] || undefined,
+                      label: "Dimensões do produto"
+                    }]
+                  });
+                }}
+              />
+            </div>
+            <div className="grid grid-cols-4 items-start gap-4">
+              <Label htmlFor="new-description" className="text-right pt-2">Descrição</Label>
+              <Textarea
+                id="new-description"
+                value={newProduct.description || ""}
+                onChange={(e) => setNewProduct({...newProduct, description: e.target.value})}
+                className="col-span-3"
+                rows={3}
+                placeholder="Descrição detalhada do produto..."
+              />
+            </div>
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="new-imageUrl" className="text-right">URL da imagem</Label>
+              <Input
+                id="new-imageUrl"
+                value={newProduct.imageUrl || ""}
+                onChange={(e) => setNewProduct({...newProduct, imageUrl: e.target.value})}
+                className="col-span-3"
+                placeholder="https://... (opcional)"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsAddDialogOpen(false)}>
+              Cancelar
+            </Button>
+            <Button type="submit" onClick={handleAddProduct}>
+              Adicionar Produto
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
