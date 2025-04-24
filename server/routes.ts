@@ -94,76 +94,9 @@ async function extractProductsFromExcel(filePath: string): Promise<any[]> {
 }
 
 // Adicionando uma função de fallback para criar produtos de demonstração
-function createDemoProductsFromCatalog(fileName: string, userId: number, catalogId: number): any[] {
-  console.log(`Criando produtos de demonstração para o catálogo: ${fileName}`);
-  
-  // Determinar se é um catálogo Fratini
-  const isFratini = fileName.toLowerCase().includes("fratini");
-  
-  // Categorias de produtos comuns
-  const categories = ["Cadeira", "Poltrona", "Sofá", "Banqueta", "Mesa", "Estante", "Armário"];
-  
-  // Materiais comuns
-  const materials = ["Madeira", "Metal", "Polipropileno", "Tecido", "Couro", "MDF", "Vidro"];
-  
-  // Cores comuns
-  const colors = ["Preto", "Branco", "Marrom", "Bege", "Cinza", "Azul", "Verde", "Vermelho", "Amarelo"];
-  
-  // Criar produtos aleatórios
-  const numProducts = Math.floor(Math.random() * 5) + 3; // 3 a 7 produtos
-  const products = [];
-  
-  for (let i = 0; i < numProducts; i++) {
-    // Escolher categoria aleatória
-    const category = categories[Math.floor(Math.random() * categories.length)];
-    
-    // Escolher materiais aleatórios (1 a 2)
-    const numMaterials = Math.floor(Math.random() * 2) + 1;
-    const productMaterials: string[] = [];
-    for (let j = 0; j < numMaterials; j++) {
-      const material = materials[Math.floor(Math.random() * materials.length)];
-      if (!productMaterials.includes(material)) {
-        productMaterials.push(material);
-      }
-    }
-    
-    // Escolher cores aleatórias (1 a 3)
-    const numColors = Math.floor(Math.random() * 3) + 1;
-    const productColors: string[] = [];
-    for (let j = 0; j < numColors; j++) {
-      const color = colors[Math.floor(Math.random() * colors.length)];
-      if (!productColors.includes(color)) {
-        productColors.push(color);
-      }
-    }
-    
-    // Gerar preço aleatório (R$ 100 a R$ 2000)
-    const price = Math.floor(Math.random() * 190000) + 10000; // Em centavos
-    
-    // Criar produto
-    const productName = isFratini
-      ? `${category} ${["Milano", "Veneza", "Roma", "Firenze", "Napoli", "Torino"][Math.floor(Math.random() * 6)]}`
-      : `${category} ${["Moderna", "Clássica", "Elegante", "Luxo", "Compacta", "Design"][Math.floor(Math.random() * 6)]}`;
-    
-    const product = {
-      userId,
-      catalogId,
-      name: productName,
-      description: `${productName} em ${productMaterials.join(" e ")}`,
-      code: `CAT-${i + 1}-${Date.now().toString().slice(-4)}`,
-      price,
-      category,
-      colors: productColors,
-      materials: productMaterials,
-      sizes: [],
-      imageUrl: getCategoryDefaultImage(category)
-    };
-    
-    products.push(product);
-  }
-  
-  return products;
-}
+// Função removeida: createDemoProductsFromCatalog
+// Esta função gerava produtos aleatórios/fictícios, o que viola nossa política de integridade de dados
+// Agora estamos confiando apenas em dados extraídos de fontes autênticas
 
 // Função para obter uma imagem padrão para cada categoria
 function getCategoryDefaultImage(category: string): string {
