@@ -25,15 +25,34 @@ export default function AiDesignPage() {
   const [projectToDelete, setProjectToDelete] = useState<AiDesignProject | null>(null);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
 
-  // Buscar projetos
-  const { data: projects, isLoading, error } = useQuery<AiDesignProject[]>({
-    queryKey: ["/api/ai-design-projects", user?.uid],
+  // Buscar o ID numérico do usuário no backend
+  const { data: userBackendId } = useQuery<{ id: number }>({
+    queryKey: ["/api/auth/firebase-sync", user?.uid],
     queryFn: async () => {
-      const res = await fetch(`/api/ai-design-projects?userId=${user?.uid}`);
-      if (!res.ok) throw new Error('Falha ao carregar projetos');
+      const res = await fetch("/api/auth/firebase-sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          uid: user?.uid,
+          email: user?.email,
+          companyName: user?.companyName,
+        }),
+      });
+      if (!res.ok) throw new Error('Falha ao sincronizar usuário');
       return res.json();
     },
     enabled: !!user?.uid,
+  });
+
+  // Buscar projetos com o ID numérico
+  const { data: projects, isLoading, error } = useQuery<AiDesignProject[]>({
+    queryKey: ["/api/ai-design-projects", userBackendId?.id],
+    queryFn: async () => {
+      const res = await fetch(`/api/ai-design-projects?userId=${userBackendId?.id}`);
+      if (!res.ok) throw new Error('Falha ao carregar projetos');
+      return res.json();
+    },
+    enabled: !!userBackendId?.id,
   });
 
   // Criar novo projeto
@@ -42,7 +61,7 @@ export default function AiDesignPage() {
       const res = await fetch("/api/ai-design-projects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title, userId: user?.uid }),
+        body: JSON.stringify({ title, userId: userBackendId?.id }),
       });
       if (!res.ok) throw new Error('Falha ao criar projeto');
       return res.json();
