@@ -39,65 +39,31 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
   const pageSize = 10;
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('grid');
 
-  // Buscar produtos do catálogo (do Firestore e API local)
+  // Buscar produtos do catálogo (somente da API local para evitar problemas de permissão)
   const { data: products = [], isLoading, refetch, isError } = useQuery({
-    queryKey: ["/api/products", { catalogId, userId: user?.uid }],
+    queryKey: ["/api/products", { catalogId }],
     queryFn: async () => {
-      const userId = user?.uid;
-      console.log(`Fetching products for userId=${userId} and catalogId=${catalogId}`);
+      console.log(`Buscando produtos para catalogId=${catalogId}`);
       
       try {
-        // Primeiro, tentar buscar do banco de dados local
+        // Buscar produtos através da API do backend
         const response = await apiRequest("GET", `/api/products?catalogId=${catalogId}`);
         console.log("API response:", response);
         
-        // Se encontrou produtos locais, usá-los
-        if (response && Array.isArray(response) && response.length > 0) {
+        // Se encontrou produtos, retorná-los
+        if (response && Array.isArray(response)) {
+          console.log(`Encontrados ${response.length} produtos na API local`);
           return response;
         }
         
-        // Caso contrário, tentar buscar do Firestore
-        // Importar dinamicamente para evitar problemas de inicialização
-        const { getProductsByFirestoreCatalogId } = await import('@/lib/firestore');
-        
-        // Buscar produtos do catálogo no Firestore
-        // Precisamos da referência ao documento do catálogo no Firestore
-        const catalogResponse = await apiRequest("GET", `/api/catalogs/${catalogId}`);
-        const catalogData = await catalogResponse.json();
-        
-        if (catalogData && catalogData.firestoreCatalogId && userId) {
-          console.log(`Buscando produtos do Firestore para catalogId=${catalogData.firestoreCatalogId}`);
-          const firestoreProducts = await getProductsByFirestoreCatalogId(
-            userId.toString(), 
-            catalogData.firestoreCatalogId
-          );
-          
-          if (firestoreProducts && firestoreProducts.length > 0) {
-            // Converter produtos do Firestore para formato local
-            return firestoreProducts.map(product => ({
-              id: product.id || 0,
-              firestoreId: product.firestoreId,
-              userId: userId,
-              catalogId: catalogId,
-              name: product.name || "Produto sem nome",
-              description: product.description || "",
-              code: product.code || "",
-              price: product.price || 0,
-              category: product.category || "",
-              colors: product.colors || [],
-              materials: product.materials || [],
-              imageUrl: product.imageUrl || ""
-            }));
-          }
-        }
-        
+        console.log("Nenhum produto encontrado para este catálogo");
         return [];
       } catch (error) {
-        console.error("Error fetching products:", error);
+        console.error("Erro ao buscar produtos:", error);
         return [];
       }
     },
-    enabled: !!catalogId && !!user
+    enabled: !!catalogId
   });
 
   // Garantir que products é sempre um array antes de filtrar
