@@ -33,7 +33,29 @@ export default function Dashboard() {
 
   // Fetch products
   const { data: products, isLoading, error } = useQuery({
-    queryKey: ["/api/products", { userId: user?.id }],
+    queryKey: ["/api/products"],
+    queryFn: async () => {
+      console.log("Buscando todos os produtos para o dashboard");
+      try {
+        const response = await fetch(`/api/products`, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        });
+        
+        if (!response.ok) {
+          throw new Error(`Erro HTTP: ${response.status}`);
+        }
+        
+        const data = await response.json();
+        console.log(`Encontrados ${data.length} produtos para o dashboard`);
+        return data;
+      } catch (error) {
+        console.error("Erro ao buscar produtos:", error);
+        return [];
+      }
+    },
     enabled: !!user?.id,
   });
 
