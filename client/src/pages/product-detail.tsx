@@ -8,8 +8,96 @@ import {
   Package, 
   TrendingUp,
   Ruler,
-  Palette
+  Palette,
+  Image as ImageIcon
 } from "lucide-react";
+
+// Componente para verificar e exibir imagens com garantia de correspondência
+interface ImageWithVerificationProps {
+  productId?: number;
+  productName: string;
+  productCode?: string;
+  category?: string;
+}
+
+function ImageWithVerification({ productId, productName, productCode, category }: ImageWithVerificationProps) {
+  const [imageUrl, setImageUrl] = useState<string>("");
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [hasError, setHasError] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (!productId) {
+      setImageUrl("/placeholders/default.svg");
+      setIsLoading(false);
+      return;
+    }
+
+    // Verificar a disponibilidade da imagem
+    fetch(`/api/verify-product-image/${productId}`)
+      .then(response => response.json())
+      .then(data => {
+        if (data.hasImage) {
+          // Se a API retornar uma URL direta, usar
+          if (data.directUrl) {
+            setImageUrl(data.imageUrl);
+          } else {
+            // Caso contrário, usar a rota de API que garante fallback
+            setImageUrl(`/api/product-image/${productId}`);
+          }
+        } else {
+          // Se não há imagem, determinar um placeholder baseado na categoria
+          let placeholderFile = 'default.svg';
+          if (category) {
+            const normalizedCategory = category.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+            if (normalizedCategory.includes('sofa')) placeholderFile = 'sofa.svg';
+            else if (normalizedCategory.includes('mesa')) placeholderFile = 'mesa.svg';
+            else if (normalizedCategory.includes('poltrona')) placeholderFile = 'poltrona.svg';
+            else if (normalizedCategory.includes('armario') || normalizedCategory.includes('estante')) placeholderFile = 'armario.svg';
+          }
+          setImageUrl(`/placeholders/${placeholderFile}`);
+        }
+        setIsLoading(false);
+      })
+      .catch(error => {
+        console.error("Erro ao verificar imagem:", error);
+        setImageUrl(`/api/product-image/${productId}`); // Usar API diretamente como fallback
+        setIsLoading(false);
+        setHasError(true);
+      });
+  }, [productId, category]);
+
+  const handleImageError = () => {
+    // Se a imagem falhar ao carregar, usar placeholder
+    let placeholderFile = 'default.svg';
+    if (category) {
+      const normalizedCategory = category.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+      if (normalizedCategory.includes('sofa')) placeholderFile = 'sofa.svg';
+      else if (normalizedCategory.includes('mesa')) placeholderFile = 'mesa.svg';
+      else if (normalizedCategory.includes('poltrona')) placeholderFile = 'poltrona.svg';
+      else if (normalizedCategory.includes('armario') || normalizedCategory.includes('estante')) placeholderFile = 'armario.svg';
+    }
+    setImageUrl(`/placeholders/${placeholderFile}`);
+    setHasError(true);
+  };
+
+  if (isLoading) {
+    return (
+      <div className="h-full w-full flex items-center justify-center bg-gray-100 animate-pulse">
+        <ImageIcon className="h-12 w-12 text-gray-300" />
+      </div>
+    );
+  }
+
+  return (
+    <img 
+      src={imageUrl}
+      alt={productName} 
+      className="h-full w-full object-cover"
+      loading="lazy"
+      onError={handleImageError}
+    />
+  );
+};
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -123,13 +211,13 @@ export default function ProductDetailPage() {
       </div>
       
       <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-        {/* Imagem - Sempre usar a API de produto para exibir imagens */}
+        {/* Imagem - Usar o componente de verificação de imagens para garantir correspondência */}
         <div className="bg-muted rounded-lg overflow-hidden h-[400px] flex items-center justify-center">
-          <img 
-            src={`/api/product-image/${product.id}`}
-            alt={product.name} 
-            className="h-full w-full object-contain"
-            loading="lazy"
+          <ImageWithVerification 
+            productId={product.id} 
+            productName={product.name} 
+            productCode={product.code}
+            category={product.category}
           />
         </div>
         

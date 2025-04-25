@@ -2074,19 +2074,104 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
   
+  // Rota para verificar a disponibilidade da imagem de um produto
+  app.get("/api/verify-product-image/:productId", async (req: Request, res: Response) => {
+    try {
+      const { productId } = req.params;
+      
+      // Obter o produto do banco de dados
+      const product = await storage.getProduct(parseInt(productId));
+      if (!product) {
+        return res.status(404).json({ 
+          status: 'error', 
+          message: 'Produto não encontrado',
+          hasImage: false 
+        });
+      }
+
+      // Obter informações da imagem
+      const { getProductImageInfo, extractMockUrlComponents, findActualImagePath } = await import('./image-service');
+      const imageInfo = await getProductImageInfo(parseInt(productId));
+      
+      // Se temos um caminho local e o arquivo existe
+      if (imageInfo.localPath && fs.existsSync(imageInfo.localPath)) {
+        return res.json({
+          status: 'success',
+          hasImage: true,
+          imageUrl: `/api/product-image/${productId}`,
+          localPath: imageInfo.localPath
+        });
+      }
+      
+      // Se temos uma URL mock, verificar se podemos encontrar o arquivo localmente
+      if (product.imageUrl?.includes('mock-firebase-storage.com')) {
+        try {
+          const components = extractMockUrlComponents(product.imageUrl);
+          if (components) {
+            const imagePath = await findActualImagePath(components.filename);
+            if (imagePath) {
+              return res.json({
+                status: 'success',
+                hasImage: true,
+                imageUrl: `/api/product-image/${productId}`,
+                localPath: imagePath
+              });
+            }
+          }
+        } catch (error) {
+          console.error("Erro ao processar URL mock:", error);
+        }
+      }
+      
+      // Se temos uma URL absoluta (exceto mock)
+      if (product.imageUrl && (product.imageUrl.startsWith('http://') || product.imageUrl.startsWith('https://')) && 
+          !product.imageUrl.includes('mock-firebase-storage.com')) {
+        return res.json({
+          status: 'success',
+          hasImage: true,
+          imageUrl: product.imageUrl,
+          directUrl: true
+        });
+      }
+      
+      // Se não foi possível encontrar uma imagem
+      return res.json({
+        status: 'success',
+        hasImage: false,
+        placeholderUrl: '/placeholders/default.svg',
+        productName: product.name,
+        productCode: product.code
+      });
+      
+    } catch (error) {
+      console.error('Erro ao verificar imagem do produto:', error);
+      res.status(500).json({ 
+        status: 'error', 
+        message: 'Erro ao verificar imagem do produto',
+        hasImage: false
+      });
+    }
+  });
+
   // Rota para servir imagens por ID de produto
   app.get("/api/product-image/:productId", async (req: Request, res: Response) => {
     try {
       const { productId } = req.params;
       
       // Usar o novo serviço de imagens para obter informações da imagem
-      const { getProductImageInfo, extractMockUrlComponents } = await import('./image-service');
+      const { getProductImageInfo, extractMockUrlComponents, findActualImagePath } = await import('./image-service');
       console.log(`Buscando imagem para produto ID: ${productId}`);
       
       // Obter o produto do banco de dados
       const product = await storage.getProduct(parseInt(productId));
       if (product) {
         console.log(`Produto encontrado: ${JSON.stringify(product)}`);
+      } else {
+        console.log(`Produto com ID ${productId} não encontrado`);
+        // Produto não encontrado, servir placeholder
+        const defaultPlaceholder = path.join(process.cwd(), 'public', 'placeholders', 'default.svg');
+        res.setHeader('Content-Type', 'image/svg+xml');
+        return res.sendFile(defaultPlaceholder);
       }
       
       const imageInfo = await getProductImageInfo(parseInt(productId));
@@ -2104,6 +2189,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const components = extractMockUrlComponents(product.imageUrl);
           if (components) {
             console.log(`URL mock detectada: ${product.imageUrl}`);
+            
+            // Usar a função centralizada para encontrar a imagem
+            const imagePath = await findActualImagePath(components.filename);
+            if (imagePath) {
+              console.log(`Imagem encontrada utilizando serviço centralizado: ${imagePath}`);
+              const contentType = mime.lookup(imagePath) || 'application/octet-stream';
+              res.setHeader('Content-Type', contentType);
+              return res.sendFile(imagePath);
+            }
             
             // Verificar em vários diretórios possíveis
             const possibleDirs = [
@@ -2205,11 +2299,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.sendFile(fullPath);
       }
       
-      // CASO 6: Se nada foi encontrado, servir o fallback padrão
-      console.log(`Imagem não encontrada, usando placeholder padrão`);
-      const defaultPlaceholder = path.join(process.cwd(), 'public', 'placeholders', 'default.svg');
+      // CASO 6: Determinar o placeholder baseado na categoria do produto
+      let placeholderFile = 'default.svg';
+      if (product.category) {
+        const category = product.category.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+        if (category.includes('sofa')) placeholderFile = 'sofa.svg';
+        else if (category.includes('mesa')) placeholderFile = 'mesa.svg';
+        else if (category.includes('poltrona')) placeholderFile = 'poltrona.svg';
+        else if (category.includes('armario') || category.includes('estante')) placeholderFile = 'armario.svg';
+      }
+      
+      console.log(`Imagem não encontrada, usando placeholder ${placeholderFile}`);
+      const placeholderPath = path.join(process.cwd(), 'public', 'placeholders', placeholderFile);
       res.setHeader('Content-Type', 'image/svg+xml');
-      return res.sendFile(defaultPlaceholder);
+      return res.sendFile(placeholderPath);
       
     } catch (error) {
       console.error('Erro ao servir imagem de produto:', error);

@@ -178,6 +178,98 @@ export function extractMockUrlComponents(url: string): { userId: string; catalog
 }
 
 /**
+ * Busca o caminho real da imagem em todos os diretórios possíveis
+ * Esta função centraliza a busca por imagens locais
+ * 
+ * @param filename Nome do arquivo para procurar
+ * @returns Caminho completo do arquivo encontrado ou null
+ */
+export async function findActualImagePath(filename: string): Promise<string | null> {
+  try {
+    if (!filename) return null;
+    
+    const baseDir = process.cwd();
+    
+    // Lista de diretórios prioritários para busca
+    const priorityDirs = [
+      path.join(baseDir, 'uploads', 'temp-excel-images'),
+      path.join(baseDir, 'uploads', 'extracted_images'),
+      path.join(baseDir, 'uploads', 'images'),
+      path.join(baseDir, 'uploads')
+    ];
+    
+    // 1. Verificar diretamente nos diretórios principais
+    for (const dir of priorityDirs) {
+      if (fs.existsSync(dir)) {
+        const directPath = path.join(dir, filename);
+        if (fs.existsSync(directPath)) {
+          console.log(`Imagem ${filename} encontrada diretamente em ${dir}`);
+          return directPath;
+        }
+      }
+    }
+    
+    // 2. Verificar em todos os subdiretórios de primeiro nível
+    for (const dir of priorityDirs) {
+      if (fs.existsSync(dir)) {
+        try {
+          const subdirs = fs.readdirSync(dir).filter(item => {
+            const fullPath = path.join(dir, item);
+            return fs.statSync(fullPath).isDirectory();
+          });
+          
+          for (const subdir of subdirs) {
+            const imagePath = path.join(dir, subdir, filename);
+            if (fs.existsSync(imagePath)) {
+              console.log(`Imagem ${filename} encontrada em subdiretório: ${imagePath}`);
+              return imagePath;
+            }
+          }
+        } catch (error) {
+          console.error(`Erro ao ler diretório ${dir}:`, error);
+        }
+      }
+    }
+    
+    // 3. Busca recursiva como último recurso
+    // Começamos com o diretório uploads por ser mais específico
+    const uploadsDir = path.join(baseDir, 'uploads');
+    if (fs.existsSync(uploadsDir)) {
+      // Usar a função existente de getAllFilesRecursive
+      const allFiles = getAllFilesRecursive(uploadsDir);
+      
+      // Primeiro, tentar match exato pelo nome
+      const exactMatches = allFiles.filter(f => path.basename(f) === filename);
+      if (exactMatches.length > 0) {
+        console.log(`Imagem ${filename} encontrada por busca recursiva (match exato): ${exactMatches[0]}`);
+        return exactMatches[0];
+      }
+      
+      // Então, tentar match parcial (caso o nome tenha sido alterado)
+      // Extrair parte do nome sem números e extensão para comparação mais flexível
+      const baseFilename = filename.replace(/\d+/g, '').split('.')[0];
+      if (baseFilename.length > 3) { // Apenas se tiver um nome base significativo
+        const similarMatches = allFiles.filter(f => {
+          const baseName = path.basename(f).replace(/\d+/g, '').split('.')[0];
+          return baseName.includes(baseFilename) || baseFilename.includes(baseName);
+        });
+        
+        if (similarMatches.length > 0) {
+          console.log(`Imagem similar a ${filename} encontrada: ${similarMatches[0]}`);
+          return similarMatches[0];
+        }
+      }
+    }
+    
+    console.log(`Imagem ${filename} não encontrada em nenhum local`);
+    return null;
+  } catch (error) {
+    console.error(`Erro ao buscar imagem ${filename}:`, error);
+    return null;
+  }
+}
+
+/**
  * Verifica todos os caminhos possíveis onde uma imagem pode estar
  * 
  * @param userId ID do usuário

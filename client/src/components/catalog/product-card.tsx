@@ -1,11 +1,98 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { PlusCircle, Info } from "lucide-react";
+import { PlusCircle, Info, Image as ImageIcon } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { Product } from "@shared/schema";
 import { Link } from "wouter";
+
+// Componente para verificar e exibir imagens com garantia de correspondência
+interface ImageWithVerificationProps {
+  productId?: number;
+  productName: string;
+  productCode?: string;
+  category?: string;
+}
+
+function ImageWithVerification({ productId, productName, productCode, category }: ImageWithVerificationProps) {
+  const [imageUrl, setImageUrl] = useState<string>("");
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [hasError, setHasError] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (!productId) {
+      setImageUrl("/placeholders/default.svg");
+      setIsLoading(false);
+      return;
+    }
+
+    // Verificar a disponibilidade da imagem
+    fetch(`/api/verify-product-image/${productId}`)
+      .then(response => response.json())
+      .then(data => {
+        if (data.hasImage) {
+          // Se a API retornar uma URL direta, usar
+          if (data.directUrl) {
+            setImageUrl(data.imageUrl);
+          } else {
+            // Caso contrário, usar a rota de API que garante fallback
+            setImageUrl(`/api/product-image/${productId}`);
+          }
+        } else {
+          // Se não há imagem, determinar um placeholder baseado na categoria
+          let placeholderFile = 'default.svg';
+          if (category) {
+            const normalizedCategory = category.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+            if (normalizedCategory.includes('sofa')) placeholderFile = 'sofa.svg';
+            else if (normalizedCategory.includes('mesa')) placeholderFile = 'mesa.svg';
+            else if (normalizedCategory.includes('poltrona')) placeholderFile = 'poltrona.svg';
+            else if (normalizedCategory.includes('armario') || normalizedCategory.includes('estante')) placeholderFile = 'armario.svg';
+          }
+          setImageUrl(`/placeholders/${placeholderFile}`);
+        }
+        setIsLoading(false);
+      })
+      .catch(error => {
+        console.error("Erro ao verificar imagem:", error);
+        setImageUrl(`/api/product-image/${productId}`); // Usar API diretamente como fallback
+        setIsLoading(false);
+        setHasError(true);
+      });
+  }, [productId, category]);
+
+  const handleImageError = () => {
+    // Se a imagem falhar ao carregar, usar placeholder
+    let placeholderFile = 'default.svg';
+    if (category) {
+      const normalizedCategory = category.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+      if (normalizedCategory.includes('sofa')) placeholderFile = 'sofa.svg';
+      else if (normalizedCategory.includes('mesa')) placeholderFile = 'mesa.svg';
+      else if (normalizedCategory.includes('poltrona')) placeholderFile = 'poltrona.svg';
+      else if (normalizedCategory.includes('armario') || normalizedCategory.includes('estante')) placeholderFile = 'armario.svg';
+    }
+    setImageUrl(`/placeholders/${placeholderFile}`);
+    setHasError(true);
+  };
+
+  if (isLoading) {
+    return (
+      <div className="h-full w-full flex items-center justify-center bg-gray-100 animate-pulse">
+        <ImageIcon className="h-12 w-12 text-gray-300" />
+      </div>
+    );
+  }
+
+  return (
+    <img 
+      src={imageUrl}
+      alt={productName} 
+      className="h-full w-full object-cover"
+      loading="lazy"
+      onError={handleImageError}
+    />
+  );
+};
 
 interface ProductCardProps {
   product: Product;
@@ -87,12 +174,12 @@ export default function ProductCard({ product, onAddToQuote }: ProductCardProps)
       <Link href={`/product/${product.id}`}>
         <div className="relative cursor-pointer">
           <div className="h-48 w-full overflow-hidden bg-muted flex items-center justify-center">
-            {/* Sempre usar a API de imagens de produto que garante que uma imagem válida será exibida */}
-            <img 
-              src={product.id ? `/api/product-image/${product.id}` : '/placeholders/default.svg'}
-              alt={product.name || "Produto"} 
-              className="h-full w-full object-cover"
-              loading="lazy"
+            {/* Adicionar verificação prévia de imagem para resolver problema de associação */}
+            <ImageWithVerification 
+              productId={product.id} 
+              productName={product.name || "Produto"}
+              productCode={product.code}
+              category={product.category}
             />
           </div>
           <Badge variant="outline" className="absolute top-2 right-2 bg-white px-2 py-1 rounded-full text-xs font-medium text-primary-600">
