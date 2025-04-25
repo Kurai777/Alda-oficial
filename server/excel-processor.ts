@@ -159,7 +159,7 @@ function applyColumnMapping(rawData: any[], columnMapping: Record<number, string
  * @param userId ID do usuário para associar imagens ao processar
  * @returns Array de produtos processados
  */
-export async function processExcelFile(filePath: string, userId?: string | number): Promise<any[]> {
+export async function processExcelFile(filePath: string, userId?: string | number, catalogId?: string | number): Promise<any[]> {
   try {
     console.log(`Iniciando processamento do Excel: ${filePath}`);
     
