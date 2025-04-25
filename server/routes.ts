@@ -304,8 +304,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const catalogId = req.query.catalogId ? parseInt(req.query.catalogId as string) : undefined;
       console.log(`Buscando produtos para userId=${userId}, catalogId=${catalogId}`);
       
+      // Verificar se existem produtos no storage
       const products = await storage.getProductsByUserId(userId, catalogId);
       console.log(`Encontrados ${products.length} produtos`);
+      
+      // Se não existirem produtos e for para o usuário 1, inicializar dados de teste
+      if (products.length === 0 && (userId === 1 || userId === '1')) {
+        console.log("Nenhum produto encontrado para userId=1, inicializando dados de teste...");
+        try {
+          const { setupTestData } = await import('./tests/setup-test-data');
+          await setupTestData();
+          
+          // Buscar produtos novamente após inicialização
+          const initializedProducts = await storage.getProductsByUserId(userId, catalogId);
+          console.log(`Agora temos ${initializedProducts.length} produtos após inicialização`);
+          return res.status(200).json(initializedProducts);
+        } catch (setupError) {
+          console.error("Erro ao inicializar dados de teste:", setupError);
+          // Continuar e retornar produtos vazios mesmo com erro na inicialização
+        }
+      }
+      
       return res.status(200).json(products);
     } catch (error) {
       console.error("Erro ao buscar produtos:", error);
@@ -401,8 +420,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.log(`Usando userId da query: ${userId} para buscar catálogos`);
       }
       
+      // Buscar catálogos
       const catalogs = await storage.getCatalogsByUserId(userId);
       console.log(`Encontrados ${catalogs.length} catálogos`);
+      
+      // Se não existirem catálogos e for para o usuário 1, inicializar dados de teste
+      if (catalogs.length === 0 && (userId === 1 || userId === '1')) {
+        console.log("Nenhum catálogo encontrado para userId=1, inicializando dados de teste...");
+        try {
+          const { setupTestData } = await import('./tests/setup-test-data');
+          await setupTestData();
+          
+          // Buscar catálogos novamente após inicialização
+          const initializedCatalogs = await storage.getCatalogsByUserId(userId);
+          console.log(`Agora temos ${initializedCatalogs.length} catálogos após inicialização`);
+          return res.status(200).json(initializedCatalogs);
+        } catch (setupError) {
+          console.error("Erro ao inicializar dados de teste:", setupError);
+          // Continuar e retornar catálogos vazios mesmo com erro na inicialização
+        }
+      }
+      
       return res.status(200).json(catalogs);
     } catch (error) {
       console.error("Erro ao buscar catálogos:", error);
