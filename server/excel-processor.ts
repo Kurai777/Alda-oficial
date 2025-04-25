@@ -216,10 +216,27 @@ export async function processExcelFile(filePath: string, userId?: string | numbe
           // Se temos produtos e imagens, extraia e associe as imagens
           if (productsFromSheet.length > 0 && hasImages && userId) {
             console.log(`Extraindo imagens do Excel para ${productsFromSheet.length} produtos`);
-            // Passar catalogId como o mesmo valor que estiver associado aos produtos
-            // Pegar o catalogId do primeiro produto se disponível
-            const catalogId = productsFromSheet[0].catalogId || 'temp';
-            await extractImagesFromExcel(filePath, productsFromSheet, String(userId), catalogId);
+            
+            // Usar o catalogId fornecido ou o do primeiro produto
+            const activeCatalogId = catalogId || 
+                                    (productsFromSheet[0] && productsFromSheet[0].catalogId) || 
+                                    'temp';
+            
+            console.log(`Usando catalogId "${activeCatalogId}" para extração de imagens`);
+            
+            // Atribuir o catalogId a todos os produtos para manter consistência
+            productsFromSheet.forEach(product => {
+              product.catalogId = activeCatalogId;
+            });
+            
+            // Extrair imagens e associar aos produtos
+            const updatedProducts = await extractImagesFromExcel(
+              filePath, productsFromSheet, String(userId), activeCatalogId
+            );
+            
+            // Verificar quantos produtos foram atualizados com URLs de imagem
+            const productsWithImages = updatedProducts.filter(p => p.imageUrl).length;
+            console.log(`${productsWithImages} de ${updatedProducts.length} produtos foram atualizados com URLs de imagem`);
           }
           
           allProducts.push(...productsFromSheet);

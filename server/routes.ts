@@ -813,8 +813,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
             console.log(`Iniciando processamento do arquivo Excel: ${filePath}`);
             console.log(`Usuário ID para associação de imagens: ${userId}`);
             
-            // Passar o userId para a função para que ela possa associar as imagens aos produtos
-            productsData = await processExcelFile(filePath, userId);
+            // Passar o userId e catalogId para a função para associar as imagens aos produtos corretamente
+            productsData = await processExcelFile(filePath, userId, firestoreCatalogId);
             extractionInfo = `Extraídos ${productsData.length} produtos do arquivo Excel.`;
             
             // Verificar se é um catálogo no formato Sofá Home/POE
