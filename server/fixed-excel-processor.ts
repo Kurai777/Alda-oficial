@@ -27,6 +27,10 @@ interface ProcessedProduct {
   preco: string;
   imagem?: string;
   imageUrl?: string;
+  // Adicionar campo para armazenar caminho local da imagem
+  imagePath?: string;
+  // Adicionar campo para armazenar dados binários da imagem (se necessário)
+  imageData?: Buffer;
   catalogId?: string | number;
   userId?: string | number;
   isEdited?: boolean;
@@ -172,9 +176,26 @@ async function processExcelImagesForFirebase(
     imagesByCode[img.codigo] = img;
   });
   
+  // Criar diretório para salvar imagens localmente
+  const localImageDir = path.join(process.cwd(), 'uploads', 'extracted_images');
+  if (!fs.existsSync(localImageDir)) {
+    await mkdir(localImageDir, { recursive: true });
+  }
+  
+  // Criar um subdiretório para este catálogo específico
+  const catalogDir = path.join(localImageDir, `catalog-${catalogId}`);
+  if (!fs.existsSync(catalogDir)) {
+    await mkdir(catalogDir, { recursive: true });
+  }
+  
+  console.log(`Processando ${images.length} imagens extraídas do Excel...`);
+  
   // Para cada produto, verificar se tem imagem associada
   for (const product of products) {
     const codigo = product.codigo;
+    
+    // Log para debug
+    console.log(`Processando produto: ${codigo} - ${product.nome}`);
     
     // Se o produto já tem imagem em base64, converter para URL do Firebase
     if (product.imagem && product.imagem.startsWith('data:image/')) {
@@ -185,21 +206,34 @@ async function processExcelImagesForFirebase(
         // Nome do arquivo para o Firebase Storage
         const fileName = `${codigo}.png`;
         
+        // Salvar também localmente
+        const localPath = path.join(catalogDir, fileName);
+        fs.writeFileSync(localPath, Buffer.from(base64Data, 'base64'));
+        
+        // Registrar o caminho local
+        product.imagePath = localPath;
+        
         // Salvar no Firebase Storage
-        const imageUrl = await saveImageToFirebaseStorage(
-          base64Data,
-          fileName,
-          String(userId || 'unknown'),
-          String(catalogId || 'unknown')
-        );
-        
-        // Atualizar URL da imagem no produto
-        product.imageUrl = imageUrl;
-        
-        console.log(`Imagem para produto ${codigo} enviada para Firebase: ${imageUrl}`);
+        try {
+          const imageUrl = await saveImageToFirebaseStorage(
+            base64Data,
+            fileName,
+            String(userId || 'unknown'),
+            String(catalogId || 'unknown')
+          );
+          
+          // Atualizar URL da imagem no produto
+          product.imageUrl = imageUrl;
+          
+          console.log(`Imagem para produto ${codigo} enviada para Firebase: ${imageUrl}`);
+        } catch (fbError) {
+          console.error(`Erro ao salvar no Firebase, usando caminho local: ${localPath}`, fbError);
+          // Se falhar no Firebase, usar caminho local relativo como URL
+          product.imageUrl = `/uploads/extracted_images/catalog-${catalogId}/${fileName}`;
+        }
         
       } catch (error) {
-        console.error(`Erro ao salvar imagem para produto ${codigo}:`, error);
+        console.error(`Erro ao processar imagem para produto ${codigo}:`, error);
       }
     }
     // Se não tem imagem mas existe no mapa de imagens extraídas
@@ -210,25 +244,44 @@ async function processExcelImagesForFirebase(
         // Nome do arquivo para o Firebase Storage
         const fileName = img.filename || `${codigo}.png`;
         
+        // Salvar também localmente
+        const localPath = path.join(catalogDir, fileName);
+        fs.writeFileSync(localPath, Buffer.from(img.base64, 'base64'));
+        
+        // Registrar o caminho local
+        product.imagePath = localPath;
+        
         // Salvar no Firebase Storage
-        const imageUrl = await saveImageToFirebaseStorage(
-          img.base64,
-          fileName,
-          String(userId || 'unknown'),
-          String(catalogId || 'unknown')
-        );
-        
-        // Atualizar URL da imagem no produto
-        product.imageUrl = imageUrl;
-        product.imagem = `data:image/png;base64,${img.base64}`;
-        
-        console.log(`Imagem para produto ${codigo} enviada para Firebase: ${imageUrl}`);
+        try {
+          const imageUrl = await saveImageToFirebaseStorage(
+            img.base64,
+            fileName,
+            String(userId || 'unknown'),
+            String(catalogId || 'unknown')
+          );
+          
+          // Atualizar URL da imagem no produto
+          product.imageUrl = imageUrl;
+          product.imagem = `data:image/png;base64,${img.base64}`;
+          
+          console.log(`Imagem para produto ${codigo} enviada para Firebase: ${imageUrl}`);
+        } catch (fbError) {
+          console.error(`Erro ao salvar no Firebase, usando caminho local: ${localPath}`, fbError);
+          // Se falhar no Firebase, usar caminho local relativo como URL
+          product.imageUrl = `/uploads/extracted_images/catalog-${catalogId}/${fileName}`;
+        }
         
       } catch (error) {
-        console.error(`Erro ao salvar imagem para produto ${codigo}:`, error);
+        console.error(`Erro ao processar imagem para produto ${codigo}:`, error);
       }
+    } else {
+      console.log(`Produto ${codigo} (${product.nome}) não tem imagem associada`);
     }
   }
+  
+  // Relatar estatísticas
+  const productsWithImages = products.filter(p => p.imageUrl).length;
+  console.log(`Processadas imagens para ${productsWithImages} de ${products.length} produtos (${Math.round(productsWithImages/products.length*100)}%)`);
 }
 
 export default {

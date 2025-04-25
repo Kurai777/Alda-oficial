@@ -186,34 +186,131 @@ function extractMockUrlComponents(url: string): { userId: string; catalogId: str
  * @returns Caminho completo do arquivo se encontrado, ou null se não encontrado
  */
 function findImageLocalPath(userId: string, catalogId: string, filename: string): string | null {
-  // Lista de possíveis caminhos
-  const possiblePaths = [
-    // 1. Caminho exato a partir dos parâmetros (se o arquivo existe diretamente)
-    path.join(process.cwd(), 'uploads', 'images', userId, catalogId, filename),
-    
-    // 2. Caminhos alternativos com local-X
-    ...Array.from({length: 5}, (_, i) => 
-      path.join(process.cwd(), 'uploads', 'images', userId, `local-${i+1}`, filename)),
-    
-    // 3. Caminhos para userId = 1 (frequentemente usado no sistema)
-    path.join(process.cwd(), 'uploads', 'images', '1', catalogId, filename),
-    
-    // 4. Todos os locais possíveis com userId = 1
-    ...Array.from({length: 5}, (_, i) => 
-      path.join(process.cwd(), 'uploads', 'images', '1', `local-${i+1}`, filename)),
-    
-    // 5. Diretório de imagens extraídas
-    path.join(process.cwd(), 'uploads', 'extracted_images', filename),
+  // Normalizar o nome do arquivo (remover espaços, etc.)
+  const normalizedFilename = filename.trim().replace(/\s+/g, '_');
+  
+  // Obter o nome base e a extensão
+  const { name: baseName, ext: extension } = path.parse(normalizedFilename);
+  
+  // Lista de possíveis nomes de arquivo (para casos com ou sem sufixos/prefixos)
+  const possibleFilenames = [
+    normalizedFilename,
+    `${baseName}${extension || '.png'}`,  // Com extensão garantida
+    `${baseName}_0${extension || '.png'}`,
+    `${baseName}_1${extension || '.png'}`,
+    `img_${baseName}${extension || '.png'}`
   ];
   
+  // Lista de possíveis caminhos
+  const possiblePaths = [];
+  
+  // Para cada possível nome de arquivo
+  for (const fname of possibleFilenames) {
+    // 1. Caminho exato a partir dos parâmetros (se o arquivo existe diretamente)
+    possiblePaths.push(path.join(process.cwd(), 'uploads', 'images', userId, catalogId, fname));
+    
+    // 2. Caminhos alternativos com local-X
+    for (let i = 1; i <= 10; i++) {
+      possiblePaths.push(path.join(process.cwd(), 'uploads', 'images', userId, `local-${i}`, fname));
+    }
+    
+    // 3. Caminhos para userId = 1 (frequentemente usado no sistema)
+    possiblePaths.push(path.join(process.cwd(), 'uploads', 'images', '1', catalogId, fname));
+    
+    // 4. Todos os locais possíveis com userId = 1
+    for (let i = 1; i <= 10; i++) {
+      possiblePaths.push(path.join(process.cwd(), 'uploads', 'images', '1', `local-${i}`, fname));
+    }
+    
+    // 5. Diretório geral de imagens extraídas
+    possiblePaths.push(path.join(process.cwd(), 'uploads', 'extracted_images', fname));
+    
+    // 6. Diretório específico para o catálogo
+    possiblePaths.push(path.join(process.cwd(), 'uploads', 'extracted_images', `catalog-${catalogId}`, fname));
+  }
+  
+  // Caso especial para códigos de produtos como nomes de arquivos
+  if (filename.startsWith('img_')) {
+    // Extrair o código do produto (assumindo que está após "img_")
+    const productCode = filename.substring(4).split('.')[0];
+    
+    // Adicionar variações de nomes de arquivos baseados no código do produto
+    const codeBasedFilenames = [
+      `${productCode}.png`,
+      `${productCode}_0.png`,
+      `${productCode}_1.png`
+    ];
+    
+    for (const codeFname of codeBasedFilenames) {
+      possiblePaths.push(path.join(process.cwd(), 'uploads', 'extracted_images', codeFname));
+      possiblePaths.push(path.join(process.cwd(), 'uploads', 'extracted_images', `catalog-${catalogId}`, codeFname));
+    }
+  }
+  
   // Verifica cada caminho
+  console.log(`Buscando imagem ${filename} em ${possiblePaths.length} caminhos possíveis`);
+  
   for (const pathToCheck of possiblePaths) {
     if (fs.existsSync(pathToCheck)) {
+      console.log(`Imagem encontrada em: ${pathToCheck}`);
       return pathToCheck;
     }
   }
   
+  // Procurar recursivamente em todos os subdiretórios possíveis (caso de último recurso)
+  try {
+    const baseExtractedImagesDir = path.join(process.cwd(), 'uploads', 'extracted_images');
+    if (fs.existsSync(baseExtractedImagesDir)) {
+      const allFilesInDir = getAllFilesRecursive(baseExtractedImagesDir);
+      const matchingFiles = allFilesInDir.filter(f => path.basename(f) === normalizedFilename);
+      
+      if (matchingFiles.length > 0) {
+        console.log(`Imagem encontrada na busca recursiva: ${matchingFiles[0]}`);
+        return matchingFiles[0];
+      }
+    }
+  } catch (error) {
+    console.error('Erro na busca recursiva de imagens:', error);
+  }
+  
+  console.log(`Imagem não encontrada: ${filename}`);
   return null;
+}
+
+/**
+ * Busca recursivamente em um diretório por todos os arquivos
+ * 
+ * @param dir Diretório base para busca
+ * @returns Array com caminhos completos de todos arquivos
+ */
+function getAllFilesRecursive(dir: string): string[] {
+  const results: string[] = [];
+  
+  if (!fs.existsSync(dir)) {
+    return results;
+  }
+  
+  try {
+    const list = fs.readdirSync(dir);
+    
+    for (const file of list) {
+      const fullPath = path.join(dir, file);
+      const stat = fs.statSync(fullPath);
+      
+      if (stat && stat.isDirectory()) {
+        // Recursivamente adicionar arquivos do subdiretório
+        const subResults = getAllFilesRecursive(fullPath);
+        results.push(...subResults);
+      } else {
+        // Adicionar arquivo
+        results.push(fullPath);
+      }
+    }
+  } catch (error) {
+    console.error(`Erro ao listar diretório ${dir}:`, error);
+  }
+  
+  return results;
 }
 
 /**

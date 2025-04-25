@@ -7,6 +7,7 @@ import sys
 import json
 import base64
 import re  # Importação explícita para uso em todo o módulo
+import traceback  # Para capturar stack traces
 from PIL import Image
 import io
 
@@ -208,14 +209,36 @@ def extract_images_from_sheet(sheet, output_dir):
         # Método 1: Tentar acessar pelas imagens embutidas se disponível
         sheet_images = []
         
-        # Ver se o atributo _images existe
-        if hasattr(sheet, '_images'):
-            sheet_images = sheet._images
-        # Alternativa para o atributo 'images' em versões mais recentes
-        elif hasattr(sheet, 'images'):
-            sheet_images = sheet.images
-            
+        # Tentar diferentes atributos para acessar imagens em diferentes versões do openpyxl
+        image_attributes = ['_images', 'images', '_drawings', 'drawings']
+        for attr in image_attributes:
+            if hasattr(sheet, attr):
+                try:
+                    images_attr = getattr(sheet, attr)
+                    if images_attr:
+                        print(f"Encontrado atributo de imagens: {attr} com {len(images_attr)} imagens", file=sys.stderr)
+                        sheet_images = images_attr
+                        break
+                except Exception as attr_err:
+                    print(f"Erro ao acessar {attr}: {attr_err}", file=sys.stderr)
+                    continue
+        
+        # Se não encontramos imagens, tentar métodos alternativos
+        if not sheet_images:
+            # Tentar acessar _drawing se disponível (em algumas versões do openpyxl)
+            if hasattr(sheet, '_drawing') and sheet._drawing:
+                try:
+                    drawing_images = getattr(sheet._drawing, 'images', []) or []
+                    if drawing_images:
+                        print(f"Encontradas {len(drawing_images)} imagens via _drawing.images", file=sys.stderr)
+                        sheet_images = drawing_images
+                except Exception as drawing_err:
+                    print(f"Erro ao acessar _drawing.images: {drawing_err}", file=sys.stderr)
+        
         # Processar as imagens encontradas
+        total_saved = 0
+        print(f"Processando {len(sheet_images)} imagens encontradas na planilha", file=sys.stderr)
+        
         for image_idx, image_tuple in enumerate(sheet_images):
             try:
                 print(f"Processando imagem {image_idx}...", file=sys.stderr)
@@ -226,15 +249,37 @@ def extract_images_from_sheet(sheet, output_dir):
                 
                 # Tentar diferentes formas de obter os dados da imagem
                 image_data = None
-                if hasattr(image_tuple, '_data') and isinstance(image_tuple._data, bytes):
-                    image_data = image_tuple._data
-                elif hasattr(image_tuple, 'data') and isinstance(image_tuple.data, bytes):
-                    image_data = image_tuple.data
-                elif hasattr(image_tuple, 'ref') and hasattr(image_tuple, 'blob') and isinstance(image_tuple.blob, bytes):
-                    image_data = image_tuple.blob
                 
-                if not image_data or not isinstance(image_data, bytes):
-                    print(f"Dados da imagem {image_idx} inválidos ou não são bytes.", file=sys.stderr)
+                # Lista de atributos possíveis que podem conter dados binários da imagem
+                binary_data_attrs = ['_data', 'data', 'blob', '_blob', 'content', '_content', 'image_data']
+                
+                # Tentar cada um dos atributos
+                for attr in binary_data_attrs:
+                    if hasattr(image_tuple, attr):
+                        try:
+                            data = getattr(image_tuple, attr)
+                            if isinstance(data, bytes) and len(data) > 100:  # Pelo menos 100 bytes
+                                image_data = data
+                                print(f"Dados binários encontrados no atributo: {attr}", file=sys.stderr)
+                                break
+                        except Exception as bin_err:
+                            print(f"Erro ao acessar {attr}: {bin_err}", file=sys.stderr)
+                            continue
+                
+                # Se não encontrou pelos atributos diretos, tentar por ref/blob
+                if not image_data and hasattr(image_tuple, 'ref') and hasattr(image_tuple.ref, 'blob'):
+                    try:
+                        blob_data = image_tuple.ref.blob
+                        if isinstance(blob_data, bytes) and len(blob_data) > 100:
+                            image_data = blob_data
+                            print(f"Dados binários encontrados via ref.blob", file=sys.stderr)
+                    except Exception as ref_err:
+                        print(f"Erro ao acessar ref.blob: {ref_err}", file=sys.stderr)
+                
+                # Verificar se temos dados válidos
+                if not image_data or not isinstance(image_data, bytes) or len(image_data) < 100:
+                    print(f"Dados da imagem {image_idx} inválidos ou muito pequenos", file=sys.stderr)
+                    # Continuar para a próxima imagem
                     continue
                 
                 # Salvar imagem em disco temporariamente
@@ -243,41 +288,82 @@ def extract_images_from_sheet(sheet, output_dir):
                 
                 # Obter informação da linha onde a imagem está
                 row = 0
-                try:
-                    if hasattr(image_tuple, 'anchor') and hasattr(image_tuple.anchor, 'to') and hasattr(image_tuple.anchor.to, 'row'):
-                        row = image_tuple.anchor.to.row
-                    elif hasattr(image_tuple, 'anchor') and hasattr(image_tuple.anchor, 'row'):
-                        row = image_tuple.anchor.row
-                except:
-                    row = 0
+                col = 0
                 
-                # Buscar código na coluna F (coluna 6) próximo à linha da imagem
+                # Tentar diferentes formas de obter as coordenadas da imagem
+                try:
+                    # Opção 1: pelo objeto anchor (tipo comum)
+                    if hasattr(image_tuple, 'anchor'):
+                        anchor = image_tuple.anchor
+                        if hasattr(anchor, 'to'):
+                            if hasattr(anchor.to, 'row'):
+                                row = anchor.to.row
+                            if hasattr(anchor.to, 'col'):
+                                col = anchor.to.col
+                        elif hasattr(anchor, 'row'):
+                            row = anchor.row
+                        elif hasattr(anchor, 'col'):
+                            col = anchor.col
+                    # Opção 2: pelas próprias propriedades
+                    elif hasattr(image_tuple, 'row'):
+                        row = image_tuple.row
+                    elif hasattr(image_tuple, 'col'):
+                        col = image_tuple.col
+                except Exception as coord_err:
+                    print(f"Erro ao obter coordenadas: {coord_err}", file=sys.stderr)
+                
+                print(f"Coordenadas da imagem {image_idx}: linha={row}, coluna={col}", file=sys.stderr)
+                
+                # Determinar o código do produto para esta imagem
                 codigo = None
                 
-                # Se temos a linha, procurar o código próximo
+                # Estratégia 1: Se temos a linha, usar prioritariamente o código na coluna F (6)
                 if row > 0:
+                    # Verificar na mesma linha
+                    codigo_cell = sheet.cell(row=row, column=6).value
+                    if codigo_cell and str(codigo_cell).strip():
+                        codigo = str(codigo_cell).strip()
+                        print(f"Código encontrado na mesma linha {row}: {codigo}", file=sys.stderr)
+                
+                # Estratégia 2: Procurar pelas linhas próximas (3 linhas acima e abaixo)
+                if not codigo and row > 0:
                     for r in range(max(1, row-3), min(sheet.max_row, row+3)):
                         codigo_cell = sheet.cell(row=r, column=6).value
                         if codigo_cell and str(codigo_cell).strip():
                             codigo = str(codigo_cell).strip()
+                            print(f"Código encontrado em linha próxima {r}: {codigo}", file=sys.stderr)
                             break
-                            
-                # Se não achamos um código, tentar buscar pela coluna D (4) que é a de imagens
-                # e ver se há um código na mesma linha na coluna F (6)
+                
+                # Estratégia 3: Se a imagem estiver na coluna D (4), buscar código na mesma linha
+                if not codigo and col == 4:
+                    # Verificar se esta linha tem um código válido
+                    codigo_cell = sheet.cell(row=row, column=6).value
+                    if codigo_cell and str(codigo_cell).strip():
+                        codigo = str(codigo_cell).strip()
+                        print(f"Código encontrado para imagem na coluna D: {codigo}", file=sys.stderr)
+                
+                # Estratégia 4: Buscar todas as ocorrências de imagens na coluna D (4)
                 if not codigo:
                     for r in range(2, sheet.max_row + 1):  # Começar da linha 2
-                        # Se há algum valor na coluna D (4) desta linha
-                        if sheet.cell(row=r, column=4).value:
-                            # Verificar o código na mesma linha, coluna F (6)
-                            codigo_cell = sheet.cell(row=r, column=6).value
-                            if codigo_cell and str(codigo_cell).strip():
-                                codigo = str(codigo_cell).strip()
-                                row = r  # Guardar a linha para referência
-                                break
+                        # Se a célula na coluna D (4) não está vazia (possível local de imagem)
+                        try:
+                            cell_d = sheet.cell(row=r, column=4)
+                            if cell_d and (cell_d.value or abs(r - row) < 2):  # mesmo que sem valor, se próxima da nossa linha
+                                # Verificar se esta linha tem um código válido
+                                codigo_cell = sheet.cell(row=r, column=6).value
+                                if codigo_cell and str(codigo_cell).strip():
+                                    codigo = str(codigo_cell).strip()
+                                    print(f"Código encontrado na linha {r} com possível imagem: {codigo}", file=sys.stderr)
+                                    row = r  # Atualizar a linha para esta
+                                    break
+                        except Exception as cell_err:
+                            print(f"Erro ao verificar célula: {cell_err}", file=sys.stderr)
+                            continue
                 
-                # Se ainda não achou, usar o índice como identificador
+                # Estratégia 5 (último recurso): Usar índice como identificador
                 if not codigo:
-                    codigo = f"img_{image_idx}"
+                    codigo = f"imagem_{image_idx}"
+                    print(f"Sem código identificado, usando índice: {codigo}", file=sys.stderr)
                 
                 # Remover caracteres inválidos do código para uso como nome de arquivo
                 safe_codigo = re.sub(r'[^\w\-\.]', '_', codigo)
@@ -292,6 +378,26 @@ def extract_images_from_sheet(sheet, output_dir):
                     image_filename = f"{safe_codigo}_{suffix}.png"
                     image_path = os.path.join(output_dir, image_filename)
                     suffix += 1
+                
+                # Verificar se a imagem é válida e tem um tamanho razoável
+                try:
+                    from PIL import Image
+                    img = Image.open(temp_image_path)
+                    width, height = img.size
+                    
+                    # Verificar dimensões - ignorar imagens muito pequenas (possíveis ícones/lixo)
+                    if width < 20 or height < 20:
+                        print(f"Imagem muito pequena ({width}x{height}), pulando...", file=sys.stderr)
+                        img.close()
+                        if os.path.exists(temp_image_path):
+                            os.remove(temp_image_path)
+                        continue
+                    
+                    # Fechar a imagem após verificação
+                    img.close()
+                except Exception as img_err:
+                    print(f"Erro ao verificar imagem: {img_err}", file=sys.stderr)
+                    # Continuar mesmo com erro, a imagem ainda pode ser válida
                 
                 # Copiar para o caminho final
                 import shutil
@@ -309,17 +415,23 @@ def extract_images_from_sheet(sheet, output_dir):
                     "filename": image_filename,
                     "path": image_path,
                     "base64": encoded_image,
-                    "row": row  # Guardar a linha para associação
+                    "row": row,  # Guardar a linha para associação
+                    "col": col   # Guardar a coluna também
                 }
                 
                 images.append(image_info)
+                total_saved += 1
                 print(f"Imagem {image_idx} processada com sucesso: {image_filename}", file=sys.stderr)
                 
             except Exception as e:
                 print(f"Erro no script Python: Erro ao processar imagem {image_idx}: {str(e)}", file=sys.stderr)
+                print(f"Stack trace: {traceback.format_exc()}", file=sys.stderr)
+        
+        print(f"Total de imagens extraídas e salvas: {total_saved} de {len(sheet_images)}", file=sys.stderr)
         
     except Exception as e:
-        print(f"Erro no script Python: {str(e)}", file=sys.stderr)
+        print(f"Erro geral no script Python: {str(e)}", file=sys.stderr)
+        print(f"Stack trace: {traceback.format_exc()}", file=sys.stderr)
     
     # Segundo método: usar PIL para procurar imagens (fallback)
     if len(images) == 0:
