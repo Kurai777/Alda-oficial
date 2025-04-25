@@ -41,7 +41,7 @@ export async function setupTestData() {
         category: "Sofá",
         manufacturer: "POE Design",
         location: "2º Piso",
-        imageUrl: "/api/images/1/local-1/sofa-home.jpg"
+        imageUrl: "/api/images/1/local-1/sofa-home.svg"
       },
       {
         name: "Mesa Centro",
@@ -51,7 +51,7 @@ export async function setupTestData() {
         category: "Mesa",
         manufacturer: "Sierra Móveis",
         location: "1º Piso",
-        imageUrl: "/api/images/1/local-1/mesa-centro.jpg"
+        imageUrl: "/api/images/1/local-1/mesa-centro.svg"
       },
       {
         name: "Poltrona Oslo",
@@ -61,7 +61,7 @@ export async function setupTestData() {
         category: "Poltrona",
         manufacturer: "Fratini Design",
         location: "2º Piso",
-        imageUrl: "/api/images/1/local-1/poltrona-oslo.jpg"
+        imageUrl: "/api/images/1/local-1/poltrona-oslo.svg"
       }
     ];
     
@@ -104,17 +104,16 @@ async function saveSampleImages() {
     
     // Cores básicas como placeholders simples
     const colorMap = {
-      'sofa-home.jpg': '#8B4513', // Marrom (sofá)
-      'mesa-centro.jpg': '#A0522D', // Sienna (madeira)
-      'poltrona-oslo.jpg': '#BC8F8F', // RosyBrown (poltrona)
+      'sofa-home.svg': '#8B4513', // Marrom (sofá)
+      'mesa-centro.svg': '#A0522D', // Sienna (madeira)
+      'poltrona-oslo.svg': '#BC8F8F', // RosyBrown (poltrona)
     };
     
     for (const [filename, color] of Object.entries(colorMap)) {
-      const svgContent = `
-      <svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400">
+      const svgContent = `<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400">
         <rect width="600" height="400" fill="${color}" />
         <text x="300" y="200" font-family="Arial" font-size="24" fill="white" text-anchor="middle">
-          ${filename.replace('.jpg', '')}
+          ${filename.replace('.svg', '')}
         </text>
       </svg>`;
       
