@@ -2,6 +2,7 @@
 import openpyxl
 import sys
 import json
+import re
 
 def check_excel_images(excel_file_path):
     # Abrir o arquivo Excel

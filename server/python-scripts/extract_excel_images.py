@@ -71,7 +71,7 @@ def extract_images_from_excel(excel_file_path, output_dir):
                     product_code = f"unknown_product_{len(result['images'])}"
                 
                 # Remover caracteres não permitidos para nomes de arquivo
-                safe_product_code = re.sub(r'[^\w\-\.]', '_', str(product_code))
+                safe_product_code = re.sub(r'[^w-.]', '_', str(product_code))
                 
                 image_filename = f"{safe_product_code}.png"
                 image_path = os.path.join(output_dir, image_filename)
