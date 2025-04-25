@@ -190,6 +190,26 @@ export default function ProductDetailPage() {
             <p className="text-muted-foreground">{product.description || "Sem descrição disponível"}</p>
           </div>
           
+          {/* Informação de estoque */}
+          {product.stock !== undefined && product.stock !== null && (
+            <div className="mb-6">
+              <h3 className="font-semibold mb-2">Disponibilidade</h3>
+              <div className="flex items-center gap-2">
+                <Badge 
+                  variant={Number(product.stock) > 0 ? "outline" : "destructive"}
+                  className={Number(product.stock) > 0 ? "bg-green-100 text-green-800 border-green-200" : "bg-red-100 text-red-800"}
+                >
+                  {Number(product.stock) > 0 ? "Em estoque" : "Indisponível"}
+                </Badge>
+                {Number(product.stock) > 0 && (
+                  <span className="text-sm text-gray-500">
+                    {product.stock} unidades disponíveis
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+          
           {product.colors && product.colors.length > 0 && (
             <div className="mb-6">
               <h3 className="font-semibold mb-2">Cores disponíveis</h3>
@@ -243,25 +263,15 @@ export default function ProductDetailPage() {
               <ul className="space-y-2 text-sm">
                 {product.sizes && product.sizes.map((size, index) => (
                   <li key={index} className="flex justify-between">
-                    <span className="text-muted-foreground">{size.name || `Tamanho ${index + 1}`}</span>
+                    <span className="text-muted-foreground">{size.label || `Tamanho ${index + 1}`}</span>
                     <span>{`${size.width || 'N/A'} x ${size.height || 'N/A'} x ${size.depth || 'N/A'} cm`}</span>
                   </li>
                 ))}
                 {(!product.sizes || product.sizes.length === 0) && (
-                  <>
-                    <li className="flex justify-between">
-                      <span className="text-muted-foreground">Largura</span>
-                      <span>{formatDimension(product.width)}</span>
-                    </li>
-                    <li className="flex justify-between">
-                      <span className="text-muted-foreground">Altura</span>
-                      <span>{formatDimension(product.height)}</span>
-                    </li>
-                    <li className="flex justify-between">
-                      <span className="text-muted-foreground">Profundidade</span>
-                      <span>{formatDimension(product.depth)}</span>
-                    </li>
-                  </>
+                  <li className="flex justify-between">
+                    <span className="text-muted-foreground">Dimensões</span>
+                    <span>Não disponíveis</span>
+                  </li>
                 )}
               </ul>
             </CardContent>
