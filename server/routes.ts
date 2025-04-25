@@ -197,7 +197,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Nova rota para sincronização de usuários do Firebase com o sistema local
   app.post("/api/auth/firebase-sync", async (req: Request, res: Response) => {
     try {
-      const { uid, email, companyName } = req.body;
+      const { uid, email, companyName, displayName } = req.body;
       
       if (!uid || !email) {
         return res.status(400).json({ message: "UID and email are required" });
@@ -210,11 +210,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Criar um novo usuário se não existir
         user = await storage.createUser({
           email,
-          companyName: companyName || 'Empresa',
+          companyName: companyName || displayName || 'Empresa',
           password: `firebase-${uid}`, // Senha não será usada, mas é necessária para o schema
         });
         
         console.log(`Criado novo usuário para conta Firebase: ${email}`);
+      } else if (companyName || displayName) {
+        // Atualizar o nome da empresa se fornecido
+        user = await storage.updateUser(user.id, {
+          companyName: companyName || displayName
+        });
+        console.log(`Atualizado nome da empresa para usuário ${email}: ${companyName || displayName}`);
       }
       
       // Definir o userId na sessão
@@ -257,7 +263,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Se temos usuário Firebase mas não encontramos no banco local
         return res.status(200).json({ 
           id: req.firebaseUser.uid,
-          companyName: req.firebaseUser.name || 'Empresa',
+          companyName: req.firebaseUser.displayName || req.firebaseUser.name || 'Empresa',
           email: req.firebaseUser.email
         });
       }

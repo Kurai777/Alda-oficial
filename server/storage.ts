@@ -18,6 +18,7 @@ export interface IStorage {
   getUser(id: number): Promise<User | undefined>;
   getUserByEmail(email: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
+  updateUser(id: number, userData: Partial<User>): Promise<User | undefined>;
 
   // Product methods
   getProduct(id: number): Promise<Product | undefined>;
@@ -214,17 +215,37 @@ export class MemStorage implements IStorage {
   }
 
   async getProductsByUserId(userId: number | string, catalogId?: number): Promise<Product[]> {
-    // Pegar todos os produtos em vez de filtrar por userId para o dashboard
-    if (catalogId === undefined) {
-      console.log("Retornando todos os produtos sem filtrar por catalogId");
-      return Array.from(this.products.values());
+    // Converter userId para número ou string para comparação
+    const userIdToCompare = typeof userId === 'string' ? userId : userId;
+    
+    // Filtrar produtos por usuário
+    const userProducts = Array.from(this.products.values()).filter(
+      (product) => {
+        // Verificar userId
+        let userMatch = false;
+        
+        if (typeof userIdToCompare === 'string' && typeof product.userId === 'string') {
+          userMatch = product.userId === userIdToCompare;
+        } else if (typeof userIdToCompare === 'number' && typeof product.userId === 'number') {
+          userMatch = product.userId === userIdToCompare;
+        } else if (typeof userIdToCompare === 'string' && typeof product.userId === 'number') {
+          userMatch = product.userId.toString() === userIdToCompare;
+        } else if (typeof userIdToCompare === 'number' && typeof product.userId === 'string') {
+          userMatch = userIdToCompare.toString() === product.userId;
+        }
+        
+        return userMatch;
+      }
+    );
+    
+    // Se catalogId for especificado, filtrar adicionalmente por ele
+    if (catalogId !== undefined) {
+      console.log(`Filtrando produtos do usuário ${userId} por catalogId=${catalogId}`);
+      return userProducts.filter(product => product.catalogId === catalogId);
     }
     
-    // Caso especificado um catalogId, filtrar apenas por ele
-    console.log(`Filtrando produtos apenas pelo catalogId=${catalogId}`);
-    return Array.from(this.products.values()).filter(
-      (product) => product.catalogId === catalogId
-    );
+    console.log(`Retornando todos os produtos do usuário ${userId}`);
+    return userProducts;
   }
 
   async getProductsByCategory(userId: number | string, category: string): Promise<Product[]> {
