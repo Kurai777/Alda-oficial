@@ -57,14 +57,37 @@ export async function extractImagesFromExcel(filePath, products, userId, catalog
       'xl/media', 
       'xl/drawings', 
       'xl/embeddings',
-      'xl/drawings/drawing1.xml',
-      'xl/worksheets/drawings'
+      'xl/diagrams',
+      'xl/diagrams/drawing',
+      'xl/worksheets/drawings',
+      'xl/charts',
+      'xl/_rels',
+      'xl/activeX',
+      'xl/drawings/_rels'
     ];
     
     let mediaFiles = [];
     
+    // Verificar se existem outras pastas contendo mídia
+    // Isso é importante porque diferentes aplicações (Excel, Google Sheets, LibreOffice) 
+    // podem salvar imagens em locais diferentes
+    const additionalMediaPaths = Object.keys(zipContents.files)
+      .filter(path => 
+        path.includes('/media/') || 
+        path.includes('/images/') || 
+        path.includes('/Pictures/'))
+      .map(path => {
+        // Extrair o caminho da pasta
+        const pathParts = path.split('/');
+        pathParts.pop(); // Remover nome do arquivo
+        return pathParts.join('/');
+      });
+    
+    // Adicionar pastas encontradas dinamicamente
+    const uniquePaths = [...new Set([...possibleMediaFolders, ...additionalMediaPaths])];
+    
     // Procurar imagens em diferentes locais
-    for (const folderPath of possibleMediaFolders) {
+    for (const folderPath of uniquePaths) {
       const folder = zipContents.folder(folderPath);
       
       if (folder) {
@@ -79,22 +102,30 @@ export async function extractImagesFromExcel(filePath, products, userId, catalog
         for (const file of files) {
           mediaFiles.push({
             path: file,
-            folder
+            folder,
+            location: folderPath
           });
         }
       }
     }
     
-    // Procurar também por arquivos na raiz que sejam imagens
-    const rootImageFiles = Object.keys(zipContents.files)
+    // Procurar também por arquivos na raiz e em qualquer lugar que sejam imagens
+    const allImageFiles = Object.keys(zipContents.files)
       .filter(filename => !zipContents.files[filename].dir && 
         /\.(png|jpe?g|gif|tiff|bmp|wmf|emf)$/i.test(filename));
     
-    for (const file of rootImageFiles) {
-      mediaFiles.push({
-        path: file,
-        folder: zipContents
-      });
+    for (const file of allImageFiles) {
+      // Verificar se esse arquivo já não foi encontrado em uma pasta específica
+      const alreadyFound = mediaFiles.some(mediaFile => mediaFile.path === file);
+      
+      if (!alreadyFound) {
+        console.log(`Encontrado arquivo de imagem adicional: ${file}`);
+        mediaFiles.push({
+          path: file,
+          folder: zipContents,
+          location: 'root'
+        });
+      }
     }
     
     console.log(`No total, encontradas ${mediaFiles.length} imagens potenciais no arquivo Excel`);
@@ -176,19 +207,42 @@ export async function extractImagesFromExcel(filePath, products, userId, catalog
         let productCode = null;
         let associatedProduct = null;
         
-        // Primeiro, verificar se o nome do arquivo contém algum código de produto
+        // Extrair nome do arquivo e remover extensão
         const fileName = path.basename(mediaFile.path);
         const fileNameWithoutExt = path.basename(fileName, path.extname(fileName));
         
-        // Procurar produto por correspondência no nome do arquivo
+        // Verificar métodos diferentes de associação
+        // Método 1: Correspondência exata de código no nome do arquivo
         associatedProduct = productsWithCode.find(p => {
           const code = p.code.toString().trim();
-          return fileName.includes(code) || fileNameWithoutExt.includes(code);
+          return fileName === code || fileNameWithoutExt === code;
         });
         
-        // Se não encontrou por nome de arquivo, usar o índice (assumindo correspondência de ordem)
+        // Método 2: Correspondência parcial de código no nome do arquivo
+        if (!associatedProduct) {
+          associatedProduct = productsWithCode.find(p => {
+            const code = p.code.toString().trim();
+            return fileName.includes(code) || fileNameWithoutExt.includes(code);
+          });
+        }
+        
+        // Método 3: Verificar se o nome do arquivo contém um número que está no início do código
+        if (!associatedProduct) {
+          // Extrair números do nome do arquivo
+          const fileNumbers = fileNameWithoutExt.match(/\d+/g);
+          
+          if (fileNumbers && fileNumbers.length > 0) {
+            associatedProduct = productsWithCode.find(p => {
+              const code = p.code.toString().trim();
+              return fileNumbers.some(num => code.startsWith(num) || code.endsWith(num));
+            });
+          }
+        }
+        
+        // Método 4: Como última opção, usar o índice (assumindo correspondência de ordem)
         if (!associatedProduct && i < productsWithCode.length) {
           associatedProduct = productsWithCode[i];
+          console.log(`Associação por índice para imagem ${fileName}: produto ${associatedProduct.code}`);
         }
         
         if (associatedProduct) {
@@ -272,12 +326,32 @@ export async function extractImagesFromExcel(filePath, products, userId, catalog
     
     for (const product of products) {
       if (product.code && productImageMap[product.code]) {
+        // Atualizar a URL da imagem
         product.imageUrl = productImageMap[product.code];
+        
+        // Garantir que o catalogId esteja atribuído consistentemente
+        product.catalogId = catalogId;
+        
         updatedProducts++;
+        console.log(`Produto [código: ${product.code}] atualizado com imagem: ${product.imageUrl}`);
+      } else if (product.code) {
+        console.log(`Não foi encontrada imagem para o produto com código: ${product.code}`);
       }
     }
     
-    console.log(`${updatedProducts} produtos atualizados com URLs de imagem`);
+    console.log(`${updatedProducts} de ${products.length} produtos atualizados com URLs de imagem (${Math.round(updatedProducts/products.length*100)}%)`);
+    
+    // Verificar quais códigos de produtos estão presentes no mapa mas não foram atribuídos
+    const unusedImageCodes = Object.keys(productImageMap).filter(
+      code => !products.some(p => p.code === code)
+    );
+    
+    if (unusedImageCodes.length > 0) {
+      console.log(`ATENÇÃO: ${unusedImageCodes.length} imagens não foram associadas a produtos:`);
+      unusedImageCodes.forEach(code => {
+        console.log(`- Código: ${code}, URL: ${productImageMap[code]}`);
+      });
+    }
     
   } catch (error) {
     console.error(`Erro ao extrair imagens do Excel: ${error.message}`);
