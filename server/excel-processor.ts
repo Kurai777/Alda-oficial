@@ -30,6 +30,18 @@ export interface ExcelProduct {
   depth?: string | number;
   estoque?: string | number;
   stock?: string | number;
+  fabricante?: string;
+  fornecedor?: string;
+  manufacturer?: string;
+  supplier?: string;
+  marca?: string;
+  brand?: string;
+  localizacao?: string;
+  location?: string;
+  piso?: string;
+  deposito?: string;
+  floor?: string;
+  warehouse?: string;
   [key: string]: any;
 }
 
@@ -714,6 +726,11 @@ function normalizeExcelProducts(rawProducts: ExcelProduct[]): any[] {
           break;
         }
       }
+
+      // Verificar se temos o fabricante indicado no formato de Sofá Home/POE
+      if (!manufacturer && supplierColumnKey && rawProduct[supplierColumnKey]) {
+        manufacturer = String(rawProduct[supplierColumnKey]).trim();
+      }
       
       // Se não encontramos o fabricante nos campos explícitos, tente extraí-lo do nome/descrição
       if (!manufacturer) {
@@ -724,7 +741,9 @@ function normalizeExcelProducts(rawProducts: ExcelProduct[]): any[] {
           'Fermob', 'Flexform', 'Franccino', 'Home Design', 'Kartell', 'La Falaise', 
           'Lattoog', 'Lovato', 'Marchetaria', 'Micasa', 'Minotti', 'Modalle', 
           'Natuzzi', 'Orlean', 'Pratice', 'Riflessi', 'Studio Welter', 'Taracea', 
-          'Tissot', 'Todeschini', 'Tunelli', 'Via Star', 'Vitra', 'Wentz'
+          'Tissot', 'Todeschini', 'Tunelli', 'Via Star', 'Vitra', 'Wentz',
+          'POE', 'Studio', 'Spazzio', 'House', 'Collection', 'Interiores',
+          'Sofá Home', 'Sofa Home', 'Baú/Puff', 'Especial', 'Poltrona', 'Italsofa'
         ];
         
         // Verificar se o nome ou descrição contém algum fabricante conhecido
@@ -738,7 +757,47 @@ function normalizeExcelProducts(rawProducts: ExcelProduct[]): any[] {
         }
       }
       
-      // Procesar imagens para o formato do Sofá Home/POE
+      // Extrair informações sobre a localização do produto (piso, depósito, etc)
+      let location = '';
+      
+      // Verificar campos específicos que podem conter informações de localização
+      const locationFields = ['localizacao', 'location', 'piso', 'floor', 'deposito', 'warehouse', 'local'];
+      
+      for (const field of locationFields) {
+        if (rawProduct[field] && typeof rawProduct[field] === 'string' && rawProduct[field].trim().length > 0) {
+          location = rawProduct[field].trim();
+          break;
+        }
+      }
+      
+      // Verificar se temos a localização indicada no formato específico de Sofá Home/POE
+      if (!location && locationColumnKey && rawProduct[locationColumnKey]) {
+        location = String(rawProduct[locationColumnKey]).trim();
+      }
+      
+      // Se não encontramos a localização em campos específicos, procurar no código ou nome
+      if (!location) {
+        const locationPatterns = [
+          {pattern: /\b(piso\s?[0-9])\b/i, extract: (match: string[]) => match[1]},
+          {pattern: /\b([0-9](º|o)\s?piso)\b/i, extract: (match: string[]) => match[1]},
+          {pattern: /\b(deposito|depósito)\b/i, extract: () => 'Depósito'},
+          {pattern: /\b(outlet)\b/i, extract: () => 'Outlet'},
+          {pattern: /\b(showroom)\b/i, extract: () => 'Showroom'},
+          {pattern: /\b(estoque)\b/i, extract: () => 'Estoque'}
+        ];
+        
+        const textToSearch = `${productCode} ${productName} ${description}`.toLowerCase();
+        
+        for (const {pattern, extract} of locationPatterns) {
+          const match = textToSearch.match(pattern);
+          if (match) {
+            location = extract(match);
+            break;
+          }
+        }
+      }
+      
+      // Processar URL da imagem
       let processedImageUrl = imageUrl;
       
       // Processar o campo de imagem especialmente para Sofá Home/POE
@@ -759,20 +818,6 @@ function normalizeExcelProducts(rawProducts: ExcelProduct[]): any[] {
         }
       }
       
-      // Processar fornecedor para o formato Sofá Home/POE
-      let processedManufacturer = manufacturer;
-      if (isSofaHomeOrPOEFormat && supplierColumnKey && rawProduct[supplierColumnKey]) {
-        processedManufacturer = String(rawProduct[supplierColumnKey]).trim();
-        console.log(`Detectado fornecedor: ${processedManufacturer}`);
-      }
-      
-      // Processar localização (2º Piso, Depósito, etc) para o formato Sofá Home/POE
-      let location = '';
-      if (isSofaHomeOrPOEFormat && locationColumnKey && rawProduct[locationColumnKey]) {
-        location = String(rawProduct[locationColumnKey]).trim();
-        console.log(`Detectada localização: ${location}`);
-      }
-      
       // Se tivermos localização, adicioná-la à descrição
       let fullDescription = description;
       if (location) {
@@ -790,7 +835,7 @@ function normalizeExcelProducts(rawProducts: ExcelProduct[]): any[] {
         code: productCode || `AUTO-${Date.now().toString().slice(-8)}`,
         price,
         category,
-        manufacturer: processedManufacturer, // Adicionar o fornecedor/fabricante
+        manufacturer, // Adicionar o fornecedor/fabricante
         colors,
         materials,
         sizes,

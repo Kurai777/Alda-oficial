@@ -130,12 +130,19 @@ export default function ProductCard({ product, onAddToQuote }: ProductCardProps)
         <Link href={`/product/${product.id}`}>
           <h3 className="text-sm font-medium text-gray-900 mb-1 hover:text-primary cursor-pointer">{product.name}</h3>
         </Link>
-        {product.manufacturer && (
-          <p className="text-xs text-primary-600 font-medium mb-1">
-            {product.manufacturer}
-          </p>
-        )}
-        <p className="text-xs text-gray-500 mb-2">{product.description}</p>
+        <div className="flex flex-col space-y-0.5 mb-2">
+          {product.manufacturer && (
+            <p className="text-xs text-primary-600 font-medium">
+              {product.manufacturer}
+            </p>
+          )}
+          {product.location && (
+            <p className="text-xs text-gray-700">
+              <span className="font-medium">Local:</span> {product.location}
+            </p>
+          )}
+          <p className="text-xs text-gray-500">{product.description}</p>
+        </div>
         <div className="flex items-center justify-between">
           <div>
             <p className="text-lg font-semibold text-gray-900">
