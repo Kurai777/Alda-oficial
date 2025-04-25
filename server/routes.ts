@@ -2153,6 +2153,69 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Rota para criar uma cópia única de imagem para um produto
+  app.post("/api/create-unique-image/:productId", async (req: Request, res: Response) => {
+    try {
+      const { productId } = req.params;
+      console.log(`Criando imagem única para produto ID: ${productId}`);
+      
+      // Importar serviços necessários
+      const { getProductImageInfo, findActualImagePath } = await import('./image-service');
+      const fs = require('fs');
+      const path = require('path');
+      
+      // Obter o produto e informações da imagem
+      const product = await storage.getProduct(parseInt(productId));
+      if (!product) {
+        return res.status(404).json({ success: false, error: "Produto não encontrado" });
+      }
+      
+      // Obter informações da imagem atual (que pode ser compartilhada)
+      const imageInfo = await getProductImageInfo(parseInt(productId));
+      
+      // Se não tem imagem ou caminho local, não podemos criar uma cópia
+      if (!imageInfo.localPath || !fs.existsSync(imageInfo.localPath)) {
+        return res.status(404).json({ 
+          success: false, 
+          error: "Imagem original não encontrada para criar cópia" 
+        });
+      }
+      
+      // Criar diretório para imagens processadas se não existir
+      const processedDir = path.join(process.cwd(), 'uploads', 'processed_excel_images');
+      if (!fs.existsSync(processedDir)) {
+        fs.mkdirSync(processedDir, { recursive: true });
+      }
+      
+      // Criar um nome de arquivo único para este produto
+      const ext = path.extname(imageInfo.localPath) || '.jpg';
+      const uniqueFilename = `product_${productId}_${Date.now()}${ext}`;
+      const uniqueImagePath = path.join(processedDir, uniqueFilename);
+      
+      // Copiar o arquivo para o novo local
+      fs.copyFileSync(imageInfo.localPath, uniqueImagePath);
+      console.log(`Cópia única criada em: ${uniqueImagePath}`);
+      
+      // Atualizar o produto com a nova URL de imagem
+      await storage.updateProduct(parseInt(productId), {
+        imageUrl: `/uploads/processed_excel_images/${uniqueFilename}`
+      });
+      
+      // Retornar sucesso
+      return res.json({ 
+        success: true, 
+        message: "Imagem única criada com sucesso",
+        imageUrl: `/uploads/processed_excel_images/${uniqueFilename}`
+      });
+    } catch (error) {
+      console.error("Erro ao criar imagem única:", error);
+      return res.status(500).json({ 
+        success: false, 
+        error: "Erro ao processar imagem única" 
+      });
+    }
+  });
+
   // Rota para servir imagens por ID de produto
   app.get("/api/product-image/:productId", async (req: Request, res: Response) => {
     try {
