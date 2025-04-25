@@ -127,7 +127,13 @@ export default function ProductDetailPage() {
         <div className="bg-muted rounded-lg overflow-hidden h-[400px] flex items-center justify-center">
           {product.imageUrl ? (
             <img 
-              src={product.imageUrl} 
+              src={product.imageUrl?.startsWith('data:') 
+                ? product.imageUrl 
+                : product.imageUrl?.startsWith('/uploads/') || product.imageUrl?.startsWith('http')
+                  ? product.imageUrl
+                  : product.imageUrl?.startsWith('/')
+                    ? product.imageUrl
+                    : product.imageUrl ? `/${product.imageUrl}` : ''} 
               alt={product.name} 
               className="h-full w-full object-contain"
               onError={(e) => {

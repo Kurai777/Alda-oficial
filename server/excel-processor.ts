@@ -716,50 +716,94 @@ function normalizeExcelProducts(rawProducts: ExcelProduct[]): any[] {
       
       // Extrair dimensões da descrição se não encontradas nos campos específicos
       if (sizes.length === 0 && typeof description === 'string') {
-        // Padrões de dimensões comuns: LxAxP, AxLxP, dimensões: 000x000x000
-        const dimensionPatterns = [
-          // Padrão: 1,00 x 2,00 x 3,00
-          /(\d+[,.]?\d*)\s*x\s*(\d+[,.]?\d*)\s*x\s*(\d+[,.]?\d*)/i,
-          
-          // Padrão: L00 x A00 x P00
-          /L\s*(\d+[,.]?\d*)\s*x\s*A\s*(\d+[,.]?\d*)\s*x\s*P\s*(\d+[,.]?\d*)/i,
-          
-          // Padrão: A00 x L00 x P00
-          /A\s*(\d+[,.]?\d*)\s*x\s*L\s*(\d+[,.]?\d*)\s*x\s*P\s*(\d+[,.]?\d*)/i,
-          
-          // Padrão: Largura: 00 x Altura: 00 x Profundidade: 00
-          /(?:Larg|Largura|L)[\s\:]*(\d+[,.]?\d*)\s*(?:cm)?\s*(?:x|\/)\s*(?:Alt|Altura|A)[\s\:]*(\d+[,.]?\d*)\s*(?:cm)?\s*(?:x|\/)\s*(?:Prof|Profundidade|P)[\s\:]*(\d+[,.]?\d*)/i,
-          
-          // Padrão com dimensões após descrição: EMPTY_30-40k | 1000 x 1000 x 1000
-          /.*\|\s*(\d+[,.]?\d*)\s*x\s*(\d+[,.]?\d*)\s*x\s*(\d+[,.]?\d*)/i,
-          
-          // Padrão: tamanho: 00x00x00
-          /tamanho:?\s*(\d+[,.]?\d*)\s*x\s*(\d+[,.]?\d*)\s*x\s*(\d+[,.]?\d*)/i,
-          
-          // Captura dimensões dentro de parênteses: (00x00x00)
-          /\((\d+[,.]?\d*)\s*x\s*(\d+[,.]?\d*)\s*x\s*(\d+[,.]?\d*)\)/i
-        ];
+        // Padrão especial para formato "3 mód de 1,00m x 40cm x 82cm"
+        const modulesPattern = /(\d+)\s*(?:m[óo]d|m[óo]dulos|pe[çc]as|partes)\s*de\s*(\d+(?:[,.]\d+)?)\s*(?:m|cm)?\s*x\s*(\d+(?:[,.]\d+)?)\s*(?:m|cm)?\s*x\s*(\d+(?:[,.]\d+)?)/i;
+        const modulesMatch = description.match(modulesPattern);
         
-        for (const pattern of dimensionPatterns) {
-          const match = description.match(pattern);
-          if (match) {
-            const widthStr = match[1].replace(',', '.');
-            const heightStr = match[2].replace(',', '.');
-            const depthStr = match[3].replace(',', '.');
+        if (modulesMatch) {
+          const modules = parseInt(modulesMatch[1], 10) || 1;
+          const widthStr = modulesMatch[2].replace(',', '.');
+          const heightStr = modulesMatch[3].replace(',', '.');
+          const depthStr = modulesMatch[4].replace(',', '.');
+          
+          let widthNum = parseFloat(widthStr);
+          let heightNum = parseFloat(heightStr);
+          let depthNum = parseFloat(depthStr);
+          
+          // Converter de metros para centímetros se necessário
+          if (widthStr.includes(',') || widthNum < 10) widthNum *= 100;
+          if (heightStr.includes(',') || heightNum < 10) heightNum *= 100;
+          if (depthStr.includes(',') || depthNum < 10) depthNum *= 100;
+          
+          // Se temos vários módulos, adicione a largura total como primeiro tamanho
+          if (modules > 1) {
+            sizes.push({
+              width: widthNum * modules,
+              height: heightNum,
+              depth: depthNum,
+              label: `Conjunto ${modules} módulos: L${widthNum * modules} x A${heightNum} x P${depthNum}`
+            });
+          }
+          
+          // Adicione também o tamanho de um módulo individual
+          sizes.push({
+            width: widthNum,
+            height: heightNum,
+            depth: depthNum,
+            label: modules > 1 ? `Módulo individual: L${widthNum} x A${heightNum} x P${depthNum}` : `L${widthNum} x A${heightNum} x P${depthNum}`
+          });
+        } 
+        else {
+          // Padrões de dimensões comuns: LxAxP, AxLxP, dimensões: 000x000x000
+          const dimensionPatterns = [
+            // Padrão: 1,00 x 2,00 x 3,00
+            /(\d+[,.]?\d*)\s*x\s*(\d+[,.]?\d*)\s*x\s*(\d+[,.]?\d*)/i,
             
-            const widthNum = parseFloat(widthStr);
-            const heightNum = parseFloat(heightStr);
-            const depthNum = parseFloat(depthStr);
+            // Padrão: L00 x A00 x P00
+            /L\s*(\d+[,.]?\d*)\s*x\s*A\s*(\d+[,.]?\d*)\s*x\s*P\s*(\d+[,.]?\d*)/i,
             
-            // Verificar se parece ser uma dimensão válida
-            if (!isNaN(widthNum) && !isNaN(heightNum) && !isNaN(depthNum)) {
-              sizes.push({
-                width: widthNum,
-                height: heightNum,
-                depth: depthNum,
-                label: `L${widthNum} x A${heightNum} x P${depthNum}`
-              });
-              break;
+            // Padrão: A00 x L00 x P00
+            /A\s*(\d+[,.]?\d*)\s*x\s*L\s*(\d+[,.]?\d*)\s*x\s*P\s*(\d+[,.]?\d*)/i,
+            
+            // Padrão: Largura: 00 x Altura: 00 x Profundidade: 00
+            /(?:Larg|Largura|L)[\s\:]*(\d+[,.]?\d*)\s*(?:cm)?\s*(?:x|\/)\s*(?:Alt|Altura|A)[\s\:]*(\d+[,.]?\d*)\s*(?:cm)?\s*(?:x|\/)\s*(?:Prof|Profundidade|P)[\s\:]*(\d+[,.]?\d*)/i,
+            
+            // Padrão com dimensões após descrição: EMPTY_30-40k | 1000 x 1000 x 1000
+            /.*\|\s*(\d+[,.]?\d*)\s*x\s*(\d+[,.]?\d*)\s*x\s*(\d+[,.]?\d*)/i,
+            
+            // Padrão: tamanho: 00x00x00
+            /tamanho:?\s*(\d+[,.]?\d*)\s*x\s*(\d+[,.]?\d*)\s*x\s*(\d+[,.]?\d*)/i,
+            
+            // Captura dimensões dentro de parênteses: (00x00x00)
+            /\((\d+[,.]?\d*)\s*x\s*(\d+[,.]?\d*)\s*x\s*(\d+[,.]?\d*)\)/i
+          ];
+          
+          for (const pattern of dimensionPatterns) {
+            const match = description.match(pattern);
+            if (match) {
+              const widthStr = match[1].replace(',', '.');
+              const heightStr = match[2].replace(',', '.');
+              const depthStr = match[3].replace(',', '.');
+              
+              let widthNum = parseFloat(widthStr);
+              let heightNum = parseFloat(heightStr);
+              let depthNum = parseFloat(depthStr);
+              
+              // Converter de metros para centímetros se necessário
+              if (widthStr.includes(',') || widthNum < 10) widthNum *= 100;
+              if (heightStr.includes(',') || heightNum < 10) heightNum *= 100;
+              if (depthStr.includes(',') || depthNum < 10) depthNum *= 100;
+              
+              // Verificar se parece ser uma dimensão válida
+              if (!isNaN(widthNum) && !isNaN(heightNum) && !isNaN(depthNum)) {
+                sizes.push({
+                  width: widthNum,
+                  height: heightNum,
+                  depth: depthNum,
+                  label: `L${widthNum} x A${heightNum} x P${depthNum}`
+                });
+                break;
+              }
             }
           }
         }
