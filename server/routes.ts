@@ -912,6 +912,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
               
               // Atualizar status do catálogo no Firestore
               await updateCatalogStatusInFirestore(userId, firestoreCatalogId, "completed", productsData.length);
+              
+              // Salvar produtos no banco de dados relacional
+              try {
+                console.log("Salvando produtos no banco de dados relacional...");
+                for (const product of productsData) {
+                  // Criar novo produto
+                  const parsedUserId = typeof userId === 'string' ? parseInt(userId) : userId;
+                  
+                  try {
+                    console.log(`Criando produto: ${product.name}, código: ${product.code}`);
+                    await storage.createProduct({
+                      ...product,
+                      userId: parsedUserId,
+                      catalogId
+                    });
+                  } catch (productError) {
+                    console.error(`Erro ao criar produto ${product.code}:`, productError);
+                  }
+                }
+                console.log(`${productsData.length} produtos salvos no banco de dados.`);
+              } catch (dbError) {
+                console.error("Erro ao salvar produtos no banco de dados:", dbError);
+              }
             } catch (firestoreError) {
               console.error("Erro ao salvar produtos do Excel no Firestore:", firestoreError);
               // Continuar mesmo se não conseguir salvar no Firestore
@@ -933,6 +956,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
               
               // Atualizar status do catálogo no Firestore
               await updateCatalogStatusInFirestore(userId, firestoreCatalogId, "completed", productsData.length);
+              
+              // Salvar produtos no banco de dados relacional (método alternativo)
+              try {
+                console.log("Salvando produtos no banco de dados relacional (método alternativo)...");
+                for (const product of productsData) {
+                  // Criar novo produto
+                  const parsedUserId = typeof userId === 'string' ? parseInt(userId) : userId;
+                  
+                  try {
+                    console.log(`Criando produto: ${product.name}, código: ${product.code}`);
+                    await storage.createProduct({
+                      ...product,
+                      userId: parsedUserId,
+                      catalogId
+                    });
+                  } catch (productError) {
+                    console.error(`Erro ao criar produto ${product.code}:`, productError);
+                  }
+                }
+                console.log(`${productsData.length} produtos salvos no banco de dados.`);
+              } catch (dbError) {
+                console.error("Erro ao salvar produtos no banco de dados:", dbError);
+              }
             } catch (firestoreError) {
               console.error("Erro ao salvar produtos do Excel no Firestore:", firestoreError);
               // Continuar mesmo se não conseguir salvar no Firestore
@@ -971,6 +1017,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
             
             console.log(`Pipeline automatizado extraiu ${productsData.length} produtos do PDF`);
             extractionInfo = `PDF processado com pipeline automatizado (PDF2Image + OpenAI/Claude). Extraídos ${productsData.length} produtos.`;
+            
+            // Salvar produtos no banco de dados relacional
+            try {
+              console.log("Salvando produtos extraídos do PDF no banco de dados relacional...");
+              for (const product of productsData) {
+                // Criar novo produto
+                const parsedUserId = typeof userId === 'string' ? parseInt(userId) : userId;
+                
+                try {
+                  console.log(`Criando produto: ${product.name}, código: ${product.code}`);
+                  await storage.createProduct({
+                    ...product,
+                    userId: parsedUserId,
+                    catalogId
+                  });
+                } catch (productError) {
+                  console.error(`Erro ao criar produto ${product.code || 'sem código'}:`, productError);
+                }
+              }
+              console.log(`${productsData.length} produtos extraídos do PDF salvos no banco de dados.`);
+            } catch (dbError) {
+              console.error("Erro ao salvar produtos do PDF no banco de dados:", dbError);
+            }
           } catch (pipelineError) {
             console.error("Erro no pipeline automatizado:", pipelineError);
             console.log("Stack trace:", pipelineError instanceof Error ? pipelineError.stack : "Sem stack trace");
@@ -1022,6 +1091,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 productsData = allExtractedProducts;
                 console.log(`Claude extraiu um total de ${productsData.length} produtos do PDF`);
                 extractionInfo = `PDF processado com IA Claude-3-7-Sonnet. Extraídos ${productsData.length} produtos.`;
+                
+                // Salvar produtos no banco de dados relacional
+                try {
+                  console.log("Salvando produtos extraídos pelo Claude no banco de dados relacional...");
+                  for (const product of productsData) {
+                    // Criar novo produto
+                    const parsedUserId = typeof userId === 'string' ? parseInt(userId) : userId;
+                    
+                    try {
+                      console.log(`Criando produto: ${product.name}, código: ${product.code || 'sem código'}`);
+                      await storage.createProduct({
+                        ...product,
+                        userId: parsedUserId,
+                        catalogId
+                      });
+                    } catch (productError) {
+                      console.error(`Erro ao criar produto ${product.code || 'sem código'}:`, productError);
+                    }
+                  }
+                  console.log(`${productsData.length} produtos extraídos pelo Claude salvos no banco de dados.`);
+                } catch (dbError) {
+                  console.error("Erro ao salvar produtos do Claude no banco de dados:", dbError);
+                }
               } else {
                 // Se Claude também falhar, tentar OCR
                 throw new Error("Não foi possível extrair produtos com Claude AI");
@@ -1045,6 +1137,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 
                 console.log(`OCR extraiu ${productsData.length} produtos do PDF`);
                 extractionInfo = `PDF processado com OCR. Extraídos ${productsData.length} produtos.`;
+                
+                // Salvar produtos no banco de dados relacional
+                try {
+                  console.log("Salvando produtos extraídos por OCR no banco de dados relacional...");
+                  for (const product of productsData) {
+                    // Criar novo produto
+                    const parsedUserId = typeof userId === 'string' ? parseInt(userId) : userId;
+                    
+                    try {
+                      console.log(`Criando produto: ${product.name}, código: ${product.code || 'sem código'}`);
+                      await storage.createProduct({
+                        ...product,
+                        userId: parsedUserId,
+                        catalogId
+                      });
+                    } catch (productError) {
+                      console.error(`Erro ao criar produto ${product.code || 'sem código'}:`, productError);
+                    }
+                  }
+                  console.log(`${productsData.length} produtos extraídos por OCR salvos no banco de dados.`);
+                } catch (dbError) {
+                  console.error("Erro ao salvar produtos do OCR no banco de dados:", dbError);
+                }
               } catch (ocrError) {
                 console.error("Erro ao processar PDF com OCR:", ocrError);
                 console.log("Tentando método alternativo final...");
