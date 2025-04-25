@@ -167,71 +167,222 @@ if __name__ == "__main__":
 }
 
 /**
- * Executa o script Python para extrair imagens
+ * Extrai imagens diretamente do Excel usando JSZip
  * @param {string} excelPath Caminho do arquivo Excel
  * @returns {Promise<Object>} Resultado da extração
  */
-async function extractImagesWithPython(excelPath) {
+async function extractImagesWithJSZip(excelPath) {
   // Garantir que os diretórios existem
   await ensureDirectories();
   
-  // Criar script Python
-  const scriptPath = await createPythonScript();
-  
-  return new Promise((resolve, reject) => {
-    // Executar o script Python
-    const pythonProcess = spawn('python3', [
-      scriptPath,
-      excelPath,
-      TEMP_DIR
-    ]);
+  try {
+    // Ler arquivo Excel como um buffer
+    const excelData = await readFile(excelPath);
     
-    let dataString = '';
-    let errorString = '';
+    // Carregar como arquivo ZIP (o xlsx é um arquivo ZIP)
+    const zip = new JSZip();
+    const zipContents = await zip.loadAsync(excelData);
     
-    // Capturar saída padrão
-    pythonProcess.stdout.on('data', (data) => {
-      dataString += data.toString();
-    });
+    // Resultado a ser retornado
+    const result = {
+      images: [],
+      error: null
+    };
     
-    // Capturar saída de erro
-    pythonProcess.stderr.on('data', (data) => {
-      errorString += data.toString();
-      console.error(`Erro Python: ${data.toString()}`);
-    });
+    // Locais onde imagens podem estar armazenadas em arquivos Excel
+    const possibleImageLocations = [
+      'xl/media/',
+      'xl/drawings/',
+      'word/media/',
+      'xl/embeddings/',
+      'ppt/media/'
+    ];
     
-    // Processar quando o script terminar
-    pythonProcess.on('close', (code) => {
-      console.log(`Script Python finalizado com código: ${code}`);
+    // Extensões de arquivo de imagem comuns
+    const imageExtensionRegex = /\.(png|jpe?g|gif|bmp|tiff|emf)$/i;
+    
+    // Encontrar todos os arquivos no ZIP que parecem ser imagens
+    const imageFiles = [];
+    
+    // Procurar em cada local
+    for (const location of possibleImageLocations) {
+      const filesInLocation = Object.keys(zipContents.files)
+        .filter(filename => 
+          !zipContents.files[filename].dir && 
+          filename.startsWith(location) && 
+          imageExtensionRegex.test(filename)
+        );
       
-      if (code !== 0) {
-        // Processar mesmo com erros, pode haver imagens parciais
-        console.warn(`Script Python terminou com erros: ${errorString}`);
+      if (filesInLocation.length > 0) {
+        console.log(`Encontradas ${filesInLocation.length} imagens em ${location}`);
+        imageFiles.push(...filesInLocation);
       }
+    }
+    
+    // Também procurar por quaisquer outros arquivos de imagem em qualquer lugar
+    const otherImageFiles = Object.keys(zipContents.files)
+      .filter(filename => 
+        !zipContents.files[filename].dir && 
+        imageExtensionRegex.test(filename) &&
+        !imageFiles.includes(filename)
+      );
+    
+    if (otherImageFiles.length > 0) {
+      console.log(`Encontradas ${otherImageFiles.length} imagens adicionais fora das pastas padrão`);
+      imageFiles.push(...otherImageFiles);
+    }
+    
+    // Processar cada arquivo de imagem encontrado
+    for (let i = 0; i < imageFiles.length; i++) {
+      const imagePath = imageFiles[i];
       
-      // Tentar extrair o JSON da saída (última linha geralmente)
       try {
-        // Pegar última linha que parece JSON
-        const lastJsonLine = dataString
-          .split('\n')
-          .filter(line => line.trim().startsWith('{') && line.trim().endsWith('}'))
-          .pop();
-          
-        if (lastJsonLine) {
-          const result = JSON.parse(lastJsonLine);
-          resolve(result);
-        } else {
-          // Se não encontrar JSON, criar resultado básico
-          console.warn('Nenhum JSON encontrado na saída do script Python');
-          resolve({ images: [], error: 'Formato de saída inválido' });
+        // Extrair os dados da imagem como um buffer
+        const imageData = await zipContents.file(imagePath).async('nodebuffer');
+        
+        // Verificar se temos dados válidos
+        if (!imageData || imageData.length === 0) {
+          console.log(`Dados vazios para imagem ${imagePath}`);
+          continue;
         }
+        
+        // Criar nome de arquivo seguro
+        const fileName = path.basename(imagePath);
+        const safeFileName = `img_${i}_${fileName.replace(/[^a-zA-Z0-9.]/g, '_')}`;
+        const outputPath = path.join(TEMP_DIR, safeFileName);
+        
+        // Salvar no disco
+        await writeFile(outputPath, imageData);
+        
+        // Converter para base64
+        const base64Data = imageData.toString('base64');
+        
+        // Adicionar ao resultado
+        result.images.push({
+          image_path: outputPath,
+          image_filename: safeFileName,
+          original_path: imagePath,
+          image_base64: base64Data
+        });
+        
+        console.log(`Imagem ${i+1} extraída: ${outputPath} (${imageData.length} bytes)`);
       } catch (error) {
-        console.error('Erro ao analisar saída do Python:', error);
-        // Mesmo com erro, tentar continuar
-        resolve({ images: [], error: 'Falha ao processar saída: ' + error.message });
+        console.error(`Erro ao extrair imagem ${imagePath}: ${error.message}`);
       }
-    });
-  });
+    }
+    
+    // Se não encontramos imagens pelo método direto, tentar extrair de arquivos de relações
+    if (result.images.length === 0) {
+      console.log('Tentando método alternativo via arquivos de relações...');
+      
+      // Procurar arquivos .rels que possam conter referências a imagens
+      const relsFiles = Object.keys(zipContents.files)
+        .filter(filename => 
+          !zipContents.files[filename].dir && 
+          filename.endsWith('.rels')
+        );
+      
+      console.log(`Encontrados ${relsFiles.length} arquivos de relações para verificar`);
+      
+      for (const relsFile of relsFiles) {
+        try {
+          // Ler conteúdo do arquivo de relações
+          const relsContent = await zipContents.file(relsFile).async('string');
+          
+          // Procurar referências a imagens usando regex
+          const imageMatches = relsContent.match(/Target="([^"]+\.(png|jpe?g|gif|bmp|tiff))"/gi);
+          
+          if (imageMatches && imageMatches.length > 0) {
+            console.log(`Encontradas ${imageMatches.length} referências a imagens em ${relsFile}`);
+            
+            for (const match of imageMatches) {
+              try {
+                // Extrair o caminho da imagem
+                const targetMatch = match.match(/Target="([^"]+)"/i);
+                if (!targetMatch || !targetMatch[1]) continue;
+                
+                let imagePath = targetMatch[1];
+                
+                // Ajustar caminho conforme necessário
+                if (imagePath.startsWith('../')) {
+                  // Caminho relativo a partir do diretório do arquivo .rels
+                  const relDir = path.dirname(relsFile);
+                  imagePath = path.normalize(path.join(relDir, '..', imagePath.substring(3)));
+                }
+                
+                // Verificar se o arquivo existe no ZIP
+                if (!zipContents.files[imagePath] && !zipContents.files[imagePath.substring(1)]) {
+                  // Tentar outros caminhos possíveis
+                  const possiblePaths = [
+                    `xl/${imagePath}`,
+                    imagePath.replace(/^\//, ''),
+                    imagePath.replace(/^\.\.\//, '')
+                  ];
+                  
+                  let found = false;
+                  for (const possiblePath of possiblePaths) {
+                    if (zipContents.files[possiblePath]) {
+                      imagePath = possiblePath;
+                      found = true;
+                      break;
+                    }
+                  }
+                  
+                  if (!found) {
+                    console.log(`Imagem referenciada não encontrada: ${imagePath}`);
+                    continue;
+                  }
+                }
+                
+                // Extrair os dados da imagem
+                const zipFile = zipContents.files[imagePath] || zipContents.files[imagePath.substring(1)];
+                const imageData = await zipFile.async('nodebuffer');
+                
+                if (!imageData || imageData.length === 0) {
+                  console.log(`Dados vazios para imagem referenciada: ${imagePath}`);
+                  continue;
+                }
+                
+                // Criar nome de arquivo seguro
+                const fileName = path.basename(imagePath);
+                const safeFileName = `rel_${result.images.length}_${fileName.replace(/[^a-zA-Z0-9.]/g, '_')}`;
+                const outputPath = path.join(TEMP_DIR, safeFileName);
+                
+                // Salvar no disco
+                await writeFile(outputPath, imageData);
+                
+                // Converter para base64
+                const base64Data = imageData.toString('base64');
+                
+                // Adicionar ao resultado
+                result.images.push({
+                  image_path: outputPath,
+                  image_filename: safeFileName,
+                  original_path: imagePath,
+                  image_base64: base64Data
+                });
+                
+                console.log(`Imagem referenciada extraída: ${outputPath} (${imageData.length} bytes)`);
+              } catch (matchError) {
+                console.error(`Erro ao processar referência: ${match}`, matchError);
+              }
+            }
+          }
+        } catch (relsError) {
+          console.error(`Erro ao processar arquivo de relações ${relsFile}: ${relsError.message}`);
+        }
+      }
+    }
+    
+    console.log(`Total de ${result.images.length} imagens extraídas com sucesso`);
+    return result;
+  } catch (error) {
+    console.error(`Erro ao extrair imagens: ${error.message}`);
+    return {
+      images: [],
+      error: error.message
+    };
+  }
 }
 
 /**
@@ -301,8 +452,8 @@ export async function extractImagesFromExcel(excelPath, products, userId, catalo
   console.log(`Extraindo imagens de ${excelPath} com método robusto`);
   
   try {
-    // Extrair imagens com Python
-    const result = await extractImagesWithPython(excelPath);
+    // Extrair imagens com JSZip (puro JavaScript)
+    const result = await extractImagesWithJSZip(excelPath);
     
     if (result.error) {
       console.warn(`Aviso na extração de imagens: ${result.error}`);
