@@ -6,9 +6,9 @@ import os
 import sys
 import json
 import base64
+import re  # Importação explícita para uso em todo o módulo
 from PIL import Image
 import io
-import re
 
 def extract_products_fixed_columns(excel_file_path, output_dir):
     """
@@ -67,48 +67,80 @@ def extract_products_fixed_columns(excel_file_path, output_dir):
 def extract_products_from_sheet(sheet):
     """
     Extrai produtos da planilha com mapeamento fixo de colunas:
-    A (1): nome do produto
-    B (2): local
+    A (1): nome do produto (ex: "Sofá Home")
+    B (2): local (ex: "2º Piso", "Depósito")
     C (3): fornecedor
     D (4): imagem (objeto gráfico)
     F (6): código do produto
     G (7): descrição
-    L (12): valor total (preço)
+    L (12): valor total (preço do produto)
     """
     products = []
+    print(f"Lendo produtos da planilha com {sheet.max_row} linhas...", file=sys.stderr)
     
     # Começar da linha 2 (pular cabeçalho)
     for row_idx in range(2, sheet.max_row + 1):
-        # Ler valores das colunas específicas
-        nome = sheet.cell(row=row_idx, column=1).value  # Coluna A (1): nome
-        local = sheet.cell(row=row_idx, column=2).value  # Coluna B (2): local
-        fornecedor = sheet.cell(row=row_idx, column=3).value  # Coluna C (3): fornecedor
-        codigo = sheet.cell(row=row_idx, column=6).value  # Coluna F (6): código
-        descricao = sheet.cell(row=row_idx, column=7).value  # Coluna G (7): descrição
-        preco = sheet.cell(row=row_idx, column=12).value  # Coluna L (12): valor total
-        
-        # Pular linhas vazias ou com nome/código vazios ou inválidos
-        if (not nome or nome == "_EMPTY_" or nome == "" or 
-            not codigo or codigo == "_EMPTY_" or codigo == "" or 
-            codigo == "UNKNOWN-CODE"):
-            continue
-        
-        # Formatar preço como "R$ XX.XXX,XX"
-        preco_formatado = format_price(preco)
-        
-        # Criar produto
-        produto = {
-            "nome": nome,
-            "local": local or "",
-            "fornecedor": fornecedor or "",
-            "codigo": str(codigo).strip(),
-            "descricao": descricao or "",
-            "preco": preco_formatado,
-            "imagem": "",  # Será preenchido depois ao associar imagens
-            "row": row_idx  # Armazenar o número da linha para associar com imagens
-        }
-        
-        products.append(produto)
+        try:
+            # Ler valores das colunas específicas
+            nome_cell = sheet.cell(row=row_idx, column=1)  # Coluna A (1): nome
+            local_cell = sheet.cell(row=row_idx, column=2)  # Coluna B (2): local
+            fornecedor_cell = sheet.cell(row=row_idx, column=3)  # Coluna C (3): fornecedor
+            codigo_cell = sheet.cell(row=row_idx, column=6)  # Coluna F (6): código
+            descricao_cell = sheet.cell(row=row_idx, column=7)  # Coluna G (7): descrição
+            preco_cell = sheet.cell(row=row_idx, column=12)  # Coluna L (12): valor total
+            
+            # Obter valores das células
+            nome = nome_cell.value if nome_cell else None
+            local = local_cell.value if local_cell else None
+            fornecedor = fornecedor_cell.value if fornecedor_cell else None
+            codigo = codigo_cell.value if codigo_cell else None
+            descricao = descricao_cell.value if descricao_cell else None
+            preco = preco_cell.value if preco_cell else None
+            
+            # Limpar e normalizar valores (remover espaços extras, etc.)
+            if nome and isinstance(nome, str):
+                nome = nome.strip()
+            if local and isinstance(local, str):
+                local = local.strip()
+            if fornecedor and isinstance(fornecedor, str):
+                fornecedor = fornecedor.strip()
+            if codigo and isinstance(codigo, str):
+                codigo = codigo.strip()
+            elif codigo:
+                codigo = str(codigo)
+            if descricao and isinstance(descricao, str):
+                descricao = descricao.strip()
+            
+            # Debug: imprimir valores lidos
+            if row_idx < 10 or row_idx % 50 == 0:  # Limitar log
+                print(f"Linha {row_idx}: nome='{nome}', codigo='{codigo}', preco='{preco}'", file=sys.stderr)
+            
+            # Pular linhas vazias ou com nome/código vazios ou inválidos
+            if (not nome or nome == "_EMPTY_" or nome == "" or 
+                not codigo or codigo == "_EMPTY_" or codigo == "" or 
+                codigo == "UNKNOWN-CODE"):
+                if row_idx < 10 or row_idx % 50 == 0:  # Limitar log
+                    print(f"  -> Pulando linha {row_idx} (nome ou código inválido)", file=sys.stderr)
+                continue
+            
+            # Formatar preço como "R$ XX.XXX,XX"
+            preco_formatado = format_price(preco)
+            
+            # Criar produto
+            produto = {
+                "nome": nome,
+                "local": local or "",
+                "fornecedor": fornecedor or "",
+                "codigo": str(codigo).strip(),
+                "descricao": descricao or "",
+                "preco": preco_formatado,
+                "imagem": "",  # Será preenchido depois ao associar imagens
+                "row": row_idx  # Armazenar o número da linha para associar com imagens
+            }
+            
+            products.append(produto)
+        except Exception as e:
+            print(f"Erro ao processar produto na linha {row_idx}: {str(e)}", file=sys.stderr)
     
     return products
 
@@ -120,27 +152,49 @@ def format_price(price_value):
         return "R$ 0,00"
     
     try:
-        # Converter para float se for string
-        if isinstance(price_value, str):
-            # Remover R$ e outros caracteres não numéricos exceto ponto e vírgula
-            cleaned_value = price_value.replace("R$", "").replace(" ", "")
-            # Substituir vírgula por ponto para conversão correta
-            if "," in cleaned_value and "." in cleaned_value:
-                # Formato brasileiro: 1.234,56
-                cleaned_value = cleaned_value.replace(".", "").replace(",", ".")
-            elif "," in cleaned_value:
-                # Formato com vírgula como decimal: 1234,56
-                cleaned_value = cleaned_value.replace(",", ".")
-            
-            price_float = float(cleaned_value)
-        else:
-            price_float = float(price_value)
+        # Debug - imprimir o valor e tipo recebido
+        print(f"Formatando preço: valor={price_value}, tipo={type(price_value)}", file=sys.stderr)
         
-        # Formatar como R$ XX.XXX,XX
-        return f"R$ {price_float:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        # Converter para string se for outro tipo
+        price_str = str(price_value)
+        
+        # Limpar a string de qualquer formatação existente
+        # Remover R$, espaços e outros caracteres não essenciais
+        cleaned_value = price_str.replace("R$", "").replace(" ", "").strip()
+        
+        # Verificar se é um número com formatação brasileira (1.234,56)
+        if "," in cleaned_value and "." in cleaned_value:
+            # Remover pontos de milhar e substituir vírgula por ponto para decimal
+            cleaned_value = cleaned_value.replace(".", "").replace(",", ".")
+        elif "," in cleaned_value:
+            # Se só tem vírgula, substituir por ponto (formato decimal)
+            cleaned_value = cleaned_value.replace(",", ".")
+        
+        # Tentar converter para float
+        try:
+            price_float = float(cleaned_value)
+        except:
+            # Se falhar, pode ser que esteja em notação científica ou outro formato
+            import re
+            # Extrair apenas dígitos e pontos/vírgulas
+            nums = re.findall(r'[\d.,]+', cleaned_value)
+            if nums:
+                # Pegar o primeiro número encontrado
+                num_str = nums[0].replace(",", ".")
+                price_float = float(num_str)
+            else:
+                # Se não encontrou números, usar 0
+                price_float = 0.0
+        
+        # Formatar como R$ XX.XXX,XX (formato brasileiro)
+        formatted_price = f"R$ {price_float:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        
+        print(f"Preço formatado: {formatted_price}", file=sys.stderr)
+        return formatted_price
     
     except (ValueError, TypeError) as e:
-        # Em caso de erro, retornar o valor original com prefixo R$
+        # Em caso de erro, registrar e retornar um valor padrão formatado
+        print(f"Erro ao formatar preço '{price_value}': {str(e)}", file=sys.stderr)
         return f"R$ {price_value}"
 
 def extract_images_from_sheet(sheet, output_dir):
