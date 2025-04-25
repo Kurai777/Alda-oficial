@@ -2508,6 +2508,60 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
   
+  // Rota para servir imagem de produto específica baseado no ID do produto
+  app.get("/api/product-image/:productId", async (req: Request, res: Response) => {
+    try {
+      const { productId } = req.params;
+      console.log(`Buscando imagem para produto ID: ${productId}`);
+      
+      // Importar serviço de imagens
+      const { getProductImageInfo } = await import('./image-service');
+      
+      // Obter informações da imagem
+      const imageInfo = await getProductImageInfo(parseInt(productId));
+      
+      if (!imageInfo.hasImage || !imageInfo.localPath) {
+        // Não possui imagem, retornar o placeholder
+        let placeholderFile = 'default.svg';
+        
+        // Buscar produto para determinar categoria para o placeholder
+        const product = await storage.getProduct(Number(productId));
+        if (product && product.category) {
+          const normalizedCategory = product.category.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+          if (normalizedCategory.includes('sofa')) placeholderFile = 'sofa.svg';
+          else if (normalizedCategory.includes('mesa')) placeholderFile = 'mesa.svg';
+          else if (normalizedCategory.includes('poltrona')) placeholderFile = 'poltrona.svg';
+          else if (normalizedCategory.includes('armario') || normalizedCategory.includes('estante')) placeholderFile = 'armario.svg';
+        }
+        
+        // Verificar se o placeholder existe, senão usar o default
+        const placeholderPath = path.join(process.cwd(), 'public', 'placeholders', placeholderFile);
+        if (!fs.existsSync(placeholderPath)) {
+          placeholderFile = 'default.svg';
+        }
+        
+        return res.redirect(`/placeholders/${placeholderFile}`);
+      }
+      
+      // Definir o tipo de conteúdo
+      if (imageInfo.contentType) {
+        res.setHeader('Content-Type', imageInfo.contentType);
+      }
+      
+      // Adicionar cache headers para melhorar performance
+      const cacheTime = req.query.t ? 0 : 3600; // Se tem parâmetro de timestamp, não cachear
+      res.setHeader('Cache-Control', `public, max-age=${cacheTime}`);
+      
+      // Enviar a imagem
+      console.log(`Imagem encontrada utilizando serviço centralizado: ${imageInfo.localPath}`);
+      return res.sendFile(imageInfo.localPath);
+      
+    } catch (error) {
+      console.error('Erro ao servir imagem de produto:', error);
+      res.status(500).send("Erro ao processar a imagem do produto");
+    }
+  });
+
   // Rota para verificar se um produto tem uma imagem e se ela é compartilhada
   app.get("/api/verify-product-image/:productId", async (req: Request, res: Response) => {
     try {
