@@ -714,6 +714,57 @@ function normalizeExcelProducts(rawProducts: ExcelProduct[]): any[] {
         });
       }
       
+      // Extrair dimensões da descrição se não encontradas nos campos específicos
+      if (sizes.length === 0 && typeof description === 'string') {
+        // Padrões de dimensões comuns: LxAxP, AxLxP, dimensões: 000x000x000
+        const dimensionPatterns = [
+          // Padrão: 1,00 x 2,00 x 3,00
+          /(\d+[,.]?\d*)\s*x\s*(\d+[,.]?\d*)\s*x\s*(\d+[,.]?\d*)/i,
+          
+          // Padrão: L00 x A00 x P00
+          /L\s*(\d+[,.]?\d*)\s*x\s*A\s*(\d+[,.]?\d*)\s*x\s*P\s*(\d+[,.]?\d*)/i,
+          
+          // Padrão: A00 x L00 x P00
+          /A\s*(\d+[,.]?\d*)\s*x\s*L\s*(\d+[,.]?\d*)\s*x\s*P\s*(\d+[,.]?\d*)/i,
+          
+          // Padrão: Largura: 00 x Altura: 00 x Profundidade: 00
+          /(?:Larg|Largura|L)[\s\:]*(\d+[,.]?\d*)\s*(?:cm)?\s*(?:x|\/)\s*(?:Alt|Altura|A)[\s\:]*(\d+[,.]?\d*)\s*(?:cm)?\s*(?:x|\/)\s*(?:Prof|Profundidade|P)[\s\:]*(\d+[,.]?\d*)/i,
+          
+          // Padrão com dimensões após descrição: EMPTY_30-40k | 1000 x 1000 x 1000
+          /.*\|\s*(\d+[,.]?\d*)\s*x\s*(\d+[,.]?\d*)\s*x\s*(\d+[,.]?\d*)/i,
+          
+          // Padrão: tamanho: 00x00x00
+          /tamanho:?\s*(\d+[,.]?\d*)\s*x\s*(\d+[,.]?\d*)\s*x\s*(\d+[,.]?\d*)/i,
+          
+          // Captura dimensões dentro de parênteses: (00x00x00)
+          /\((\d+[,.]?\d*)\s*x\s*(\d+[,.]?\d*)\s*x\s*(\d+[,.]?\d*)\)/i
+        ];
+        
+        for (const pattern of dimensionPatterns) {
+          const match = description.match(pattern);
+          if (match) {
+            const widthStr = match[1].replace(',', '.');
+            const heightStr = match[2].replace(',', '.');
+            const depthStr = match[3].replace(',', '.');
+            
+            const widthNum = parseFloat(widthStr);
+            const heightNum = parseFloat(heightStr);
+            const depthNum = parseFloat(depthStr);
+            
+            // Verificar se parece ser uma dimensão válida
+            if (!isNaN(widthNum) && !isNaN(heightNum) && !isNaN(depthNum)) {
+              sizes.push({
+                width: widthNum,
+                height: heightNum,
+                depth: depthNum,
+                label: `L${widthNum} x A${heightNum} x P${depthNum}`
+              });
+              break;
+            }
+          }
+        }
+      }
+      
       // Extrair informações do fabricante
       let manufacturer = '';
       
@@ -732,7 +783,43 @@ function normalizeExcelProducts(rawProducts: ExcelProduct[]): any[] {
         manufacturer = String(rawProduct[supplierColumnKey]).trim();
       }
       
-      // Se não encontramos o fabricante nos campos explícitos, tente extraí-lo do nome/descrição
+      // Verificar se há um padrão de "forn." ou "fornecedor" na descrição
+      if (!manufacturer && typeof description === 'string') {
+        // Padrões para identificar fornecedor na descrição
+        const fornPatterns = [
+          // Padrão: forn. Nome do Fornecedor
+          /forn\.?\s*([A-Za-zÀ-ÿ0-9\s\-&]+?)(?:\s*\||$|\.|;)/i,
+          
+          // Padrão: fornecedor: Nome do Fornecedor
+          /fornecedor:?\s*([A-Za-zÀ-ÿ0-9\s\-&]+?)(?:\s*\||$|\.|;)/i,
+          
+          // Padrão: fabricante: Nome do Fabricante
+          /fabricante:?\s*([A-Za-zÀ-ÿ0-9\s\-&]+?)(?:\s*\||$|\.|;)/i,
+          
+          // Padrão: marca: Nome da Marca
+          /marca:?\s*([A-Za-zÀ-ÿ0-9\s\-&]+?)(?:\s*\||$|\.|;)/i,
+          
+          // Padrão específico: EMPTY_2-Estilo Especial | EMPTY_3-Fornecedor
+          /EMPTY_[0-9]+-([A-Za-zÀ-ÿ0-9\s\-&]+)/i
+        ];
+        
+        for (const pattern of fornPatterns) {
+          const match = description.match(pattern);
+          if (match && match[1]) {
+            manufacturer = match[1].trim();
+            
+            // Limpar o texto do fornecedor se necessário
+            manufacturer = manufacturer
+              .replace(/^\s*-\s*/, '') // Remove traços iniciais
+              .replace(/\s*-\s*$/, '') // Remove traços finais
+              .trim();
+              
+            if (manufacturer) break;
+          }
+        }
+      }
+      
+      // Se ainda não encontramos o fabricante, tente extraí-lo do nome/descrição
       if (!manufacturer) {
         // Lista de fabricantes conhecidos
         const knownManufacturers = [

@@ -91,9 +91,11 @@ export default function ProductCard({ product, onAddToQuote }: ProductCardProps)
               <img 
                 src={product.imageUrl.startsWith('data:') 
                   ? product.imageUrl 
-                  : product.imageUrl.startsWith('/') 
+                  : product.imageUrl.startsWith('/uploads/') || product.imageUrl.startsWith('http')
                     ? product.imageUrl
-                    : `/${product.imageUrl}`
+                    : product.imageUrl.startsWith('/')
+                      ? product.imageUrl
+                      : `/${product.imageUrl}`
                 }
                 alt={product.name} 
                 className="h-full w-full object-cover"
