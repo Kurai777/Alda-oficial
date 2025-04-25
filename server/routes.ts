@@ -1612,6 +1612,128 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     }
   });
+  
+  // Rota de teste para extração de imagens de Excel
+  app.post("/api/test/excel-images", upload.single('file'), async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ message: "Nenhum arquivo enviado" });
+      }
+
+      const filePath = req.file.path;
+      const fileName = req.file.originalname;
+      
+      console.log(`Arquivo recebido: ${fileName} (${filePath})`);
+      
+      // Verificar se é um arquivo Excel
+      if (!fileName.toLowerCase().endsWith('.xlsx') && !fileName.toLowerCase().endsWith('.xls')) {
+        return res.status(400).json({ message: "O arquivo deve ser um Excel (.xlsx ou .xls)" });
+      }
+      
+      // Importar os módulos de extração de imagens
+      const { hasExcelImages, extractImagesFromExcel } = await import('./robust-excel-image-extractor.js');
+      const { hasExcelImagesWithPython, extractImagesWithPythonBridge } = await import('./python-excel-bridge.js');
+      
+      // Verificar se o arquivo contém imagens usando JavaScript
+      console.log("Verificando imagens com JavaScript...");
+      const hasImages = await hasExcelImages(filePath);
+      
+      // Verificar se o arquivo contém imagens usando Python
+      console.log("Verificando imagens com Python...");
+      const hasImagesPython = await hasExcelImagesWithPython(filePath);
+      
+      // Extrair produtos básicos do Excel para associar às imagens
+      console.log("Extraindo produtos do Excel...");
+      const { processExcelFile } = await import('./excel-processor');
+      const products = await processExcelFile(filePath, "test-user", "test-catalog");
+      
+      // Resultados
+      const results = {
+        fileName,
+        products: {
+          count: products.length,
+          sample: products.slice(0, 3) // Apenas uma amostra dos produtos
+        },
+        jsCheck: {
+          hasImages,
+          method: "JavaScript (JSZip)"
+        },
+        pythonCheck: {
+          hasImages: hasImagesPython,
+          method: "Python (multiple methods)"
+        }
+      };
+      
+      // Se tiver imagens, tentar extrair
+      if (hasImages || hasImagesPython) {
+        console.log("Arquivo contém imagens, tentando extrair...");
+        
+        // Resultados das extrações
+        const extractionResults = {
+          js: null,
+          python: null
+        };
+        
+        // Tentar com JavaScript
+        if (hasImages) {
+          try {
+            console.log("Extraindo imagens com JavaScript...");
+            const jsProducts = await extractImagesFromExcel(filePath, products, "test-user", "test-catalog");
+            const jsProductsWithImages = jsProducts.filter(p => p.imageUrl);
+            
+            extractionResults.js = {
+              success: true,
+              extractedCount: jsProductsWithImages.length,
+              sampleUrls: jsProductsWithImages.slice(0, 3).map(p => p.imageUrl)
+            };
+          } catch (error) {
+            console.error("Erro na extração JS:", error);
+            extractionResults.js = {
+              success: false,
+              error: error instanceof Error ? error.message : "Erro desconhecido"
+            };
+          }
+        }
+        
+        // Tentar com Python
+        if (hasImagesPython) {
+          try {
+            console.log("Extraindo imagens com Python...");
+            const pythonProducts = await extractImagesWithPythonBridge(filePath, products, "test-user", "test-catalog");
+            const pythonProductsWithImages = pythonProducts.filter(p => p.imageUrl);
+            
+            extractionResults.python = {
+              success: true,
+              extractedCount: pythonProductsWithImages.length,
+              sampleUrls: pythonProductsWithImages.slice(0, 3).map(p => p.imageUrl)
+            };
+          } catch (error) {
+            console.error("Erro na extração Python:", error);
+            extractionResults.python = {
+              success: false,
+              error: error instanceof Error ? error.message : "Erro desconhecido"
+            };
+          }
+        }
+        
+        results.extraction = extractionResults;
+      }
+      
+      // Retornar resultados detalhados
+      res.status(200).json({
+        message: "Teste de extração de imagens concluído",
+        results
+      });
+      
+    } catch (error) {
+      console.error("Erro no teste de extração de imagens:", error);
+      res.status(500).json({ 
+        message: "Falha no teste de extração de imagens", 
+        error: error instanceof Error ? error.message : "Erro desconhecido",
+        stack: error instanceof Error ? error.stack : null
+      });
+    }
+  });
 
   const httpServer = createServer(app);
   return httpServer;
