@@ -84,15 +84,41 @@ export default function ProductCard({ product, onAddToQuote }: ProductCardProps)
   return (
     <Card className="overflow-hidden hover:shadow-md transition-shadow border border-gray-100">
       <div className="relative">
-        <img 
-          src={product.imageUrl} 
-          alt={product.name} 
-          className="h-48 w-full object-cover"
-          onError={(e) => {
-            // Fallback image if the product image fails to load
-            (e.target as HTMLImageElement).src = 'https://via.placeholder.com/300x150?text=Sem+Imagem';
-          }}
-        />
+        <div className="h-48 w-full overflow-hidden bg-muted flex items-center justify-center">
+          {product.imageUrl ? (
+            <img 
+              src={product.imageUrl.startsWith('data:') 
+                ? product.imageUrl 
+                : product.imageUrl.startsWith('/') 
+                  ? product.imageUrl
+                  : `/${product.imageUrl}`
+              }
+              alt={product.name} 
+              className="h-full w-full object-cover"
+              onError={(e) => {
+                console.log(`Erro ao carregar imagem: ${product.imageUrl}`);
+                const target = e.target as HTMLImageElement;
+                target.parentElement?.classList.add('bg-muted');
+                target.style.display = 'none';
+                // Não usamos imagens fictícias, apenas exibimos um ícone
+                const icon = document.createElement('div');
+                icon.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" class="h-10 w-10 text-muted-foreground mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                </svg>
+                <span class="text-xs text-muted-foreground">Imagem não disponível</span>`;
+                icon.className = 'flex flex-col items-center justify-center h-full w-full';
+                target.parentElement?.appendChild(icon);
+              }}
+            />
+          ) : (
+            <div className="flex flex-col items-center justify-center h-full w-full">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10 text-muted-foreground mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+              </svg>
+              <span className="text-xs text-muted-foreground">Imagem não disponível</span>
+            </div>
+          )}
+        </div>
         <Badge variant="outline" className="absolute top-2 right-2 bg-white px-2 py-1 rounded-full text-xs font-medium text-primary-600">
           Cod: {product.code}
         </Badge>

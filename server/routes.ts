@@ -98,23 +98,7 @@ async function extractProductsFromExcel(filePath: string): Promise<any[]> {
 // Função removeida: createDemoProductsFromCatalog
 // Esta função gerava produtos aleatórios/fictícios, o que viola nossa política de integridade de dados
 // Agora estamos confiando apenas em dados extraídos de fontes autênticas
-
-// Função para obter uma imagem padrão para cada categoria
-function getCategoryDefaultImage(category: string): string {
-  const categoryImages = {
-    "Cadeira": "https://images.unsplash.com/photo-1567538096630-e0c55bd6374c?ixlib=rb-4.0.3",
-    "Banqueta": "https://images.unsplash.com/photo-1501045661006-fcebe0257c3f?ixlib=rb-4.0.3",
-    "Poltrona": "https://images.unsplash.com/photo-1567016432779-094069958ea5?ixlib=rb-4.0.3",
-    "Sofá": "https://images.unsplash.com/photo-1555041469-a586c61ea9bc?ixlib=rb-4.0.3",
-    "Mesa": "https://images.unsplash.com/photo-1577140917170-285929fb55b7?ixlib=rb-4.0.3",
-    "Estante": "https://images.unsplash.com/photo-1493663284031-b7e3aefcae8e?ixlib=rb-4.0.3",
-    "Armário": "https://images.unsplash.com/photo-1595428774223-ef52624120d2?ixlib=rb-4.0.3",
-    "default": "https://images.unsplash.com/photo-1555041469-a586c61ea9bc?ixlib=rb-4.0.3"
-  };
-  
-  const categoryKey = category as keyof typeof categoryImages;
-  return categoryImages[categoryKey] || categoryImages.default;
-}
+// Nenhuma imagem fictícia deve ser usada
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Rota de verificação
@@ -1213,8 +1197,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           // Verificar se já tem imagem, caso contrário, usar imagem da categoria
           let imageUrl = productData.imageUrl;
           if (!imageUrl) {
-            // Não geramos mais imagens fictícias, usamos apenas a imagem padrão da categoria
-            imageUrl = getCategoryDefaultImage(productData.category || "default");
+            // Não usar imagens fictícias
+            imageUrl = null; // Produtos sem imagem devem ter o campo null
           }
           
           // Converter o produto para o formato adequado para o banco local
@@ -1234,7 +1218,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             colors: Array.isArray(productData.colors) ? productData.colors : [],
             materials: Array.isArray(productData.materials) ? productData.materials : [],
             sizes: Array.isArray(productData.sizes) ? productData.sizes : [],
-            imageUrl: imageUrl || "https://images.unsplash.com/photo-1555041469-a586c61ea9bc?ixlib=rb-4.0.3",
+            imageUrl: imageUrl,
             firestoreId: productData.firestoreId || null, // Manter referência ao ID do Firestore, se disponível
             firestoreCatalogId: firestoreCatalogId, // Referência ao ID do catálogo no Firestore
             firebaseUserId: typeof userId === 'string' ? userId : undefined // Preservar o UID do Firebase quando disponível
