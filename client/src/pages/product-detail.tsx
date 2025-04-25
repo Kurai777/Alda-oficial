@@ -161,6 +161,22 @@ export default function ProductDetailPage() {
           
           <h1 className="text-3xl font-bold mb-2">{product.name}</h1>
           
+          {product.manufacturer && (
+            <div className="mb-2">
+              <Badge variant="secondary" className="text-primary-700 bg-primary-50">
+                Fabricante: {product.manufacturer}
+              </Badge>
+            </div>
+          )}
+          
+          {product.location && (
+            <div className="mb-3">
+              <Badge variant="outline" className="text-gray-600 bg-gray-50">
+                Localização: {product.location}
+              </Badge>
+            </div>
+          )}
+          
           <div className="text-2xl font-bold text-primary mb-1">
             {formatPrice(product.price)}
           </div>

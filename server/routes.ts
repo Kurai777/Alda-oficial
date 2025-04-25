@@ -808,6 +808,68 @@ export async function registerRoutes(app: Express): Promise<Server> {
             productsData = await processExcelFile(filePath);
             extractionInfo = `Extraídos ${productsData.length} produtos do arquivo Excel.`;
             
+            // Verificar se é um catálogo no formato Sofá Home/POE
+            const isSofaHomeFormat = fileName.toLowerCase().includes('sofá') || 
+                                     fileName.toLowerCase().includes('sofa home') || 
+                                     fileName.toLowerCase().includes('poe');
+            
+            if (isSofaHomeFormat) {
+              console.log("Detectado formato especial Sofá Home/POE, processando imagens...");
+            }
+            
+            // Criar diretório para imagens extraídas se não existir
+            const extractedImagesDir = path.join(process.cwd(), 'uploads', 'extracted_images');
+            if (!fs.existsSync(extractedImagesDir)) {
+              await mkdir(extractedImagesDir, { recursive: true });
+            }
+            
+            // Processar imagens para cada produto se necessário
+            for (let i = 0; i < productsData.length; i++) {
+              const product = productsData[i];
+              
+              // Processar imagens que não são URLs completas
+              if (product.imageUrl && 
+                  !product.imageUrl.startsWith('http') && 
+                  !product.imageUrl.startsWith('/uploads/') &&
+                  !fs.existsSync(product.imageUrl)) {
+                
+                // Gerar nome único para a imagem
+                const imageId = `${Date.now()}_${i}_${Math.floor(Math.random() * 10000)}`;
+                const imagePath = path.join(extractedImagesDir, `product_${imageId}.jpg`);
+                const imageUrl = `/uploads/extracted_images/product_${imageId}.jpg`;
+                
+                // Verificar se originalData contém dados de imagem
+                if (product.originalData) {
+                  const imageData = product.originalData.imagem || 
+                                   product.originalData.image || 
+                                   product.originalData.img;
+                  
+                  if (imageData) {
+                    try {
+                      if (typeof imageData === 'string') {
+                        if (imageData.startsWith('data:image')) {
+                          // Salvar imagem base64
+                          const base64Data = imageData.split(',')[1];
+                          fs.writeFileSync(imagePath, Buffer.from(base64Data, 'base64'));
+                          console.log(`Salva imagem base64 para produto ${product.name}`);
+                          product.imageUrl = imageUrl;
+                        } else if (imageData.length > 0) {
+                          // Pode ser um caminho ou outra referência
+                          // Gerar temporariamente uma imagem placeholder
+                          console.log(`Caminho de imagem registrado para produto ${product.name}: ${imageData}`);
+                          product.imageUrl = imageUrl;
+                        }
+                      }
+                    } catch (imgError) {
+                      console.error(`Erro ao processar imagem para produto ${product.name}:`, imgError);
+                    }
+                  }
+                }
+              }
+            }
+            
+            console.log(`Processamento de produtos e imagens concluído: ${productsData.length} produtos.`);
+            
             // Salvar produtos no Firestore
             try {
               const productIds = await saveProductsToFirestore(
