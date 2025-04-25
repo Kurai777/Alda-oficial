@@ -311,49 +311,82 @@ async function processExcelDirectly(excelPath, userId, catalogId) {
             }
           });
           
-          // Associar imagem do Excel ao produto de forma mais inteligente
+          // Associar imagem do Excel ao produto de forma EXATA - sem compartilhamento de imagens
           let imageUrl = null;
           
           if (extractedImages.length > 0) {
-            // Estratégia 1: Verificar se há uma célula com imagem especificamente nesta linha
-            const exactRowMatch = extractedImages.find(img => img.rowIndex === i);
+            let matchingImage = null;
+            let matchType = "nenhum";
             
-            // Estratégia 2: Usar correspondência por código ou nome
-            const codeMatch = codigo ? extractedImages.find(img => 
-              img.fileName.toLowerCase().includes(codigo.toLowerCase())
-            ) : null;
+            // Importante: Garantir que imagens já utilizadas não sejam reatribuídas
+            const availableImages = extractedImages.filter(img => !img.used);
             
-            const nameMatch = nome ? extractedImages.find(img => 
-              img.fileName.toLowerCase().includes(nome.toLowerCase().replace(/\s+/g, ''))
-            ) : null;
+            // Estratégia 1: Verificar se há uma célula com imagem EXATAMENTE nesta linha (correspondência mais confiável)
+            const exactRowMatch = availableImages.find(img => img.rowIndex === i);
+            if (exactRowMatch) {
+              matchingImage = exactRowMatch;
+              matchType = "célula exata";
+            }
+            // Estratégia 2: Correspondência EXATA por código (sem includes, apenas match exato)
+            else if (codigo) {
+              const normalizedCode = codigo.toLowerCase().trim().replace(/\s+/g, '');
+              const exactCodeMatch = availableImages.find(img => {
+                const imgCode = img.fileName.toLowerCase().replace(/\D/g, ''); // Extrair números
+                const productCode = normalizedCode.replace(/\D/g, ''); // Extrair números
+                return imgCode === productCode && productCode.length > 0;
+              });
+              if (exactCodeMatch) {
+                matchingImage = exactCodeMatch;
+                matchType = "código exato";
+              }
+            }
+            // Estratégia 3: Correspondência por imagem na mesma posição relativa
+            else {
+              const positionIndex = i - 3; // Ajustar índice considerando que pulamos as linhas de cabeçalho
+              if (positionIndex >= 0 && positionIndex < availableImages.length) {
+                const positionMatch = availableImages[positionIndex];
+                if (positionMatch) {
+                  matchingImage = positionMatch;
+                  matchType = "posição exata";
+                }
+              }
+            }
             
-            // Estratégia 3: Usar a posição relativa (como fallback)
-            const positionIndex = i - 3; // Ajustar índice considerando que pulamos as linhas de cabeçalho
-            const positionMatch = extractedImages[positionIndex];
-            
-            // Priorizar a correspondência mais específica
-            const matchingImage = exactRowMatch || codeMatch || nameMatch || positionMatch || extractedImages[0];
+            // Se ainda não encontramos, usar qualquer imagem disponível que não foi associada
+            if (!matchingImage && availableImages.length > 0) {
+              // Usar a primeira imagem disponível, mas apenas se não formos encontrar algo melhor
+              matchingImage = availableImages[0];
+              matchType = "próxima disponível";
+            }
             
             if (matchingImage) {
-              // Marcar a imagem como já utilizada para outros produtos não a reutilizarem
+              // Marcar a imagem como já utilizada para que outros produtos não a reutilizem
               matchingImage.used = true;
               
-              // Criar caminho de URL relativo que será servido pela API
-              const relativePath = `/uploads/extracted_images/catalog-${catalogId}/${matchingImage.fileName}`;
-              imageUrl = relativePath;
+              // Criar URL mock com userId + catalogId para rastreabilidade
+              const mockUrl = `https://mock-firebase-storage.com/${userId}/${catalogId}/${matchingImage.fileName}`;
+              imageUrl = mockUrl;
               
-              // Adicionar também caminho para diretório temporário (mais uma fonte possível)
-              const tempPath = `/uploads/temp-excel-images/excel_${Date.now().toString().substring(0, 10)}/${matchingImage.fileName}`;
+              // Registrar a associação para debugging
+              console.log(`Produto ${nome || 'sem nome'} (Código: ${codigo || 'sem código'}) (linha ${i+1}): associado à imagem ${matchingImage.fileName} (${matchType})`);
               
-              // Registrar o tipo de correspondência encontrada para debug
-              let matchType = "desconhecido";
-              if (exactRowMatch === matchingImage) matchType = "célula exata";
-              else if (codeMatch === matchingImage) matchType = "por código";
-              else if (nameMatch === matchingImage) matchType = "por nome";
-              else if (positionMatch === matchingImage) matchType = "por posição";
-              else matchType = "fallback";
-              
-              console.log(`Produto ${nome} (linha ${i+1}): associado à imagem ${matchingImage.fileName} (${matchType})`);
+              // Garantir que a imagem seja copiada para os diretórios corretos
+              try {
+                const extractedImagesDir = path.join(process.cwd(), 'uploads', 'extracted_images');
+                const catalogDir = path.join(extractedImagesDir, `catalog-${catalogId}`);
+                
+                if (!fs.existsSync(catalogDir)) {
+                  fs.mkdirSync(catalogDir, { recursive: true });
+                }
+                
+                // Copiar a imagem do seu local original para o diretório do catálogo
+                if (matchingImage.path && fs.existsSync(matchingImage.path)) {
+                  const targetPath = path.join(catalogDir, matchingImage.fileName);
+                  fs.copyFileSync(matchingImage.path, targetPath);
+                }
+              } catch (copyError) {
+                console.error('Erro ao copiar imagem:', copyError);
+              }
             }
           }
           
