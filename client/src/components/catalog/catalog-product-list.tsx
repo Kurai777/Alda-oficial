@@ -249,37 +249,13 @@ export default function CatalogProductList({
           {filteredProducts.map((product: Product) => (
             <Card key={product.id} className="overflow-hidden">
               <div className="aspect-square relative overflow-hidden bg-gray-100">
-                {product.imageUrl ? (
-                  <img
-                    src={product.imageUrl}
-                    alt={product.name}
-                    className="w-full h-full object-cover"
-                    onError={(e) => {
-                      const target = e.target as HTMLImageElement;
-                      const parent = target.parentElement;
-                      if (parent) {
-                        // Ocultar a imagem com erro
-                        target.style.display = 'none';
-                        
-                        // Criar um elemento de fallback
-                        const fallback = document.createElement('div');
-                        fallback.className = 'flex items-center justify-center h-full w-full bg-gray-100 text-gray-400';
-                        fallback.innerHTML = `
-                          <svg xmlns="http://www.w3.org/2000/svg" class="h-12 w-12" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                          </svg>
-                        `;
-                        
-                        // Adicionar o fallback ao container da imagem
-                        parent.appendChild(fallback);
-                      }
-                    }}
-                  />
-                ) : (
-                  <div className="flex items-center justify-center h-full bg-gray-100 text-gray-400">
-                    <FileText className="h-12 w-12" />
-                  </div>
-                )}
+                {/* Sempre usar a rota de API de imagens de produto que garante uma imagem válida */}
+                <img
+                  src={product.id ? `/api/product-image/${product.id}` : '/placeholders/default.svg'}
+                  alt={product.name || "Produto"}
+                  className="w-full h-full object-cover"
+                  loading="lazy"
+                />
                 <div className="absolute top-2 right-2 bg-white rounded-md px-2 py-1 text-xs font-medium">
                   {product.code}
                 </div>
@@ -357,37 +333,13 @@ export default function CatalogProductList({
               className="flex flex-col sm:flex-row border rounded-lg overflow-hidden"
             >
               <div className="w-full sm:w-24 h-24 bg-gray-100 flex-shrink-0">
-                {product.imageUrl ? (
-                  <img
-                    src={product.imageUrl}
-                    alt={product.name}
-                    className="w-full h-full object-cover"
-                    onError={(e) => {
-                      const target = e.target as HTMLImageElement;
-                      const parent = target.parentElement;
-                      if (parent) {
-                        // Ocultar a imagem com erro
-                        target.style.display = 'none';
-                        
-                        // Criar um elemento de fallback
-                        const fallback = document.createElement('div');
-                        fallback.className = 'flex items-center justify-center h-full w-full bg-gray-100 text-gray-400';
-                        fallback.innerHTML = `
-                          <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                          </svg>
-                        `;
-                        
-                        // Adicionar o fallback ao container da imagem
-                        parent.appendChild(fallback);
-                      }
-                    }}
-                  />
-                ) : (
-                  <div className="flex items-center justify-center h-full bg-gray-100 text-gray-400">
-                    <FileText className="h-8 w-8" />
-                  </div>
-                )}
+                {/* Sempre usar a API de imagens de produto para garantir uma imagem válida */}
+                <img
+                  src={product.id ? `/api/product-image/${product.id}` : '/placeholders/default.svg'}
+                  alt={product.name || "Produto"}
+                  className="w-full h-full object-cover"
+                  loading="lazy"
+                />
               </div>
 
               <div className="p-4 flex-grow flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
