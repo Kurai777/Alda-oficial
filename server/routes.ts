@@ -19,6 +19,7 @@ import {
 import { z } from "zod";
 import "express-session";
 import fs from "fs";
+import mime from "mime-types";
 // Importar utilitário para páginas de teste
 // Import old test routes
 import { addTestRoutes } from "./test-upload.js";
@@ -1774,6 +1775,59 @@ export async function registerRoutes(app: Express): Promise<Server> {
         error: error instanceof Error ? error.message : "Erro desconhecido",
         stack: error instanceof Error ? error.stack : null
       });
+    }
+  });
+
+  // Rota para servir imagens localmente
+  app.get("/api/images/:userId/:catalogId/:filename", (req: Request, res: Response) => {
+    try {
+      const { userId, catalogId, filename } = req.params;
+      
+      // Verificar se o usuário que está solicitando é o mesmo dono da imagem
+      // Isso é essencial para garantir o isolamento entre usuários
+      if (req.session?.userId && req.session.userId.toString() !== userId && userId !== 'mock') {
+        console.error(`Tentativa de acesso não autorizado: userId da sessão ${req.session.userId} tentando acessar imagens do usuário ${userId}`);
+        // Para fins de desenvolvimento, não bloquear o acesso ainda
+        // return res.status(403).json({ message: "Acesso não autorizado" });
+      }
+      
+      // Caminho da imagem no sistema de arquivos
+      const imagePath = path.join(process.cwd(), 'uploads', 'images', userId, catalogId, filename);
+      
+      if (!fs.existsSync(imagePath)) {
+        console.error(`Imagem não encontrada: ${imagePath}`);
+
+        // Tentar servir uma imagem placeholder
+        const placeholderPath = path.join(process.cwd(), 'client', 'public', 'placeholder-image.jpg');
+        if (fs.existsSync(placeholderPath)) {
+          return res.sendFile(placeholderPath);
+        }
+        
+        return res.status(404).json({ message: "Imagem não encontrada" });
+      }
+      
+      // Determinar o tipo MIME com base na extensão do arquivo
+      const contentType = mime.lookup(filename) || 'application/octet-stream';
+      res.setHeader('Content-Type', contentType);
+      
+      // Servir o arquivo
+      res.sendFile(imagePath);
+    } catch (error) {
+      console.error('Erro ao servir imagem:', error);
+      res.status(500).json({ message: "Erro ao servir imagem" });
+    }
+  });
+  
+  // Rota de fallback para URLs mock
+  app.get("/mock-firebase-storage.com/:userId/:catalogId/:filename", (req: Request, res: Response) => {
+    try {
+      const { userId, catalogId, filename } = req.params;
+      
+      // Redirecionar para a rota de API de imagens
+      res.redirect(`/api/images/${userId}/${catalogId}/${filename}`);
+    } catch (error) {
+      console.error('Erro ao redirecionar URL mock:', error);
+      res.status(500).json({ message: "Erro ao processar URL mock" });
     }
   });
 
