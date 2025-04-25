@@ -109,11 +109,11 @@ export async function verifyProductImage(productId: number): Promise<ImageVerifi
     };
     
   } catch (error) {
-    console.error('Erro ao verificar imagem:', error);
+    console.error('Erro ao verificar imagem:', error.message || JSON.stringify(error));
     return {
       status: 'error',
       hasImage: false,
-      error: error.message
+      error: error.message || 'Erro desconhecido ao verificar imagem'
     };
   }
 }
