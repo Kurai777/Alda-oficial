@@ -1,209 +1,153 @@
 /**
- * Módulo de extração de produtos com Anthropic Claude Vision
+ * Extrator de produtos usando Claude da Anthropic
  * 
- * Este módulo implementa funções para extrair informações de produtos
- * a partir de imagens de catálogos usando a API multimodal do Claude.
+ * Este módulo contém funções para processar imagens de catálogos
+ * e extrair informações detalhadas sobre produtos usando o modelo Claude
+ * da Anthropic.
  */
 
-import Anthropic from '@anthropic-ai/sdk';
 import fs from 'fs';
 import path from 'path';
-import { promisify } from 'util';
-import { ExcelProduct } from './excel-processor';
-import { formatProductPrice, extractDimensionsFromString, determineProductCategory } from './utils';
+import Anthropic from '@anthropic-ai/sdk';
+import { saveImageToFirebaseStorage } from './firebase-admin';
+import { ExtractedProduct } from './pdf-ai-pipeline';
 
-const readFile = promisify(fs.readFile);
-
-// Inicializar cliente Anthropic
-// the newest Anthropic model is "claude-3-7-sonnet-20250219" which was released February 24, 2025
+// Inicializar o cliente da Anthropic
+// O novo modelo da Anthropic é "claude-3-7-sonnet-20250219"
 const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
+  apiKey: process.env.ANTHROPIC_API_KEY || '',
 });
 
 /**
- * Converte uma imagem para base64
- * @param imagePath Caminho para a imagem
- * @returns String base64 da imagem
- */
-async function imageToBase64(imagePath: string): Promise<string> {
-  const imageBuffer = await readFile(imagePath);
-  return imageBuffer.toString('base64');
-}
-
-/**
- * Processa uma imagem com Claude Vision para extrair produtos
- * @param imagePathOrBase64 Caminho para a imagem ou string base64
- * @param filename Nome do arquivo para referência
- * @param userId ID do usuário para associar
- * @param catalogId ID do catálogo para associar
- * @param pageNumber Número da página (opcional)
- * @returns Array de produtos extraídos
+ * Processa uma imagem com Claude para extrair produtos
+ * @param imageBuffer Buffer da imagem
+ * @param filename Nome do arquivo (para identificação)
+ * @param userId ID do usuário
+ * @param catalogId ID do catálogo 
+ * @param pageNumber Número da página
+ * @returns Lista de produtos extraídos
  */
 export async function processImageWithClaude(
-  imagePathOrBase64: string,
+  imageBuffer: Buffer,
   filename: string,
-  userId: number | string,
-  catalogId: number | string,
+  userId: string,
+  catalogId: string,
   pageNumber?: number
-): Promise<ExcelProduct[]> {
-  console.log(`Processando imagem ${filename} (página ${pageNumber || 'desconhecida'}) com Claude...`);
-  
+): Promise<ExtractedProduct[]> {
   try {
-    // Converter imagem para base64 se for um caminho de arquivo
-    let base64Image = imagePathOrBase64;
-    if (imagePathOrBase64.startsWith('/') || imagePathOrBase64.includes('\\')) {
-      base64Image = await imageToBase64(imagePathOrBase64);
+    if (!process.env.ANTHROPIC_API_KEY) {
+      throw new Error('A chave de API da Anthropic não está configurada');
     }
-    
-    // Instruções específicas para Claude analisar catálogos de móveis
-    const systemPrompt = `Você é um assistente especializado em extrair informações detalhadas de catálogos de móveis.
-    
-    Ao analisar esta imagem de catálogo, extraia TODOS os produtos visíveis com seus detalhes:
-    
-    1. Nome do produto
-    2. Código do produto (se disponível) 
-    3. Descrição completa
-    4. Preço (formato brasileiro, como "R$ 1.299,00")
-    5. Dimensões no formato LxAxP (largura x altura x profundidade) em cm
-    6. Materiais (madeira, metal, tecido, vidro, etc.)
-    7. Cores disponíveis
-    8. Categoria do móvel
-    
-    Formate sua resposta como um array JSON de produtos. Inclua TODOS os produtos visíveis na imagem.
-    
-    Exemplo:
-    [
-      {
-        "nome": "Sofá Reclinável Berlin",
-        "codigo": "SR-2024",
-        "descricao": "Sofá reclinável de 3 lugares em tecido suede com estrutura em madeira maciça",
-        "preco": "R$ 3.499,90",
-        "dimensoes": "220x95x100 cm",
-        "materiais": ["Madeira", "Tecido", "Metal"],
-        "cores": ["Cinza", "Bege"],
-        "categoria": "Sofás"
-      },
-      {
-        "nome": "Mesa de Centro Oslo",
-        "codigo": "MC-105",
-        "descricao": "Mesa de centro retangular com tampo de vidro e estrutura em metal preto",
-        "preco": "R$ 899,90",
-        "dimensoes": "120x45x60 cm",
-        "materiais": ["Vidro", "Metal"],
-        "cores": ["Preto"],
-        "categoria": "Mesas"
-      }
-    ]
-    
-    Certifique-se de que toda a informação extraída seja baseada exclusivamente no que está visível na imagem.`;
-    
-    // Chamada à API do Claude
+
+    console.log(`Processando imagem ${filename} com Claude...`);
+
+    // Converter buffer para base64
+    const base64Image = imageBuffer.toString('base64');
+
+    // Fazer upload da imagem para o Firebase Storage
+    const imageUrl = await saveImageToFirebaseStorage(
+      imageBuffer,
+      `page_${pageNumber || 1}_${filename}`,
+      userId,
+      catalogId
+    );
+
+    // Preparar o prompt para o Claude
+    const systemPrompt = `
+      Você é um assistente especializado em extrair informações de produtos de imagens de catálogos de móveis.
+      
+      Analise cuidadosamente a imagem fornecida e extraia todos os produtos de móveis visíveis, incluindo:
+      
+      1. Nome do produto
+      2. Código do produto (se visível, geralmente um código alfanumérico)
+      3. Descrição (incluindo características, materiais, etc.)
+      4. Preço (formatado como "R$ XX.XXX,XX")
+      5. Categoria do produto
+      6. Dimensões (altura, largura, profundidade em cm)
+      7. Cores disponíveis
+      8. Materiais
+      
+      Retorne os resultados em formato JSON estruturado como um array de objetos, cada um representando um produto.
+      
+      Formato da resposta:
+      [
+        {
+          "nome": "Nome do produto",
+          "codigo": "CÓDIGO-PRODUTO",
+          "descricao": "Descrição detalhada",
+          "preco": "R$ XX.XXX,XX",
+          "categoria": "Categoria do produto",
+          "dimensoes": {
+            "altura": número,
+            "largura": número,
+            "profundidade": número
+          },
+          "cores": ["cor1", "cor2", ...],
+          "materiais": ["material1", "material2", ...]
+        },
+        ...
+      ]
+      
+      Apenas devolva o array JSON, sem texto adicional antes ou depois.
+      Se não houver produtos visíveis claramente ou você não conseguir extrair informações completas,
+      retorne um array vazio [].
+    `;
+
+    // Chamar a API do Claude com a imagem
     const response = await anthropic.messages.create({
-      model: 'claude-3-7-sonnet-20250219',
+      model: "claude-3-7-sonnet-20250219",
       max_tokens: 4000,
       system: systemPrompt,
       messages: [
         {
-          role: 'user',
+          role: "user",
           content: [
             {
-              type: 'text',
-              text: 'Esta é uma página de catálogo de móveis. Extraia TODOS os produtos visíveis com seus detalhes completos.'
+              type: "image",
+              source: {
+                type: "base64",
+                media_type: "image/jpeg",
+                data: base64Image,
+              },
             },
             {
-              type: 'image',
-              source: {
-                type: 'base64',
-                media_type: 'image/jpeg',
-                data: base64Image
-              }
-            }
+              type: "text",
+              text: "Extraia todos os produtos desta imagem de catálogo conforme as instruções.",
+            },
           ],
-        }
+        },
       ],
     });
-    
-    // Extrair o conteúdo da resposta
-    const content = response.content[0].text;
-    
-    // Processar e limpar a resposta para extrair o JSON
-    const jsonContent = extractJsonFromResponse(content);
-    
-    if (!jsonContent) {
-      console.error('Não foi possível extrair JSON da resposta do Claude:', content);
-      return [];
-    }
-    
+
+    // Extrair a resposta JSON
+    let products: ExtractedProduct[] = [];
+
     try {
-      // Converter para objeto
-      const extractedProducts = JSON.parse(jsonContent) as any[];
+      // Extrair o conteúdo JSON da resposta do Claude
+      const responseText = response.content[0].text;
       
-      // Normalizar produtos para o formato padrão do sistema
-      const normalizedProducts = extractedProducts.map((product, index) => {
-        // Extrair dimensões da string se disponível
-        const dimensions = product.dimensoes ? 
-          extractDimensionsFromString(product.dimensoes) : null;
-        
-        // Normalizar formato
-        return {
-          nome: product.nome || `Produto em Catálogo ${index + 1}`,
-          codigo: product.codigo || `CAT${catalogId}-P${pageNumber || 1}-${index + 1}`,
-          descricao: product.descricao || '',
-          preco: formatProductPrice(product.preco || 0),
-          categoria: product.categoria || determineProductCategory(product.nome, product.descricao),
-          materiais: Array.isArray(product.materiais) ? product.materiais : 
-                     typeof product.materiais === 'string' ? [product.materiais] : [],
-          cores: Array.isArray(product.cores) ? product.cores : 
-                 typeof product.cores === 'string' ? [product.cores] : [],
-          // Adicionar dimensões se disponíveis
-          ...(dimensions || {}),
-          // Metadados
-          userId,
-          catalogId,
-          pageNumber: pageNumber || 1,
-          processedAt: new Date().toISOString(),
-          extractionMethod: 'claude-vision'
-        } as ExcelProduct;
-      });
+      // Tentar analisar o JSON diretamente
+      products = JSON.parse(responseText);
       
-      console.log(`Claude extraiu ${normalizedProducts.length} produtos da imagem`);
-      return normalizedProducts;
+      // Adicionar metadata extra
+      products = products.map(product => ({
+        ...product,
+        imageUrl: imageUrl || undefined,
+        pageNumber: pageNumber || undefined
+      }));
       
-    } catch (parseError) {
-      console.error('Erro ao analisar JSON da resposta do Claude:', parseError);
-      console.log('Conteúdo que falhou:', jsonContent);
-      return [];
+      console.log(`Extraídos ${products.length} produtos da imagem ${filename} com Claude`);
+      
+    } catch (error) {
+      console.error('Erro ao extrair JSON da resposta do Claude:', error);
+      console.log('Resposta original:', response.content[0].text);
+      products = [];
     }
+
+    return products;
     
   } catch (error) {
     console.error('Erro ao processar imagem com Claude:', error);
-    throw error;
+    return [];
   }
-}
-
-/**
- * Tenta extrair um JSON válido da resposta textual do Claude
- * @param response Resposta do Claude
- * @returns String JSON limpa ou null
- */
-function extractJsonFromResponse(response: string): string | null {
-  // Tentar extrair conteúdo entre colchetes para JSON de array
-  const arrayMatch = response.match(/\[\s*\{[^]*\}\s*\]/);
-  if (arrayMatch) {
-    return arrayMatch[0];
-  }
-  
-  // Tentar extrair conteúdo entre chaves para JSON de objeto
-  const objectMatch = response.match(/\{\s*"[^]*"\s*:\s*[^]*\}/);
-  if (objectMatch) {
-    return objectMatch[0];
-  }
-  
-  // Procurar conteúdo dentro de blocos de código
-  const codeBlockMatch = response.match(/```(?:json)?\n([^]*?)```/);
-  if (codeBlockMatch) {
-    return codeBlockMatch[1].trim();
-  }
-  
-  return null;
 }

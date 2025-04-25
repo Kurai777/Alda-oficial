@@ -5,19 +5,14 @@
  * e extrair informações detalhadas sobre produtos usando IA multimodal.
  */
 
-import OpenAI from "openai";
 import fs from 'fs';
 import path from 'path';
-import { promisify } from 'util';
-import { ExcelProduct } from './excel-processor';
-import { formatProductPrice, extractDimensionsFromString, determineProductCategory, extractMaterialsFromDescription } from './utils';
+import OpenAI from 'openai';
 import { saveImageToFirebaseStorage } from './firebase-admin';
+import { ExtractedProduct } from './pdf-ai-pipeline';
 
-const readFile = promisify(fs.readFile);
-const writeFile = promisify(fs.writeFile);
-
-// Inicializar cliente OpenAI
-// the newest OpenAI model is "gpt-4o" which was released May 13, 2024. do not change this unless explicitly requested by the user
+// Inicializar o cliente da OpenAI
+// O modelo mais recente da OpenAI é "gpt-4o" que foi lançado em 13 de maio de 2024
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
@@ -29,228 +24,159 @@ const openai = new OpenAI({
  * @returns Lista de produtos extraídos
  */
 export async function processImageWithOpenAI(
-  imageBase64: string, 
+  imageBase64: string,
   filename: string
-): Promise<ExcelProduct[]> {
-  console.log(`Processando imagem ${filename} com OpenAI Vision...`);
-  
+): Promise<ExtractedProduct[]> {
   try {
-    // Verificar se é uma string base64 completa ou apenas os dados
-    const base64Data = imageBase64.startsWith('data:') 
-      ? imageBase64 
+    if (!process.env.OPENAI_API_KEY) {
+      throw new Error('A chave de API da OpenAI não está configurada');
+    }
+
+    console.log(`Processando imagem ${filename} com OpenAI...`);
+
+    // Preparar o sistema de prompt
+    const systemPrompt = `
+      Você é um assistente especializado em extrair informações de produtos de imagens de catálogos de móveis.
+      
+      Analise cuidadosamente a imagem fornecida e extraia todos os produtos de móveis visíveis, incluindo:
+      
+      1. Nome do produto
+      2. Código do produto (se visível, geralmente um código alfanumérico)
+      3. Descrição (incluindo características, materiais, etc.)
+      4. Preço (formatado como "R$ XX.XXX,XX")
+      5. Categoria do produto
+      6. Dimensões (altura, largura, profundidade em cm)
+      7. Cores disponíveis
+      8. Materiais
+      
+      Retorne os resultados em formato JSON estruturado como um array de objetos, cada um representando um produto.
+    `;
+
+    // Garantir que a string base64 esteja no formato correto
+    const base64ForOpenAI = imageBase64.startsWith('data:')
+      ? imageBase64
       : `data:image/jpeg;base64,${imageBase64}`;
-    
-    // Sistema de instruções específico para catálogos de móveis
-    const systemPrompt = `Você é um assistente especializado em extrair informações detalhadas de catálogos de móveis.
-    
-    Analise cuidadosamente esta imagem de catálogo de móveis. Identifique e extraia informações sobre TODOS os produtos visíveis, com os seguintes detalhes:
-    
-    1. Nome do produto
-    2. Código/referência do produto (se visível)
-    3. Descrição detalhada
-    4. Preço (no formato brasileiro R$ X.XXX,XX)
-    5. Dimensões (largura x altura x profundidade em cm)
-    6. Materiais
-    7. Cores disponíveis
-    8. Categoria do móvel
-    
-    Formate sua resposta como um array JSON de produtos. Não omita nenhum produto visível.`;
-    
-    // Chamada à API do OpenAI
+
+    // Chamar a API da OpenAI com a imagem
     const response = await openai.chat.completions.create({
       model: "gpt-4o",
-      response_format: { type: "json_object" },
       messages: [
         {
           role: "system",
-          content: systemPrompt
+          content: systemPrompt,
         },
         {
           role: "user",
           content: [
             {
               type: "text",
-              text: "Analise esta imagem de catálogo de móveis e extraia todos os produtos visíveis com seus detalhes completos em formato JSON. Inclua informações como nome, código, descrição, preço, dimensões, materiais, cores e categoria para cada produto."
+              text: "Extraia todos os produtos desta imagem de catálogo conforme as instruções."
             },
             {
               type: "image_url",
               image_url: {
-                url: base64Data
-              }
-            }
+                url: base64ForOpenAI,
+              },
+            },
           ],
         },
       ],
+      response_format: { type: "json_object" },
       max_tokens: 4000,
-      temperature: 0.2, // Valor baixo para maior precisão na extração factual
     });
-    
-    // Obter o conteúdo da resposta
-    const content = response.choices[0].message.content;
-    
-    if (!content) {
-      console.error("OpenAI retornou resposta vazia");
-      return [];
-    }
-    
+
+    // Extrair a resposta JSON
+    const responseText = response.choices[0].message.content || '{"produtos": []}';
+    let products: ExtractedProduct[] = [];
+
     try {
-      // Converter o JSON para objeto
-      const parsedResponse = JSON.parse(content);
+      const parsedResponse = JSON.parse(responseText);
       
-      // Extração adaptativa - suporta diferentes formatos de resposta
-      let extractedProducts = [];
-      
-      // Formato 1: { "produtos": [...] }
-      if (parsedResponse.produtos && Array.isArray(parsedResponse.produtos)) {
-        extractedProducts = parsedResponse.produtos;
-      }
-      // Formato 2: { "products": [...] }
-      else if (parsedResponse.products && Array.isArray(parsedResponse.products)) {
-        extractedProducts = parsedResponse.products;
-      }
-      // Formato 3: { "items": [...] }
-      else if (parsedResponse.items && Array.isArray(parsedResponse.items)) {
-        extractedProducts = parsedResponse.items;
-      }
-      // Formato 4: Array direto [...]
-      else if (Array.isArray(parsedResponse)) {
-        extractedProducts = parsedResponse;
-      }
-      // Outro formato - tentar extrair array
-      else {
-        // Procurar primeira propriedade que seja um array
-        const arrayProps = Object.entries(parsedResponse)
-          .filter(([_, value]) => Array.isArray(value))
-          .map(([key, value]) => ({ key, length: (value as any[]).length }))
-          .sort((a, b) => b.length - a.length);
-        
-        if (arrayProps.length > 0) {
-          extractedProducts = parsedResponse[arrayProps[0].key];
-        } else {
-          console.error("Formato de resposta não reconhecido:", parsedResponse);
-          return [];
+      if (Array.isArray(parsedResponse)) {
+        // Se já for um array
+        products = parsedResponse;
+      } else if (parsedResponse.produtos && Array.isArray(parsedResponse.produtos)) {
+        // Se estiver em uma propriedade "produtos"
+        products = parsedResponse.produtos;
+      } else if (parsedResponse.products && Array.isArray(parsedResponse.products)) {
+        // Se estiver em uma propriedade "products"
+        products = parsedResponse.products;
+      } else {
+        // Tentar extrair qualquer array do objeto
+        const possibleArrays = Object.values(parsedResponse).filter(val => Array.isArray(val));
+        if (possibleArrays.length > 0) {
+          products = possibleArrays[0] as ExtractedProduct[];
         }
       }
       
-      // Normalizar produtos para o formato padrão do sistema
-      const normalizedProducts = extractedProducts.map((product: any, index: number) => {
-        // Mapeamento adaptativo de campos
-        const nome = product.nome || product.name || product.título || product.title || `Produto ${index + 1}`;
-        const codigo = product.codigo || product.code || product.referência || product.reference || `GPT-${index + 1}`;
-        const descricao = product.descricao || product.descrição || product.description || '';
-        const preco = product.preco || product.preço || product.price || 0;
-        
-        // Extrair dimensões
-        const dimensoesStr = product.dimensoes || product.dimensões || product.dimensions || '';
-        const dimensoes = extractDimensionsFromString(dimensoesStr);
-        
-        // Processar cores e materiais
-        const cores = product.cores || product.colors || [];
-        const materiais = product.materiais || product.materials || [];
-        
-        // Categoria
-        const categoria = product.categoria || product.category || 
-                         determineProductCategory(nome, descricao);
-        
-        // Normalizar para o formato de ExcelProduct
-        return {
-          nome,
-          codigo,
-          descricao,
-          preco: formatProductPrice(preco),
-          categoria,
-          cores: Array.isArray(cores) ? cores : [cores].filter(Boolean),
-          materiais: Array.isArray(materiais) ? materiais : [materiais].filter(Boolean),
-          // Adicionar dimensões extraídas, se disponíveis
-          ...(dimensoes || {}),
-          extractionMethod: 'openai-vision'
-        } as ExcelProduct;
-      });
+      console.log(`Extraídos ${products.length} produtos da imagem ${filename}`);
       
-      console.log(`OpenAI extraiu ${normalizedProducts.length} produtos da imagem`);
-      return normalizedProducts;
-      
-    } catch (parseError) {
-      console.error("Erro ao processar resposta da OpenAI:", parseError);
-      console.log("Conteúdo da resposta:", content);
-      return [];
+    } catch (error) {
+      console.error('Erro ao extrair JSON da resposta da OpenAI:', error);
+      console.log('Resposta original:', responseText);
+      products = [];
     }
+
+    return products;
     
   } catch (error) {
-    console.error("Erro ao processar imagem com OpenAI:", error);
-    throw new Error(`Falha no processamento com OpenAI: ${error.message}`);
+    console.error('Erro ao processar imagem com OpenAI:', error);
+    return [];
   }
 }
 
 /**
  * Processa um arquivo de imagem ou PDF para extrair produtos e suas imagens
- * @param filePath Caminho para o arquivo
+ * @param filePath Caminho para o arquivo ou buffer do arquivo
  * @param fileName Nome do arquivo
  * @param userId ID do usuário
  * @param catalogId ID do catálogo
  * @returns Lista de produtos extraídos com URLs de imagens
  */
 export async function processFileWithAdvancedAI(
-  filePath: string, 
-  fileName: string, 
-  userId: number | string, 
-  catalogId: number | string
-): Promise<ExcelProduct[]> {
-  console.log(`Processando arquivo ${fileName} com IA avançada...`);
-  
+  filePath: string | Buffer,
+  fileName: string,
+  userId: string,
+  catalogId: string
+): Promise<ExtractedProduct[]> {
   try {
-    // Ler o arquivo
-    const fileBuffer = await readFile(filePath);
-    const fileBase64 = fileBuffer.toString('base64');
+    console.log(`Processando arquivo: ${fileName}`);
     
-    // Usar OpenAI para extrair produtos
-    const products = await processImageWithOpenAI(fileBase64, fileName);
-    
-    // Se não há produtos, retornar lista vazia
-    if (!products || products.length === 0) {
-      console.warn(`Nenhum produto extraído de ${fileName}`);
-      return [];
+    // Determinar se é um buffer ou um caminho
+    let fileBuffer: Buffer;
+    if (Buffer.isBuffer(filePath)) {
+      fileBuffer = filePath;
+    } else {
+      fileBuffer = await fs.promises.readFile(filePath);
     }
     
-    // Adicionar metadados e associar ao usuário/catálogo
-    const enhancedProducts = products.map((product, index) => {
-      return {
-        ...product,
-        userId,
-        catalogId,
-        // Gerar um código único se não existir
-        codigo: product.codigo || `CAT${catalogId}-${index + 1}`,
-        // Adicionar data de processamento
-        processedAt: new Date().toISOString()
-      };
-    });
-    
-    // Se for uma imagem única, associar a imagem diretamente aos produtos
-    // Upload da imagem para o Firebase Storage
-    const imageFileName = `catalog_${catalogId}_full_image.${path.extname(fileName).slice(1) || 'jpg'}`;
+    // Fazer upload da imagem para o Firebase Storage
     const imageUrl = await saveImageToFirebaseStorage(
       fileBuffer,
-      imageFileName,
-      userId.toString(),
-      catalogId.toString()
+      fileName,
+      userId,
+      catalogId
     );
     
-    // Associar URL da imagem aos produtos
-    if (imageUrl) {
-      console.log(`Imagem salva no Firebase: ${imageUrl}`);
-      
-      // Adicionar URL da imagem a todos os produtos
-      return enhancedProducts.map(product => ({
-        ...product,
-        imageUrl
-      }));
-    }
+    console.log(`Imagem salva com sucesso: ${imageUrl || 'N/A'}`);
     
-    // Se o upload falhar, retornar produtos sem imagens
-    return enhancedProducts;
+    // Converter para base64 para enviar para a API de visão
+    const base64Image = fileBuffer.toString('base64');
+    
+    // Usar o modelo de visão para extrair produtos
+    const extractedProducts = await processImageWithOpenAI(base64Image, fileName);
+    
+    // Adicionar URL da imagem aos produtos
+    const productsWithImages = extractedProducts.map(product => ({
+      ...product,
+      imageUrl: imageUrl || undefined
+    }));
+    
+    console.log(`Extração completa: ${productsWithImages.length} produtos encontrados`);
+    return productsWithImages;
     
   } catch (error) {
-    console.error(`Erro ao processar arquivo ${fileName}:`, error);
-    throw error;
+    console.error('Erro ao processar arquivo com IA avançada:', error);
+    return [];
   }
 }

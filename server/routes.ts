@@ -20,6 +20,7 @@ import { z } from "zod";
 import "express-session";
 import fs from "fs";
 // Importar utilitário para páginas de teste
+// Import old test routes
 import { addTestRoutes } from "./test-upload.js";
 
 // Estender a interface Session do express-session para incluir userId

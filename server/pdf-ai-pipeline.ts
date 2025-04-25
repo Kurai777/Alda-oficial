@@ -1,220 +1,228 @@
 /**
- * Pipeline de processamento de PDF com IA
+ * Pipeline completo para processamento de PDFs com IA
  * 
- * Este módulo implementa um fluxo completo para processamento de catálogos em PDF:
- * 1. Converte as páginas do PDF em imagens
- * 2. Analisa cada imagem com IA (OpenAI Vision) para extrair produtos
- * 3. Detecta e processa imagens de produtos
- * 4. Consolida os resultados em uma lista de produtos normalizada
+ * Este módulo coordena a extração de imagens do PDF, processamento com IA
+ * para identificar produtos e suas características, e o armazenamento
+ * das imagens dos produtos no Firebase Storage.
  */
 
 import fs from 'fs';
 import path from 'path';
 import { generateImagesFromPdf } from './alternative-pdf-processor';
-import { processImageWithOpenAI } from './advanced-ai-extractor';
+import { processImageWithOpenAI, processFileWithAdvancedAI } from './advanced-ai-extractor';
 import { processImageWithClaude } from './claude-ai-extractor';
 import { saveImageToFirebaseStorage } from './firebase-admin';
-import { ExcelProduct } from './excel-processor';
-import { extractDimensionsFromString, formatProductPrice } from './utils';
-
-// Intervalo entre chamadas de API para evitar rate limiting
-const API_CALL_DELAY = 1500; // ms
 
 /**
- * Interface para configurações do processamento de PDF
+ * Interface para produto extraído dos catálogos
  */
-export interface PdfProcessingOptions {
-  userId: number | string;
-  catalogId: string | number;
-  maxPages?: number;
-  startPage?: number;
-  useClaudeFallback?: boolean;
-  extractImages?: boolean;
-  maxProductsPerPage?: number;
+export interface ExtractedProduct {
+  nome: string;
+  codigo: string;
+  descricao?: string;
+  preco?: string;
+  fornecedor?: string;
+  categoria?: string;
+  dimensoes?: {
+    altura?: number;
+    largura?: number;
+    profundidade?: number;
+  };
+  cores?: string[];
+  materiais?: string[];
+  imageUrl?: string;
+  pageNumber?: number;
 }
 
 /**
- * Espera por um tempo determinado
- * @param ms Milissegundos para esperar
- */
-const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-
-/**
- * Função principal para processar um catálogo em PDF
+ * Converte um PDF em array de buffers de imagem (um por página)
  * @param pdfPath Caminho para o arquivo PDF
- * @param options Opções de processamento
- * @returns Lista de produtos extraídos
+ * @returns Array de Buffers com as imagens das páginas
  */
-export async function processCatalogPdf(
-  pdfPath: string, 
-  options: PdfProcessingOptions
-): Promise<ExcelProduct[]> {
-  
-  console.log(`Iniciando processamento do PDF: ${pdfPath}`);
-  const startTime = Date.now();
-  
+export async function convertPdfToImages(pdfPath: string): Promise<Buffer[]> {
   try {
-    // Extrair nome do arquivo para referência
-    const fileName = path.basename(pdfPath);
-    
-    // Configurar opções padrão
-    const {
-      userId,
-      catalogId,
-      maxPages = 50,
-      startPage = 1,
-      useClaudeFallback = true,
-      extractImages = true,
-      maxProductsPerPage = 15
-    } = options;
-    
-    // 1. Converter PDF em imagens
-    console.log('Convertendo PDF em imagens...');
-    const pageImages = await generateImagesFromPdf(pdfPath, {
-      pagesToProcess: Array.from({ length: maxPages }, (_, i) => startPage + i)
-    });
-    
-    console.log(`Conversão concluída. ${pageImages.length} páginas processadas.`);
-    
-    // 2. Processar cada página com IA
-    console.log('Analisando páginas com IA...');
-    
-    let allProducts: ExcelProduct[] = [];
-    let pageNumber = startPage;
-    
-    for (const pageImage of pageImages) {
-      console.log(`Processando página ${pageNumber}...`);
-      
-      try {
-        // Tentar primeiro com OpenAI
-        let pageProducts: ExcelProduct[] = [];
-        try {
-          console.log(`Analisando página ${pageNumber} com OpenAI...`);
-          const imageBase64 = pageImage.toString('base64');
-          pageProducts = await processImageWithOpenAI(imageBase64, `${fileName}_p${pageNumber}`);
-          
-          // Limitar número de produtos por página se necessário
-          if (pageProducts.length > maxProductsPerPage) {
-            console.log(`Página ${pageNumber} retornou ${pageProducts.length} produtos. Limitando a ${maxProductsPerPage}.`);
-            pageProducts = pageProducts.slice(0, maxProductsPerPage);
-          }
-          
-        } catch (error) {
-          // Falha na OpenAI, tentar com Claude se habilitado
-          if (useClaudeFallback) {
-            console.log(`Fallback: Analisando página ${pageNumber} com Claude...`);
-            const imageBase64 = pageImage.toString('base64');
-            pageProducts = await processImageWithClaude(imageBase64, `${fileName}_p${pageNumber}`, userId, catalogId);
-          } else {
-            console.error(`Erro ao processar página ${pageNumber} com IA:`, error);
-            throw error;
-          }
-        }
-        
-        // Enriquecer produtos com metadados e normalizar
-        pageProducts = pageProducts.map((product, index) => {
-          return {
-            ...product,
-            // Garantir campos padronizados
-            nome: product.nome || product.name || '',
-            codigo: product.codigo || product.code || `${catalogId}-P${pageNumber}-${index + 1}`,
-            preco: formatProductPrice(product.preco || product.price || 0),
-            descricao: product.descricao || product.description || '',
-            // Adicionar metadados
-            pageNumber,
-            catalogId,
-            userId,
-            processedAt: new Date().toISOString()
-          };
-        });
-        
-        console.log(`Extraídos ${pageProducts.length} produtos da página ${pageNumber}`);
-        
-        // Adicionar à lista completa
-        allProducts = [...allProducts, ...pageProducts];
-        
-        // Esperar um pouco entre chamadas para evitar rate limiting
-        await delay(API_CALL_DELAY);
-      } catch (innerError) {
-        console.error(`Erro ao processar página ${pageNumber}:`, innerError);
-        // Continuar com a próxima página mesmo em caso de erro
-      }
-      
-      pageNumber++;
+    // Confirmar que o arquivo existe
+    if (!fs.existsSync(pdfPath)) {
+      throw new Error(`Arquivo PDF não encontrado: ${pdfPath}`);
     }
     
-    // 3. Processar imagens de produtos se necessário
-    if (extractImages && allProducts.length > 0) {
-      console.log(`Extraindo imagens para ${allProducts.length} produtos...`);
-      
-      // Extrair e processar imagens de produtos (implementar futuramente)
-      // Esta etapa extrairia recortes de imagens de produtos das páginas
-      // e as associaria aos produtos correspondentes
+    // Criar diretório temporário para as imagens se não existir
+    const tempDir = path.join(__dirname, '../temp/pdf-images');
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir, { recursive: true });
     }
     
-    // 4. Processar e normalizar detalhes
-    console.log('Finalizando processamento...');
-    allProducts = allProducts.map(product => {
-      // Processar dimensões
-      const dimensionsFromDescription = extractDimensionsFromString(product.descricao || '');
-      
-      return {
-        ...product,
-        // Outros processamentos específicos
-        categoriaDetectada: detectarCategoria(product),
-        materiaisDetectados: detectarMateriais(product),
-        // Adicionar dimensões extraídas
-        ...dimensionsFromDescription
-      };
+    // Usar o processador de PDF para gerar imagens
+    const pdfImages = await generateImagesFromPdf(pdfPath, {
+      dpi: 200, // Resolução suficiente para OCR
+      outputDir: tempDir
     });
     
-    const duration = (Date.now() - startTime) / 1000;
-    console.log(`Processamento concluído em ${duration.toFixed(2)}s. Extraídos ${allProducts.length} produtos.`);
-    
-    return allProducts;
+    // Retornar os buffers das imagens
+    return pdfImages.map(img => img.buffer);
     
   } catch (error) {
-    console.error('Erro no processamento do PDF:', error);
+    console.error('Erro ao converter PDF para imagens:', error);
     throw new Error(`Falha ao processar o PDF: ${error.message}`);
   }
 }
 
 /**
- * Detectar categoria do produto com base em sua descrição e nome
- * @param product Produto para análise
- * @returns Categoria detectada
+ * Função principal que executa o pipeline completo de processamento de PDF
+ * @param pdfPath Caminho para o arquivo PDF
+ * @param userId ID do usuário
+ * @param catalogId ID do catálogo
+ * @returns Lista de produtos extraídos com suas imagens
  */
-function detectarCategoria(product: ExcelProduct): string {
-  const text = `${product.nome || ''} ${product.descricao || ''}`.toLowerCase();
-  
-  if (/sofa|sofá|sofas|sofás|chaise|recamier/i.test(text)) return 'Sofás';
-  if (/mesa|mesas|bancada|escrivaninha/i.test(text)) return 'Mesas';
-  if (/cadeira|cadeiras|poltrona|poltronas/i.test(text)) return 'Cadeiras';
-  if (/armario|armário|estante|estantes|rack|racks/i.test(text)) return 'Armários e Estantes';
-  if (/cama|camas|colchao|colchão|cabeceira/i.test(text)) return 'Camas';
-  if (/comoda|cômoda|criado|criado-mudo|mudo/i.test(text)) return 'Cômoda e Criados';
-  if (/acessorio|acessório|espelho|quadro|tapete/i.test(text)) return 'Acessórios';
-  
-  return 'Outros';
+export async function processPdfWithAI(
+  pdfPath: string,
+  userId: string,
+  catalogId: string
+): Promise<ExtractedProduct[]> {
+  try {
+    console.log(`Iniciando processamento de PDF: ${pdfPath}`);
+    
+    // 1. Converter PDF para imagens
+    const pdfImages = await convertPdfToImages(pdfPath);
+    console.log(`PDF convertido em ${pdfImages.length} imagens`);
+    
+    // 2. Processar cada página (imagem) para extrair produtos
+    // Para demonstração, alternamos entre OpenAI e Claude para as primeiras páginas
+    let allProducts: ExtractedProduct[] = [];
+    
+    // Processar primeiras páginas com OpenAI (limite para demonstração)
+    const pagesForOpenAI = pdfImages.slice(0, Math.min(3, pdfImages.length));
+    
+    for (let i = 0; i < pagesForOpenAI.length; i++) {
+      const pageBuffer = pagesForOpenAI[i];
+      const fileName = `page_${i + 1}_${path.basename(pdfPath, '.pdf')}.png`;
+      
+      try {
+        // Salvar imagem da página no Firebase
+        const pageImageUrl = await saveImageToFirebaseStorage(
+          pageBuffer,
+          fileName,
+          userId,
+          catalogId
+        );
+        
+        // Extrair produtos da imagem usando OpenAI
+        const pageProducts = await processFileWithAdvancedAI(
+          pageBuffer,
+          fileName,
+          userId,
+          catalogId
+        );
+        
+        // Adicionar metadados adicionais
+        const enhancedProducts = pageProducts.map(product => ({
+          ...product,
+          pageNumber: i + 1,
+          pageImageUrl: pageImageUrl || undefined
+        }));
+        
+        allProducts = [...allProducts, ...enhancedProducts];
+        console.log(`Processada página ${i + 1} com OpenAI: ${pageProducts.length} produtos extraídos`);
+        
+      } catch (error) {
+        console.error(`Erro ao processar página ${i + 1} com OpenAI:`, error);
+      }
+    }
+    
+    // 3. Processar algumas páginas adicionais com Claude (opcionalmente, para demonstração)
+    if (pdfImages.length > 3) {
+      const pagesForClaude = pdfImages.slice(3, Math.min(5, pdfImages.length));
+      
+      for (let i = 0; i < pagesForClaude.length; i++) {
+        const pageIndex = i + 3; // Começando da página 4
+        const pageBuffer = pagesForClaude[i];
+        const fileName = `page_${pageIndex + 1}_${path.basename(pdfPath, '.pdf')}.png`;
+        
+        try {
+          // Extrair produtos da imagem usando Claude
+          const pageProducts = await processImageWithClaude(
+            pageBuffer,
+            fileName,
+            userId,
+            catalogId,
+            pageIndex + 1
+          );
+          
+          allProducts = [...allProducts, ...pageProducts];
+          console.log(`Processada página ${pageIndex + 1} com Claude: ${pageProducts.length} produtos extraídos`);
+          
+        } catch (error) {
+          console.error(`Erro ao processar página ${pageIndex + 1} com Claude:`, error);
+        }
+      }
+    }
+    
+    // 4. Deduplicar produtos com base no código
+    const uniqueProducts = deduplicateProducts(allProducts);
+    console.log(`Extração concluída: ${uniqueProducts.length} produtos únicos identificados`);
+    
+    return uniqueProducts;
+    
+  } catch (error) {
+    console.error('Erro no pipeline de processamento de PDF:', error);
+    throw new Error(`Falha no processamento do PDF: ${error.message}`);
+  }
 }
 
 /**
- * Detectar materiais do produto com base em sua descrição
- * @param product Produto para análise
- * @returns Lista de materiais detectados
+ * Remove produtos duplicados da lista com base no código
+ * @param products Lista de produtos extraídos
+ * @returns Lista de produtos sem duplicatas
  */
-function detectarMateriais(product: ExcelProduct): string[] {
-  const text = `${product.nome || ''} ${product.descricao || ''}`.toLowerCase();
-  const materiais: string[] = [];
+function deduplicateProducts(products: ExtractedProduct[]): ExtractedProduct[] {
+  const productMap = new Map<string, ExtractedProduct>();
   
-  if (/madeira|lamin|mdp|mdf|jequitiba|pinus|eucalipto/i.test(text)) materiais.push('Madeira');
-  if (/couro|courino|couro sintético|leath/i.test(text)) materiais.push('Couro');
-  if (/tecido|algodao|algodão|cotton|veludo|linho|suede|linen/i.test(text)) materiais.push('Tecido');
-  if (/vidro|glass|espelho|mirror/i.test(text)) materiais.push('Vidro');
-  if (/metal|metalico|metálico|inox|ferro|aluminio|alumínio|aço/i.test(text)) materiais.push('Metal');
-  if (/plastico|plástico|poliprop|polietil|acrilico|acrílico/i.test(text)) materiais.push('Plástico');
-  if (/marmore|mármore|granito|quartzo|pedra/i.test(text)) materiais.push('Pedra');
-  if (/rattan|vime|palha|junco|natural|fibra/i.test(text)) materiais.push('Fibras Naturais');
+  // Para cada produto, verificar se já existe um com o mesmo código
+  for (const product of products) {
+    const codigo = product.codigo;
+    
+    // Pular produtos sem código
+    if (!codigo) continue;
+    
+    // Se o produto já existe no map, mesclar informações
+    if (productMap.has(codigo)) {
+      const existingProduct = productMap.get(codigo)!;
+      
+      // Manter a imagem se existir
+      if (product.imageUrl && !existingProduct.imageUrl) {
+        existingProduct.imageUrl = product.imageUrl;
+      }
+      
+      // Manter informações mais completas
+      if (product.descricao && (!existingProduct.descricao || existingProduct.descricao.length < product.descricao.length)) {
+        existingProduct.descricao = product.descricao;
+      }
+      
+      if (product.preco && !existingProduct.preco) {
+        existingProduct.preco = product.preco;
+      }
+      
+      // Mesclar arrays
+      if (product.cores && Array.isArray(product.cores)) {
+        existingProduct.cores = Array.from(new Set([
+          ...(existingProduct.cores || []),
+          ...product.cores
+        ]));
+      }
+      
+      if (product.materiais && Array.isArray(product.materiais)) {
+        existingProduct.materiais = Array.from(new Set([
+          ...(existingProduct.materiais || []),
+          ...product.materiais
+        ]));
+      }
+      
+    } else {
+      // Se o produto não existe, adicionar ao map
+      productMap.set(codigo, { ...product });
+    }
+  }
   
-  return materiais;
+  // Converter o map de volta para array
+  return Array.from(productMap.values());
 }

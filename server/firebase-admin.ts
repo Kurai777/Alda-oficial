@@ -8,10 +8,12 @@
  */
 
 import * as admin from 'firebase-admin';
-import { randomUUID } from 'crypto';
 import path from 'path';
 import os from 'os';
 import fs from 'fs';
+import crypto from 'crypto';
+
+const randomUUID = crypto.randomUUID;
 
 // Verificar se as variáveis de ambiente necessárias estão definidas
 const privateKey = process.env.FIREBASE_PRIVATE_KEY 
@@ -22,7 +24,7 @@ const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
 const projectId = process.env.VITE_FIREBASE_PROJECT_ID;
 
 // Inicializar Admin SDK se as credenciais estão disponíveis
-if (!admin.apps.length && clientEmail && privateKey && projectId) {
+if (admin?.apps?.length === 0 && clientEmail && privateKey && projectId) {
   try {
     admin.initializeApp({
       credential: admin.credential.cert({
@@ -37,6 +39,169 @@ if (!admin.apps.length && clientEmail && privateKey && projectId) {
     console.log(`Credenciais Admin configuradas para: ${projectId}`);
   } catch (error) {
     console.error('Erro ao inicializar Firebase Admin:', error);
+  }
+}
+
+// Criar funções mock para testes em ambientes sem Firebase
+let mockAuth: any = {
+  verifyIdToken: async (token: string) => {
+    return { uid: 'mock-user-id', email: 'user@example.com' };
+  }
+};
+
+let mockDb: any = {
+  collection: (name: string) => ({
+    doc: (id: string) => ({
+      collection: (subName: string) => ({
+        doc: (subId: string) => ({
+          collection: (subSubName: string) => ({
+            doc: () => ({
+              set: async (data: any) => ({ id: 'mock-doc-id' }),
+              update: async (data: any) => {}
+            }),
+            add: async (data: any) => ({ id: 'mock-doc-id' })
+          }),
+          set: async (data: any) => {},
+          update: async (data: any) => {}
+        }),
+        add: async (data: any) => ({ id: 'mock-doc-id' })
+      }),
+      set: async (data: any) => {},
+      update: async (data: any) => {}
+    }),
+    add: async (data: any) => ({ id: 'mock-doc-id' })
+  }),
+  batch: () => ({
+    set: (ref: any, data: any) => {},
+    commit: async () => {}
+  })
+};
+
+// Exportar instâncias reais ou mock
+export const auth = admin.apps?.length && admin.apps.length > 0 ? admin.auth() : mockAuth;
+export const adminDb = admin.apps?.length && admin.apps.length > 0 ? admin.firestore() : mockDb;
+
+/**
+ * Salva um catálogo no Firestore
+ * @param userId ID do usuário
+ * @param catalogData Dados do catálogo
+ * @returns ID do documento criado
+ */
+export async function saveCatalogToFirestore(userId: string, catalogData: any) {
+  if (!admin.apps.length) {
+    console.error('Firebase Admin não inicializado. Impossível salvar no Firestore.');
+    return null;
+  }
+  
+  try {
+    // Criar referência para a coleção de catálogos do usuário
+    const catalogsCollection = adminDb.collection('users').doc(userId).collection('catalogs');
+    
+    // Adicionar timestamp de criação
+    const catalogWithTimestamp = {
+      ...catalogData,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      status: 'processing'
+    };
+    
+    // Adicionar ao Firestore
+    const docRef = await catalogsCollection.add(catalogWithTimestamp);
+    console.log(`Catálogo salvo no Firestore com ID: ${docRef.id}`);
+    
+    return docRef.id;
+    
+  } catch (error) {
+    console.error('Erro ao salvar catálogo no Firestore:', error);
+    return null;
+  }
+}
+
+/**
+ * Salva produtos no Firestore associados a um catálogo
+ * @param userId ID do usuário
+ * @param catalogId ID do catálogo
+ * @param products Lista de produtos
+ * @returns Array com IDs dos documentos criados
+ */
+export async function saveProductsToFirestore(userId: string, catalogId: string, products: any[]) {
+  if (!admin.apps.length) {
+    console.error('Firebase Admin não inicializado. Impossível salvar no Firestore.');
+    return [];
+  }
+  
+  try {
+    // Criar referência para a coleção de produtos do catálogo
+    const productsCollection = adminDb
+      .collection('users')
+      .doc(userId)
+      .collection('catalogs')
+      .doc(catalogId)
+      .collection('products');
+    
+    // Adicionar produtos em lote
+    const batch = adminDb.batch();
+    const productRefs: any[] = [];
+    
+    for (const product of products) {
+      const productRef = productsCollection.doc();
+      batch.set(productRef, {
+        ...product,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+      
+      productRefs.push({
+        id: productRef.id,
+        ref: productRef
+      });
+    }
+    
+    // Executar o lote
+    await batch.commit();
+    
+    console.log(`${products.length} produtos salvos no Firestore para o catálogo ${catalogId}`);
+    return productRefs.map(p => p.id);
+    
+  } catch (error) {
+    console.error('Erro ao salvar produtos no Firestore:', error);
+    return [];
+  }
+}
+
+/**
+ * Atualiza o status de um catálogo no Firestore
+ * @param userId ID do usuário
+ * @param catalogId ID do catálogo
+ * @param status Novo status
+ * @returns True se bem-sucedido
+ */
+export async function updateCatalogStatusInFirestore(userId: string, catalogId: string, status: 'processing' | 'complete' | 'error') {
+  if (!admin.apps.length) {
+    console.error('Firebase Admin não inicializado. Impossível atualizar status no Firestore.');
+    return false;
+  }
+  
+  try {
+    // Referência para o documento do catálogo
+    const catalogRef = adminDb
+      .collection('users')
+      .doc(userId)
+      .collection('catalogs')
+      .doc(catalogId);
+    
+    // Atualizar o status
+    await catalogRef.update({
+      status,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+    
+    console.log(`Status do catálogo ${catalogId} atualizado para: ${status}`);
+    return true;
+    
+  } catch (error) {
+    console.error('Erro ao atualizar status do catálogo:', error);
+    return false;
   }
 }
 

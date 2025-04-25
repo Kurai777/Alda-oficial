@@ -1,0 +1,1097 @@
+/**
+ * Rotas de teste para processamento de catálogos
+ */
+
+import express from 'express';
+import multer from 'multer';
+import path from 'path';
+import fs from 'fs';
+import { promisify } from 'util';
+import { saveImageToFirebaseStorage } from './firebase-admin';
+import { convertPdfToImages } from './pdf-ai-pipeline';
+import { processImageWithClaude } from './claude-ai-extractor';
+import { processImageWithOpenAI, processFileWithAdvancedAI } from './advanced-ai-extractor';
+import { generateImagesFromPdf, extractProductImagesFromPdf, associateImagesToProducts } from './alternative-pdf-processor';
+
+const router = express.Router();
+const mkdir = promisify(fs.mkdir);
+
+// Configurar multer para upload de arquivos
+const storage = multer.diskStorage({
+  destination: async function (req, file, cb) {
+    const uploadDir = './uploads';
+    try {
+      await mkdir(uploadDir, { recursive: true });
+      cb(null, uploadDir);
+    } catch (error) {
+      cb(error as any, uploadDir);
+    }
+  },
+  filename: function (req, file, cb) {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, uniqueSuffix + path.extname(file.originalname));
+  }
+});
+
+const upload = multer({ 
+  storage: storage,
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB
+  }
+});
+
+// Configurar armazenamento para testes
+const mockFirebaseStorage = path.join(__dirname, '../temp/mock-firebase');
+if (!fs.existsSync(mockFirebaseStorage)) {
+  fs.mkdirSync(mockFirebaseStorage, { recursive: true });
+}
+
+/**
+ * Endpoint para testar o processamento de PDF com IA
+ * POST /api/test/process-pdf
+ */
+router.post('/process-pdf', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'Nenhum arquivo enviado' });
+    }
+    
+    // Info básicas do arquivo
+    const filePath = req.file.path;
+    const fileType = req.file.mimetype;
+    const fileName = req.file.originalname;
+    
+    // Verificar se é um PDF
+    if (fileType !== 'application/pdf') {
+      return res.status(400).json({ error: 'O arquivo deve ser um PDF' });
+    }
+    
+    // Converter PDF para imagens
+    const pdfImages = await convertPdfToImages(filePath);
+    
+    // Processar as 5 primeiras páginas apenas para teste
+    const pagesToProcess = pdfImages.slice(0, 5);
+    
+    // Iniciar processamento dos produtos
+    const products = await Promise.all(pagesToProcess.map(async (imageBuffer, index) => {
+      // Upload da imagem para "Firebase" (armazenamento mock para teste)
+      const imageFileName = `page_${index + 1}_${path.basename(fileName, '.pdf')}.png`;
+      const mockUserId = 'test-user';
+      const mockCatalogId = 'test-catalog';
+      
+      // Salvar a imagem
+      const imageUrl = await saveImageToFirebaseStorage(
+        imageBuffer,
+        imageFileName,
+        mockUserId,
+        mockCatalogId
+      );
+      
+      // Extrair produtos da imagem usando IA
+      const extractedProducts = await processFileWithAdvancedAI(
+        imageBuffer,
+        imageFileName,
+        mockUserId,
+        mockCatalogId
+      );
+      
+      return {
+        pageIndex: index,
+        pageImageUrl: imageUrl,
+        products: extractedProducts
+      };
+    }));
+    
+    // Limpar arquivos temporários
+    fs.unlinkSync(filePath);
+    
+    // Retornar resultados
+    res.json({
+      fileName,
+      totalPages: pdfImages.length,
+      processedPages: pagesToProcess.length,
+      results: products
+    });
+    
+  } catch (error) {
+    console.error('Erro ao processar PDF:', error);
+    res.status(500).json({ error: 'Erro ao processar o PDF', details: error.message });
+  }
+});
+
+/**
+ * Endpoint para testar somente a extração de imagens do PDF
+ * POST /api/test/extract-pdf-images
+ */
+router.post('/extract-pdf-images', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'Nenhum arquivo enviado' });
+    }
+    
+    // Info básicas do arquivo
+    const filePath = req.file.path;
+    const fileType = req.file.mimetype;
+    const fileName = req.file.originalname;
+    
+    // Verificar se é um PDF
+    if (fileType !== 'application/pdf') {
+      return res.status(400).json({ error: 'O arquivo deve ser um PDF' });
+    }
+    
+    // Converter PDF para imagens
+    const pdfImages = await convertPdfToImages(filePath);
+    
+    // Salvar imagens para visualização
+    const imageUrls = await Promise.all(pdfImages.slice(0, 10).map(async (imageBuffer, index) => {
+      const imageFileName = `page_${index + 1}_${path.basename(fileName, '.pdf')}.png`;
+      const mockUserId = 'test-user';
+      const mockCatalogId = 'test-catalog';
+      
+      // Salvar a imagem
+      const imageUrl = await saveImageToFirebaseStorage(
+        imageBuffer,
+        imageFileName,
+        mockUserId,
+        mockCatalogId
+      );
+      
+      return {
+        pageIndex: index,
+        imageUrl: imageUrl
+      };
+    }));
+    
+    // Limpar arquivos temporários
+    fs.unlinkSync(filePath);
+    
+    // Retornar resultados
+    res.json({
+      fileName,
+      totalPages: pdfImages.length,
+      extractedImages: imageUrls
+    });
+    
+  } catch (error) {
+    console.error('Erro ao extrair imagens do PDF:', error);
+    res.status(500).json({ error: 'Erro ao extrair imagens do PDF', details: error.message });
+  }
+});
+
+/**
+ * Endpoint para testar somente a extração de produtos com IA
+ * POST /api/test/extract-products
+ */
+router.post('/extract-products', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'Nenhum arquivo enviado' });
+    }
+    
+    // Info básicas do arquivo
+    const filePath = req.file.path;
+    const fileName = req.file.originalname;
+    
+    // Ler arquivo como buffer
+    const fileBuffer = await fs.promises.readFile(filePath);
+    
+    // Extrair produtos da imagem usando IA
+    const mockUserId = 'test-user';
+    const mockCatalogId = 'test-catalog';
+    
+    const extractedProducts = await processFileWithAdvancedAI(
+      fileBuffer,
+      fileName,
+      mockUserId,
+      mockCatalogId
+    );
+    
+    // Limpar arquivos temporários
+    fs.unlinkSync(filePath);
+    
+    // Retornar resultados
+    res.json({
+      fileName,
+      products: extractedProducts
+    });
+    
+  } catch (error) {
+    console.error('Erro ao extrair produtos:', error);
+    res.status(500).json({ error: 'Erro ao extrair produtos', details: error.message });
+  }
+});
+
+// Rota para testar o processamento de PDF
+router.post('/test-pdf-processor', upload.single('pdf'), async (req, res) => {
+  try {
+    // Verificar se foi enviado um arquivo
+    if (!req.file) {
+      return res.status(400).json({ error: 'Nenhum arquivo enviado' });
+    }
+
+    const filePath = req.file.path;
+    const fileName = req.file.originalname;
+    
+    // Extrair userId e catalogId dos parâmetros ou usar valores de teste
+    const userId = req.body.userId || 'test-user';
+    const catalogId = req.body.catalogId || `test-catalog-${Date.now()}`;
+    
+    console.log(`Processando arquivo ${fileName}...`);
+    
+    // Gerar imagens das páginas do PDF
+    console.log('Gerando imagens das páginas...');
+    const pageImages = await generateImagesFromPdf(filePath, {
+      dpi: 200,
+      pagesToProcess: [], // Processar todas as páginas
+      outputDir: './temp/pdf-images'
+    });
+    
+    console.log(`Geradas ${pageImages.length} imagens de páginas do PDF`);
+    
+    // Extrair e processar produtos das páginas
+    let products = [];
+    let processedCount = 0;
+    
+    // Processar algumas páginas com Claude (demonstração)
+    const testPagesForClaude = pageImages.slice(0, 2);
+    console.log(`Processando ${testPagesForClaude.length} páginas com Claude...`);
+    
+    for (const page of testPagesForClaude) {
+      try {
+        const pageProductsFromClaude = await processImageWithClaude(
+          page.buffer, 
+          `page_${page.pageNumber}.png`,
+          userId,
+          catalogId,
+          page.pageNumber
+        );
+        
+        products = [...products, ...pageProductsFromClaude];
+        processedCount += pageProductsFromClaude.length;
+        console.log(`Página ${page.pageNumber}: ${pageProductsFromClaude.length} produtos extraídos com Claude`);
+        
+      } catch (error) {
+        console.error(`Erro ao processar página ${page.pageNumber} com Claude:`, error);
+      }
+    }
+    
+    // Processar algumas páginas com OpenAI (demonstração)
+    const testPagesForOpenAI = pageImages.slice(2, 4);
+    console.log(`Processando ${testPagesForOpenAI.length} páginas com OpenAI...`);
+    
+    for (const page of testPagesForOpenAI) {
+      try {
+        const pageBase64 = page.buffer.toString('base64');
+        const pageProductsFromOpenAI = await processImageWithOpenAI(
+          pageBase64, 
+          `page_${page.pageNumber}.png`
+        );
+        
+        // Adicionar metadados e associação
+        const enhancedProducts = pageProductsFromOpenAI.map(product => ({
+          ...product,
+          userId,
+          catalogId,
+          pageNumber: page.pageNumber
+        }));
+        
+        products = [...products, ...enhancedProducts];
+        processedCount += enhancedProducts.length;
+        console.log(`Página ${page.pageNumber}: ${enhancedProducts.length} produtos extraídos com OpenAI`);
+        
+      } catch (error) {
+        console.error(`Erro ao processar página ${page.pageNumber} com OpenAI:`, error);
+      }
+    }
+    
+    // Extrair imagens específicas dos produtos
+    console.log('Extraindo imagens específicas dos produtos...');
+    
+    // Importante: Esta etapa requer implementações mais complexas de recorte de imagens
+    // Esta é uma demonstração - em produção, seria necessário usar detecção de objetos
+    
+    const productImagesMap = await extractProductImagesFromPdf(filePath, userId, catalogId);
+    
+    // Associar imagens específicas aos produtos
+    console.log('Associando imagens aos produtos...');
+    const productsWithImages = associateImagesToProducts(products, productImagesMap);
+    
+    // Verificar quantos produtos têm imagens associadas
+    const productsWithImageCount = productsWithImages.filter(p => p.imageUrl).length;
+    
+    // Resumo do processamento
+    const summary = {
+      fileName,
+      totalPages: pageImages.length,
+      totalProductsExtracted: processedCount,
+      productsWithImages: productsWithImageCount,
+      processingTime: `${(Date.now() - new Date(req.file.filename.split('-')[0]).getTime()) / 1000} segundos`
+    };
+    
+    res.json({
+      success: true,
+      summary,
+      sampleProducts: productsWithImages.slice(0, 5), // Enviar amostra de 5 produtos
+    });
+    
+  } catch (error) {
+    console.error('Erro ao processar PDF:', error);
+    res.status(500).json({ 
+      error: 'Erro ao processar o arquivo PDF',
+      message: error.message 
+    });
+  }
+});
+
+// Rota de teste para processar PDF completo com OpenAI
+router.post('/test-process-pdf-openai', upload.single('pdf'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'Nenhum arquivo enviado' });
+    }
+
+    const filePath = req.file.path;
+    const fileName = req.file.originalname;
+    const userId = req.body.userId || 'test-user';
+    const catalogId = req.body.catalogId || `test-catalog-${Date.now()}`;
+    
+    console.log(`Processando arquivo ${fileName} com OpenAI...`);
+    
+    // Processar o arquivo diretamente com o pipeline avançado
+    const products = await processFileWithAdvancedAI(
+      filePath,
+      fileName,
+      userId,
+      catalogId
+    );
+    
+    res.json({
+      success: true,
+      productsCount: products.length,
+      sampleProducts: products.slice(0, 5)
+    });
+    
+  } catch (error) {
+    console.error('Erro ao processar com OpenAI:', error);
+    res.status(500).json({ 
+      error: 'Erro ao processar o arquivo', 
+      message: error.message 
+    });
+  }
+});
+
+// Rota de teste para processar imagem individual
+router.post('/test-process-image', upload.single('image'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'Nenhuma imagem enviada' });
+    }
+
+    const filePath = req.file.path;
+    const fileName = req.file.originalname;
+    const userId = req.body.userId || 'test-user';
+    const catalogId = req.body.catalogId || `test-catalog-${Date.now()}`;
+    
+    // Escolher o processador com base no parâmetro
+    const processor = req.body.processor?.toLowerCase() === 'claude' ? 'claude' : 'openai';
+    
+    console.log(`Processando imagem ${fileName} com ${processor}...`);
+    
+    // Ler a imagem
+    const imageBuffer = fs.readFileSync(filePath);
+    const imageBase64 = imageBuffer.toString('base64');
+    
+    let products = [];
+    
+    // Processar com o processador selecionado
+    if (processor === 'claude') {
+      products = await processImageWithClaude(imageBuffer, fileName, userId, catalogId);
+    } else {
+      products = await processImageWithOpenAI(imageBase64, fileName);
+      
+      // Adicionar metadados e associação
+      products = products.map(product => ({
+        ...product,
+        userId,
+        catalogId
+      }));
+    }
+    
+    // Fazer upload da imagem para o Firebase
+    const imageFileName = `catalog_${catalogId}_${path.basename(fileName)}`;
+    const imageUrl = await saveImageToFirebaseStorage(
+      imageBuffer,
+      imageFileName,
+      userId.toString(),
+      catalogId.toString()
+    );
+    
+    // Associar URL da imagem aos produtos
+    if (imageUrl) {
+      products = products.map(product => ({
+        ...product,
+        imageUrl
+      }));
+    }
+    
+    res.json({
+      success: true,
+      processor,
+      productsCount: products.length,
+      imageUrl: imageUrl || null,
+      products
+    });
+    
+  } catch (error) {
+    console.error('Erro ao processar imagem:', error);
+    res.status(500).json({ 
+      error: 'Erro ao processar a imagem', 
+      message: error.message 
+    });
+  }
+});
+
+// Configurar multer para upload de arquivos
+const storage = multer.diskStorage({
+  destination: async function (req, file, cb) {
+    const uploadDir = './uploads';
+    try {
+      await mkdir(uploadDir, { recursive: true });
+      cb(null, uploadDir);
+    } catch (error) {
+      cb(error as any, uploadDir);
+    }
+  },
+  filename: function (req, file, cb) {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, uniqueSuffix + path.extname(file.originalname));
+  }
+});
+
+const upload = multer({ 
+  storage: storage,
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB
+  }
+});
+
+// Rota para testar o processamento de PDF
+router.post('/test-pdf-processor', upload.single('pdf'), async (req, res) => {
+  try {
+    // Verificar se foi enviado um arquivo
+    if (!req.file) {
+      return res.status(400).json({ error: 'Nenhum arquivo enviado' });
+    }
+
+    const filePath = req.file.path;
+    const fileName = req.file.originalname;
+    
+    // Extrair userId e catalogId dos parâmetros ou usar valores de teste
+    const userId = req.body.userId || 'test-user';
+    const catalogId = req.body.catalogId || `test-catalog-${Date.now()}`;
+    
+    console.log(`Processando arquivo ${fileName}...`);
+    
+    // Gerar imagens das páginas do PDF
+    console.log('Gerando imagens das páginas...');
+    const pageImages = await generateImagesFromPdf(filePath, {
+      dpi: 200,
+      pagesToProcess: [], // Processar todas as páginas
+      outputDir: './temp/pdf-images'
+    });
+    
+    console.log(`Geradas ${pageImages.length} imagens de páginas do PDF`);
+    
+    // Extrair e processar produtos das páginas
+    let products = [];
+    let processedCount = 0;
+    
+    // Processar algumas páginas com Claude (demonstração)
+    const testPagesForClaude = pageImages.slice(0, 2);
+    console.log(`Processando ${testPagesForClaude.length} páginas com Claude...`);
+    
+    for (const page of testPagesForClaude) {
+      try {
+        const pageProductsFromClaude = await processImageWithClaude(
+          page.buffer, 
+          `page_${page.pageNumber}.png`,
+          userId,
+          catalogId,
+          page.pageNumber
+        );
+        
+        products = [...products, ...pageProductsFromClaude];
+        processedCount += pageProductsFromClaude.length;
+        console.log(`Página ${page.pageNumber}: ${pageProductsFromClaude.length} produtos extraídos com Claude`);
+        
+      } catch (error) {
+        console.error(`Erro ao processar página ${page.pageNumber} com Claude:`, error);
+      }
+    }
+    
+    // Processar algumas páginas com OpenAI (demonstração)
+    const testPagesForOpenAI = pageImages.slice(2, 4);
+    console.log(`Processando ${testPagesForOpenAI.length} páginas com OpenAI...`);
+    
+    for (const page of testPagesForOpenAI) {
+      try {
+        const pageBase64 = page.buffer.toString('base64');
+        const pageProductsFromOpenAI = await processImageWithOpenAI(
+          pageBase64, 
+          `page_${page.pageNumber}.png`
+        );
+        
+        // Adicionar metadados e associação
+        const enhancedProducts = pageProductsFromOpenAI.map(product => ({
+          ...product,
+          userId,
+          catalogId,
+          pageNumber: page.pageNumber
+        }));
+        
+        products = [...products, ...enhancedProducts];
+        processedCount += enhancedProducts.length;
+        console.log(`Página ${page.pageNumber}: ${enhancedProducts.length} produtos extraídos com OpenAI`);
+        
+      } catch (error) {
+        console.error(`Erro ao processar página ${page.pageNumber} com OpenAI:`, error);
+      }
+    }
+    
+    // Extrair imagens específicas dos produtos
+    console.log('Extraindo imagens específicas dos produtos...');
+    
+    // Importante: Esta etapa requer implementações mais complexas de recorte de imagens
+    // Esta é uma demonstração - em produção, seria necessário usar detecção de objetos
+    
+    const productImagesMap = await extractProductImagesFromPdf(filePath, userId, catalogId);
+    
+    // Associar imagens específicas aos produtos
+    console.log('Associando imagens aos produtos...');
+    const productsWithImages = associateImagesToProducts(products, productImagesMap);
+    
+    // Verificar quantos produtos têm imagens associadas
+    const productsWithImageCount = productsWithImages.filter(p => p.imageUrl).length;
+    
+    // Resumo do processamento
+    const summary = {
+      fileName,
+      totalPages: pageImages.length,
+      totalProductsExtracted: processedCount,
+      productsWithImages: productsWithImageCount,
+      processingTime: `${(Date.now() - new Date(req.file.filename.split('-')[0]).getTime()) / 1000} segundos`
+    };
+    
+    res.json({
+      success: true,
+      summary,
+      sampleProducts: productsWithImages.slice(0, 5), // Enviar amostra de 5 produtos
+    });
+    
+  } catch (error) {
+    console.error('Erro ao processar PDF:', error);
+    res.status(500).json({ 
+      error: 'Erro ao processar o arquivo PDF',
+      message: error.message 
+    });
+  }
+});
+
+// Rota de teste para processar PDF completo com OpenAI
+router.post('/test-process-pdf-openai', upload.single('pdf'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'Nenhum arquivo enviado' });
+    }
+
+    const filePath = req.file.path;
+    const fileName = req.file.originalname;
+    const userId = req.body.userId || 'test-user';
+    const catalogId = req.body.catalogId || `test-catalog-${Date.now()}`;
+    
+    console.log(`Processando arquivo ${fileName} com OpenAI...`);
+    
+    // Processar o arquivo diretamente com o pipeline avançado
+    const products = await processFileWithAdvancedAI(
+      filePath,
+      fileName,
+      userId,
+      catalogId
+    );
+    
+    res.json({
+      success: true,
+      productsCount: products.length,
+      sampleProducts: products.slice(0, 5)
+    });
+    
+  } catch (error) {
+    console.error('Erro ao processar com OpenAI:', error);
+    res.status(500).json({ 
+      error: 'Erro ao processar o arquivo', 
+      message: error.message 
+    });
+  }
+});
+
+// Rota de teste para processar imagem individual
+router.post('/test-process-image', upload.single('image'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'Nenhuma imagem enviada' });
+    }
+
+    const filePath = req.file.path;
+    const fileName = req.file.originalname;
+    const userId = req.body.userId || 'test-user';
+    const catalogId = req.body.catalogId || `test-catalog-${Date.now()}`;
+    
+    // Escolher o processador com base no parâmetro
+    const processor = req.body.processor?.toLowerCase() === 'claude' ? 'claude' : 'openai';
+    
+    console.log(`Processando imagem ${fileName} com ${processor}...`);
+    
+    // Ler a imagem
+    const imageBuffer = fs.readFileSync(filePath);
+    const imageBase64 = imageBuffer.toString('base64');
+    
+    let products = [];
+    
+    // Processar com o processador selecionado
+    if (processor === 'claude') {
+      products = await processImageWithClaude(imageBuffer, fileName, userId, catalogId);
+    } else {
+      products = await processImageWithOpenAI(imageBase64, fileName);
+      
+      // Adicionar metadados e associação
+      products = products.map(product => ({
+        ...product,
+        userId,
+        catalogId
+      }));
+    }
+    
+    // Fazer upload da imagem para o Firebase
+    const imageFileName = `catalog_${catalogId}_${path.basename(fileName)}`;
+    const imageUrl = await saveImageToFirebaseStorage(
+      imageBuffer,
+      imageFileName,
+      userId.toString(),
+      catalogId.toString()
+    );
+    
+    // Associar URL da imagem aos produtos
+    if (imageUrl) {
+      products = products.map(product => ({
+        ...product,
+        imageUrl
+      }));
+    }
+    
+    res.json({
+      success: true,
+      processor,
+      productsCount: products.length,
+      imageUrl: imageUrl || null,
+      products
+    });
+    
+  } catch (error) {
+    console.error('Erro ao processar imagem:', error);
+    res.status(500).json({ 
+      error: 'Erro ao processar a imagem', 
+      message: error.message 
+    });
+  }
+});
+
+// Página HTML para testar o upload e processamento
+router.get('/test-page', (req, res) => {
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>Teste de Processamento de Catálogos</title>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <style>
+        body {
+          font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+          max-width: 1200px;
+          margin: 0 auto;
+          padding: 20px;
+          line-height: 1.6;
+        }
+        h1 {
+          color: #333;
+          border-bottom: 2px solid #f0f0f0;
+          padding-bottom: 10px;
+        }
+        .section {
+          margin-bottom: 30px;
+          padding: 20px;
+          border-radius: 8px;
+          background-color: #f9f9f9;
+          box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        form {
+          display: flex;
+          flex-direction: column;
+          gap: 15px;
+        }
+        label {
+          font-weight: bold;
+        }
+        input, select {
+          padding: 10px;
+          border: 1px solid #ddd;
+          border-radius: 4px;
+        }
+        button {
+          padding: 12px 20px;
+          background-color: #4CAF50;
+          color: white;
+          border: none;
+          border-radius: 4px;
+          cursor: pointer;
+          font-weight: bold;
+        }
+        button:hover {
+          background-color: #45a049;
+        }
+        #results {
+          white-space: pre-wrap;
+          font-family: monospace;
+          padding: 15px;
+          background-color: #f0f0f0;
+          border-radius: 4px;
+          overflow-x: auto;
+          max-height: 400px;
+          overflow-y: auto;
+        }
+        .product-preview {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 20px;
+          margin-top: 20px;
+        }
+        .product-card {
+          border: 1px solid #ddd;
+          border-radius: 8px;
+          padding: 15px;
+          width: 300px;
+          background-color: white;
+        }
+        .product-card img {
+          width: 100%;
+          height: 200px;
+          object-fit: contain;
+          border-radius: 4px;
+          background-color: #f5f5f5;
+        }
+        .tabs {
+          display: flex;
+          border-bottom: 1px solid #ddd;
+          margin-bottom: 20px;
+        }
+        .tab {
+          padding: 10px 20px;
+          cursor: pointer;
+          background-color: #f0f0f0;
+          border-radius: 4px 4px 0 0;
+          margin-right: 5px;
+        }
+        .tab.active {
+          background-color: #4CAF50;
+          color: white;
+        }
+        .tab-content {
+          display: none;
+        }
+        .tab-content.active {
+          display: block;
+        }
+      </style>
+    </head>
+    <body>
+      <h1>Teste de Processamento de Catálogos</h1>
+      
+      <div class="tabs">
+        <div class="tab active" onclick="openTab(event, 'pdf-tab')">Processar PDF</div>
+        <div class="tab" onclick="openTab(event, 'image-tab')">Processar Imagem</div>
+        <div class="tab" onclick="openTab(event, 'pdf-openai-tab')">PDF com OpenAI</div>
+      </div>
+      
+      <div id="pdf-tab" class="tab-content active">
+        <div class="section">
+          <h2>Teste do Processador de PDF</h2>
+          <form id="pdf-form" enctype="multipart/form-data">
+            <div>
+              <label for="pdf">Selecione um arquivo PDF:</label>
+              <input type="file" id="pdf" name="pdf" accept=".pdf" required>
+            </div>
+            <div>
+              <label for="userId">ID do Usuário (opcional):</label>
+              <input type="text" id="userId" name="userId" placeholder="test-user">
+            </div>
+            <div>
+              <label for="catalogId">ID do Catálogo (opcional):</label>
+              <input type="text" id="catalogId" name="catalogId" placeholder="test-catalog">
+            </div>
+            <button type="submit">Processar PDF</button>
+          </form>
+        </div>
+      </div>
+      
+      <div id="image-tab" class="tab-content">
+        <div class="section">
+          <h2>Teste do Processador de Imagens</h2>
+          <form id="image-form" enctype="multipart/form-data">
+            <div>
+              <label for="image">Selecione uma imagem:</label>
+              <input type="file" id="image" name="image" accept="image/*" required>
+            </div>
+            <div>
+              <label for="userId-image">ID do Usuário (opcional):</label>
+              <input type="text" id="userId-image" name="userId" placeholder="test-user">
+            </div>
+            <div>
+              <label for="catalogId-image">ID do Catálogo (opcional):</label>
+              <input type="text" id="catalogId-image" name="catalogId" placeholder="test-catalog">
+            </div>
+            <div>
+              <label for="processor">Processador:</label>
+              <select id="processor" name="processor">
+                <option value="openai">OpenAI (GPT-4o)</option>
+                <option value="claude">Claude</option>
+              </select>
+            </div>
+            <button type="submit">Processar Imagem</button>
+          </form>
+        </div>
+      </div>
+      
+      <div id="pdf-openai-tab" class="tab-content">
+        <div class="section">
+          <h2>Teste do Processador de PDF com OpenAI</h2>
+          <form id="pdf-openai-form" enctype="multipart/form-data">
+            <div>
+              <label for="pdf-openai">Selecione um arquivo PDF:</label>
+              <input type="file" id="pdf-openai" name="pdf" accept=".pdf" required>
+            </div>
+            <div>
+              <label for="userId-openai">ID do Usuário (opcional):</label>
+              <input type="text" id="userId-openai" name="userId" placeholder="test-user">
+            </div>
+            <div>
+              <label for="catalogId-openai">ID do Catálogo (opcional):</label>
+              <input type="text" id="catalogId-openai" name="catalogId" placeholder="test-catalog">
+            </div>
+            <button type="submit">Processar com OpenAI</button>
+          </form>
+        </div>
+      </div>
+      
+      <div class="section">
+        <h2>Resultados</h2>
+        <div id="loading" style="display: none;">Processando... Por favor, aguarde.</div>
+        <div id="results"></div>
+        <div id="product-preview" class="product-preview"></div>
+      </div>
+      
+      <script>
+        function openTab(evt, tabName) {
+          // Ocultar todos os conteúdos de abas
+          const tabContents = document.getElementsByClassName('tab-content');
+          for (let i = 0; i < tabContents.length; i++) {
+            tabContents[i].classList.remove('active');
+          }
+          
+          // Remover a classe 'active' de todas as abas
+          const tabs = document.getElementsByClassName('tab');
+          for (let i = 0; i < tabs.length; i++) {
+            tabs[i].classList.remove('active');
+          }
+          
+          // Mostrar a aba atual e adicionar classe 'active' ao botão
+          document.getElementById(tabName).classList.add('active');
+          evt.currentTarget.classList.add('active');
+        }
+        
+        // Função para processar o formulário PDF
+        document.getElementById('pdf-form').addEventListener('submit', async function(e) {
+          e.preventDefault();
+          
+          const resultsDiv = document.getElementById('results');
+          const previewDiv = document.getElementById('product-preview');
+          const loadingDiv = document.getElementById('loading');
+          
+          resultsDiv.innerText = '';
+          previewDiv.innerHTML = '';
+          loadingDiv.style.display = 'block';
+          
+          const formData = new FormData(this);
+          
+          try {
+            const response = await fetch('/api/test/test-pdf-processor', {
+              method: 'POST',
+              body: formData
+            });
+            
+            const result = await response.json();
+            loadingDiv.style.display = 'none';
+            
+            if (result.success) {
+              resultsDiv.innerText = JSON.stringify(result.summary, null, 2);
+              
+              // Exibir amostra de produtos
+              if (result.sampleProducts && result.sampleProducts.length > 0) {
+                previewDiv.innerHTML = '<h3>Amostra de Produtos:</h3>';
+                
+                result.sampleProducts.forEach(product => {
+                  const card = document.createElement('div');
+                  card.className = 'product-card';
+                  
+                  card.innerHTML = \`
+                    <h4>\${product.nome || 'Produto sem nome'}</h4>
+                    <p><strong>Código:</strong> \${product.codigo || 'N/A'}</p>
+                    \${product.imageUrl ? \`<img src="\${product.imageUrl}" alt="\${product.nome}">\` : '<p>Sem imagem</p>'}
+                    <p><strong>Preço:</strong> \${product.preco || 'N/A'}</p>
+                    <p><strong>Categoria:</strong> \${product.categoria || 'N/A'}</p>
+                    <p><strong>Descrição:</strong> \${product.descricao || 'Sem descrição'}</p>
+                  \`;
+                  
+                  previewDiv.appendChild(card);
+                });
+              }
+            } else {
+              resultsDiv.innerText = 'Erro: ' + JSON.stringify(result, null, 2);
+            }
+          } catch (error) {
+            loadingDiv.style.display = 'none';
+            resultsDiv.innerText = 'Erro ao processar o arquivo: ' + error.message;
+          }
+        });
+        
+        // Função para processar o formulário de imagem
+        document.getElementById('image-form').addEventListener('submit', async function(e) {
+          e.preventDefault();
+          
+          const resultsDiv = document.getElementById('results');
+          const previewDiv = document.getElementById('product-preview');
+          const loadingDiv = document.getElementById('loading');
+          
+          resultsDiv.innerText = '';
+          previewDiv.innerHTML = '';
+          loadingDiv.style.display = 'block';
+          
+          const formData = new FormData(this);
+          
+          try {
+            const response = await fetch('/api/test/test-process-image', {
+              method: 'POST',
+              body: formData
+            });
+            
+            const result = await response.json();
+            loadingDiv.style.display = 'none';
+            
+            if (result.success) {
+              resultsDiv.innerText = \`
+                Processador: \${result.processor}
+                Total de produtos: \${result.productsCount}
+                URL da imagem: \${result.imageUrl || 'N/A'}
+              \`;
+              
+              // Exibir produtos
+              if (result.products && result.products.length > 0) {
+                previewDiv.innerHTML = '<h3>Produtos Extraídos:</h3>';
+                
+                result.products.forEach(product => {
+                  const card = document.createElement('div');
+                  card.className = 'product-card';
+                  
+                  card.innerHTML = \`
+                    <h4>\${product.nome || 'Produto sem nome'}</h4>
+                    <p><strong>Código:</strong> \${product.codigo || 'N/A'}</p>
+                    \${product.imageUrl ? \`<img src="\${product.imageUrl}" alt="\${product.nome}">\` : '<p>Sem imagem</p>'}
+                    <p><strong>Preço:</strong> \${product.preco || 'N/A'}</p>
+                    <p><strong>Categoria:</strong> \${product.categoria || 'N/A'}</p>
+                    <p><strong>Descrição:</strong> \${product.descricao || 'Sem descrição'}</p>
+                  \`;
+                  
+                  previewDiv.appendChild(card);
+                });
+              }
+            } else {
+              resultsDiv.innerText = 'Erro: ' + JSON.stringify(result, null, 2);
+            }
+          } catch (error) {
+            loadingDiv.style.display = 'none';
+            resultsDiv.innerText = 'Erro ao processar a imagem: ' + error.message;
+          }
+        });
+        
+        // Função para processar o formulário PDF com OpenAI
+        document.getElementById('pdf-openai-form').addEventListener('submit', async function(e) {
+          e.preventDefault();
+          
+          const resultsDiv = document.getElementById('results');
+          const previewDiv = document.getElementById('product-preview');
+          const loadingDiv = document.getElementById('loading');
+          
+          resultsDiv.innerText = '';
+          previewDiv.innerHTML = '';
+          loadingDiv.style.display = 'block';
+          
+          const formData = new FormData(this);
+          
+          try {
+            const response = await fetch('/api/test/test-process-pdf-openai', {
+              method: 'POST',
+              body: formData
+            });
+            
+            const result = await response.json();
+            loadingDiv.style.display = 'none';
+            
+            if (result.success) {
+              resultsDiv.innerText = \`
+                Total de produtos extraídos: \${result.productsCount}
+              \`;
+              
+              // Exibir amostra de produtos
+              if (result.sampleProducts && result.sampleProducts.length > 0) {
+                previewDiv.innerHTML = '<h3>Amostra de Produtos:</h3>';
+                
+                result.sampleProducts.forEach(product => {
+                  const card = document.createElement('div');
+                  card.className = 'product-card';
+                  
+                  card.innerHTML = \`
+                    <h4>\${product.nome || 'Produto sem nome'}</h4>
+                    <p><strong>Código:</strong> \${product.codigo || 'N/A'}</p>
+                    \${product.imageUrl ? \`<img src="\${product.imageUrl}" alt="\${product.nome}">\` : '<p>Sem imagem</p>'}
+                    <p><strong>Preço:</strong> \${product.preco || 'N/A'}</p>
+                    <p><strong>Categoria:</strong> \${product.categoria || 'N/A'}</p>
+                    <p><strong>Descrição:</strong> \${product.descricao || 'Sem descrição'}</p>
+                  \`;
+                  
+                  previewDiv.appendChild(card);
+                });
+              }
+            } else {
+              resultsDiv.innerText = 'Erro: ' + JSON.stringify(result, null, 2);
+            }
+          } catch (error) {
+            loadingDiv.style.display = 'none';
+            resultsDiv.innerText = 'Erro ao processar o arquivo: ' + error.message;
+          }
+        });
+      </script>
+    </body>
+    </html>
+  `);
+});
+
+export default router;
