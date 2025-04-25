@@ -13,13 +13,13 @@ import re
 def extract_products_fixed_columns(excel_file_path, output_dir):
     """
     Extrai produtos do Excel usando um mapeamento fixo de colunas:
-    A: nome
-    B: local
-    C: fornecedor
-    E: quantidade
-    F: código
-    G: descrição
-    L: preço (valor total)
+    A (1): nome do produto (ex: "Sofá Home")
+    B (2): local (ex: "2º Piso", "Depósito")
+    C (3): fornecedor
+    D (4): imagem (objeto gráfico)
+    F (6): código do produto
+    G (7): descrição
+    L (12): valor total (preço do produto)
     
     Também extrai imagens associadas e retorna a estrutura de dados completa.
     """

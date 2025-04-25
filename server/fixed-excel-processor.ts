@@ -2,13 +2,13 @@
  * Processador de Excel com mapeamento de colunas fixas
  * 
  * Este processador implementa uma estrutura fixa de colunas:
- * A: nome
- * B: local
- * C: fornecedor
- * E: quantidade
- * F: código
- * G: descrição
- * L: preço (valor total)
+ * A (1): nome do produto (ex: "Sofá Home")
+ * B (2): local (ex: "2º Piso", "Depósito")
+ * C (3): fornecedor
+ * D (4): imagem (objeto gráfico)
+ * F (6): código do produto
+ * G (7): descrição
+ * L (12): valor total (preço do produto)
  */
 
 import * as path from 'path';
