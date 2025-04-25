@@ -321,6 +321,22 @@ async function saveImageLocally(
     const imageUrl = `/api/images/${userId}/${catalogId}/${safeFileName}`;
     
     console.log(`Imagem salva localmente: ${imageUrl}`);
+    
+    // Criar uma cópia em local-1 para funcionar com os produtos existentes no banco
+    try {
+      // Copiar a imagem para o diretório de compatibilidade
+      const compatDir = path.join(process.cwd(), 'uploads', 'images', '1', 'local-1');
+      await fs.promises.mkdir(compatDir, { recursive: true });
+      
+      // Copiar o arquivo
+      const compatFilePath = path.join(compatDir, safeFileName);
+      await fs.promises.copyFile(filePath, compatFilePath);
+      
+      console.log(`Imagem também copiada para compatibilidade: ${compatFilePath}`);
+    } catch (compatError) {
+      console.error('Erro ao copiar imagem para diretório de compatibilidade:', compatError);
+    }
+    
     return imageUrl;
   } catch (error) {
     console.error('Erro ao salvar imagem localmente:', error);
@@ -328,6 +344,23 @@ async function saveImageLocally(
     // Último recurso: URL mock
     const mockUrl = `https://mock-firebase-storage.com/${userId}/${catalogId}/${fileName}`;
     console.log(`Usando URL mock: ${mockUrl}`);
+    
+    // Tentativa adicional de salvar a imagem em local-1 para uso imediato
+    try {
+      const compatDir = path.join(process.cwd(), 'uploads', 'images', '1', 'local-1');
+      await fs.promises.mkdir(compatDir, { recursive: true });
+      
+      // Nome de arquivo derivado da URL mock para manter consistência
+      const mockFileName = fileName.replace(/[^a-zA-Z0-9.-]/g, '_');
+      
+      // Salvar a imagem
+      const mockFilePath = path.join(compatDir, mockFileName);
+      await fs.promises.writeFile(mockFilePath, imageBuffer);
+      
+      console.log(`Imagem salva em fallback para URL mock: ${mockFilePath}`);
+    } catch (fallbackError) {
+      console.error('Erro ao salvar imagem em fallback:', fallbackError);
+    }
     
     // Registrar a URL mock para posterior processamento
     try {
