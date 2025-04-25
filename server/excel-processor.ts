@@ -157,6 +157,7 @@ function applyColumnMapping(rawData: any[], columnMapping: Record<number, string
  * Processar um arquivo Excel para extrair produtos
  * @param filePath Caminho para o arquivo Excel
  * @param userId ID do usuário para associar imagens ao processar
+ * @param catalogId ID do catálogo associado aos produtos
  * @returns Array de produtos processados
  */
 export async function processExcelFile(filePath: string, userId?: string | number, catalogId?: string | number): Promise<any[]> {
@@ -211,7 +212,7 @@ export async function processExcelFile(filePath: string, userId?: string | numbe
           console.log(`Após mapeamento e filtragem: ${mappedData.length} registros válidos`);
           
           // Mapear para o formato de produto padrão
-          const productsFromSheet = normalizeExcelProducts(mappedData as ExcelProduct[]);
+          const productsFromSheet = normalizeExcelProducts(mappedData as ExcelProduct[], userId, catalogId);
           
           // Se temos produtos e imagens, extraia e associe as imagens
           if (productsFromSheet.length > 0 && hasImages && userId) {
@@ -262,7 +263,7 @@ export async function processExcelFile(filePath: string, userId?: string | numbe
  * @param rawProducts Produtos brutos do Excel
  * @returns Produtos normalizados
  */
-function normalizeExcelProducts(rawProducts: ExcelProduct[]): any[] {
+function normalizeExcelProducts(rawProducts: ExcelProduct[], userId?: string | number, catalogId?: string | number): any[] {
   console.log(`Iniciando normalização de ${rawProducts.length} produtos brutos do Excel...`);
   
   // Arrays para armazenar os produtos normalizados
@@ -1111,7 +1112,7 @@ function normalizeExcelProducts(rawProducts: ExcelProduct[]): any[] {
       normalizedProducts.push({
         name: productName || 'Produto sem nome',
         description: fullDescription,
-        code: productCode || `AUTO-${Date.now().toString().slice(-8)}`,
+        code: productCode || `AUTO-${Date.now().toString().slice(-8)}-${Math.floor(Math.random()*1000)}`,
         price,
         category,
         manufacturer, // Adicionar o fornecedor/fabricante
@@ -1124,6 +1125,9 @@ function normalizeExcelProducts(rawProducts: ExcelProduct[]): any[] {
         isEdited: false, // Inicialmente não editado manualmente
         createdAt: new Date(),
         updatedAt: new Date(),
+        // Garantir que o catalogId esteja associado ao produto
+        catalogId: catalogId || null,
+        userId: userId || null,
         // Manter campos originais adicionais para debug
         originalData: { ...rawProduct }
       });
@@ -1136,20 +1140,41 @@ function normalizeExcelProducts(rawProducts: ExcelProduct[]): any[] {
 /**
  * Processar vários arquivos Excel e combinar os resultados
  * @param filePaths Caminhos para os arquivos Excel
+ * @param userId ID do usuário para associar aos produtos
+ * @param catalogId ID do catálogo para associar aos produtos
  * @returns Array combinado de produtos processados
  */
-export async function processMultipleExcelFiles(filePaths: string[]): Promise<any[]> {
+export async function processMultipleExcelFiles(
+  filePaths: string[],
+  userId?: string | number,
+  catalogId?: string | number
+): Promise<any[]> {
   try {
     const allProducts: any[] = [];
     
     for (const filePath of filePaths) {
       try {
-        const products = await processExcelFile(filePath);
+        console.log(`Processando arquivo Excel: ${filePath} para catalogId=${catalogId}`);
+        const products = await processExcelFile(filePath, userId, catalogId);
         allProducts.push(...products);
       } catch (error) {
         console.error(`Erro ao processar arquivo ${filePath}:`, error);
         // Continua para o próximo arquivo mesmo se houver erro
       }
+    }
+    
+    console.log(`Processados ${allProducts.length} produtos no total de ${filePaths.length} arquivos`);
+    
+    // Garantir que todos os produtos tenham catalogId e userId
+    if (catalogId || userId) {
+      allProducts.forEach(product => {
+        if (catalogId && !product.catalogId) {
+          product.catalogId = catalogId;
+        }
+        if (userId && !product.userId) {
+          product.userId = userId;
+        }
+      });
     }
     
     return allProducts;
