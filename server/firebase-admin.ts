@@ -121,12 +121,49 @@ export async function saveProductsToFirestore(products: any[], userId: string | 
         const productRef = productsRef.doc();
         batchIds.push(productRef.id);
         
-        // Adicionar timestamp
+        // Adicionar timestamp e limpar dados para evitar entidades aninhadas inválidas
+        const { originalData, ...cleanProduct } = product; // Remover campo originalData que causa problemas
+        
+        // Remover qualquer propriedade que contenha objetos aninhados complexos
+        const sanitizedProduct: any = {};
+        for (const [key, value] of Object.entries(cleanProduct)) {
+          // Incluir apenas valores simples (string, número, boolean, array simples)
+          if (
+            typeof value === 'string' || 
+            typeof value === 'number' || 
+            typeof value === 'boolean' ||
+            (Array.isArray(value) && value.every(item => 
+              typeof item === 'string' || typeof item === 'number'
+            )) ||
+            value === null
+          ) {
+            sanitizedProduct[key] = value;
+          } else if (key === 'sizes' && Array.isArray(value)) {
+            // Converter tamanhos complexos para formato simples
+            sanitizedProduct[key] = value.map(size => {
+              if (typeof size === 'object') {
+                // Extrair apenas propriedades numéricas ou string
+                const { width, height, depth, label } = size;
+                return { 
+                  width: typeof width === 'number' ? width : null,
+                  height: typeof height === 'number' ? height : null, 
+                  depth: typeof depth === 'number' ? depth : null,
+                  label: typeof label === 'string' ? label : null
+                };
+              }
+              return size;
+            });
+          }
+        }
+        
         const productWithTimestamp = {
-          ...product,
+          ...sanitizedProduct,
           createdAt: admin.firestore.FieldValue.serverTimestamp(),
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          firestoreId: productRef.id // Armazenar ID do Firestore no próprio documento
+          firestoreId: productRef.id, // Armazenar ID do Firestore no próprio documento
+          userId: typeof product.userId === 'string' || typeof product.userId === 'number' ? product.userId : null,
+          catalogId: typeof product.catalogId === 'string' ? product.catalogId : null,
+          imageProcessed: !!product.imageUrl // Marcar se tem imagem processada
         };
         
         // Adicionar ao lote

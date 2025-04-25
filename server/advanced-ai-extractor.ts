@@ -332,15 +332,18 @@ async function extractProductsFromImage(imagePath: string, pageNumber: number, i
           // Adicionar atributos especiais a cada produto
           return products.map((product: any) => ({
             ...product,
-            imageUrl: imageUrl, // Adicionar URL da imagem
+            // Armazenar a imagem de duas formas: como URL relativa e como base64 para garantir que seja exibida
+            imageUrl: imageUrl, // URL relativa para acesso web
+            image: `data:image/jpeg;base64,${base64Image}`, // Dados da imagem em base64
+            originalImage: base64Image, // Imagem original em base64 (sem prefix data:)
             pageNumber,
-          // Garantir que os tipos de dados estejam corretos
-          price: typeof product.price === 'number' ? product.price : 
-                typeof product.price === 'string' ? parseInt(product.price.replace(/\D/g, '')) : 0,
-          colors: Array.isArray(product.colors) ? product.colors : 
-                typeof product.colors === 'string' ? [product.colors] : [],
-          materials: Array.isArray(product.materials) ? product.materials : 
-                    typeof product.materials === 'string' ? [product.materials] : []
+            // Garantir que os tipos de dados estejam corretos
+            price: typeof product.price === 'number' ? product.price : 
+                  typeof product.price === 'string' ? parseInt(product.price.replace(/\D/g, '')) : 0,
+            colors: Array.isArray(product.colors) ? product.colors : 
+                  typeof product.colors === 'string' ? [product.colors] : [],
+            materials: Array.isArray(product.materials) ? product.materials : 
+                      typeof product.materials === 'string' ? [product.materials] : []
         }));
       } else {
         // Estrutura alternativa de resposta: o modelo pode não ter retornado um array em "products"
