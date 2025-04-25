@@ -1,314 +1,223 @@
-import admin from 'firebase-admin';
-import { getFirestore } from 'firebase-admin/firestore';
+/**
+ * Inicialização e funções do Firebase Admin SDK
+ * 
+ * Este módulo é responsável por:
+ * 1. Inicializar o Firebase Admin SDK
+ * 2. Fornecer funções para upload de imagens para o Storage
+ * 3. Configurar autenticação de admin
+ */
 
-// Variável para armazenar a instância do Firebase Admin
-let firebaseApp: admin.app.App;
+import * as admin from 'firebase-admin';
+import { randomUUID } from 'crypto';
+import path from 'path';
+import os from 'os';
+import fs from 'fs';
 
-try {
-  // Tentativa de obter a instância já inicializada
-  firebaseApp = admin.app();
-  console.log("Firebase Admin já inicializado");
-} catch (error) {
+// Verificar se as variáveis de ambiente necessárias estão definidas
+const privateKey = process.env.FIREBASE_PRIVATE_KEY 
+  ? process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n')
+  : undefined;
+
+const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
+const projectId = process.env.VITE_FIREBASE_PROJECT_ID;
+
+// Inicializar Admin SDK se as credenciais estão disponíveis
+if (!admin.apps.length && clientEmail && privateKey && projectId) {
   try {
-    console.log("Inicializando Firebase Admin...");
+    admin.initializeApp({
+      credential: admin.credential.cert({
+        projectId,
+        clientEmail,
+        privateKey
+      }),
+      storageBucket: `${projectId}.appspot.com`
+    });
     
-    // Verificar se as credenciais mínimas estão disponíveis
-    if (!process.env.FIREBASE_PRIVATE_KEY || !process.env.FIREBASE_CLIENT_EMAIL) {
-      console.log("Firebase Admin: credenciais incompletas. Usando modo simulado.");
-      
-      // Inicializar com configuração mínima
-      const dummyApp = admin.initializeApp({
-        projectId: process.env.VITE_FIREBASE_PROJECT_ID || "dummy-project"
-      });
-      
-      firebaseApp = dummyApp;
-    } else {
-      // Inicializar com as credenciais completas
-      const privateKey = process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n');
-      
-      const serviceAccount = {
-        projectId: process.env.VITE_FIREBASE_PROJECT_ID,
-        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-        privateKey: privateKey
-      };
-      
-      console.log("Credenciais Admin configuradas para:", serviceAccount.projectId);
-      
-      // Inicialização completa
-      const configuredApp = admin.initializeApp({
-        credential: admin.credential.cert(serviceAccount as admin.ServiceAccount),
-        databaseURL: `https://${process.env.VITE_FIREBASE_PROJECT_ID}.firebaseio.com`,
-        storageBucket: process.env.VITE_FIREBASE_PROJECT_ID?.includes('.appspot.com') 
-          ? process.env.VITE_FIREBASE_PROJECT_ID 
-          : `${process.env.VITE_FIREBASE_PROJECT_ID}.appspot.com`
-      });
-      
-      firebaseApp = configuredApp;
-    }
-  } catch (initError) {
-    console.error("Erro ao inicializar Firebase Admin:", initError);
-    
-    // Último recurso - criar app dummy para evitar falhas catastróficas
-    try {
-      const fallbackApp = admin.initializeApp({ 
-        projectId: "fallback-project" 
-      }, "fallback-instance");
-      
-      firebaseApp = fallbackApp;
-      console.log("Firebase Admin inicializado em modo de fallback");
-    } catch (fallbackError) {
-      console.error("Falha completa na inicialização do Firebase Admin:", fallbackError);
-      throw new Error("Não foi possível inicializar o Firebase Admin");
-    }
-  }
-}
-
-// Exportar a instância do Firestore
-export const adminDb = getFirestore(firebaseApp);
-export const auth = admin.auth(firebaseApp);
-export const storage = admin.storage(firebaseApp);
-
-// Função para salvar um catálogo no Firestore
-export async function saveCatalogToFirestore(catalog: any, userId: string | number): Promise<string> {
-  try {
-    // Converter userId para string se for número
-    const userIdStr = typeof userId === 'number' ? userId.toString() : userId;
-    
-    // Referência à coleção de catálogos do usuário
-    const catalogsRef = adminDb.collection('users').doc(userIdStr).collection('catalogs');
-    
-    // Adicionar timestamp
-    const catalogWithTimestamp = {
-      ...catalog,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
-    };
-    
-    // Adicionar o documento e obter referência
-    const docRef = await catalogsRef.add(catalogWithTimestamp);
-    console.log(`Catálogo salvo no Firestore com ID: ${docRef.id}`);
-    
-    return docRef.id;
+    console.log('Inicializando Firebase Admin...');
+    console.log(`Credenciais Admin configuradas para: ${projectId}`);
   } catch (error) {
-    console.error('Erro ao salvar catálogo no Firestore:', error);
-    throw new Error('Falha ao salvar catálogo no Firestore');
+    console.error('Erro ao inicializar Firebase Admin:', error);
   }
 }
 
-// Função para salvar produtos em lote no Firestore
-export async function saveProductsToFirestore(products: any[], userId: string | number, catalogId: string): Promise<string[]> {
-  try {
-    // Converter userId para string se for número
-    const userIdStr = typeof userId === 'number' ? userId.toString() : userId;
-    
-    // Referência à coleção de produtos do catálogo
-    const productsRef = adminDb.collection('users').doc(userIdStr)
-                              .collection('catalogs').doc(catalogId)
-                              .collection('products');
-    
-    // Usar o lote do Firestore para operações em massa (até 500 operações por lote)
-    const batch = adminDb.batch();
-    const productIds: string[] = [];
-    
-    // Dividir os produtos em lotes de no máximo 450 para evitar limites do Firestore
-    const MAX_BATCH_SIZE = 450;
-    
-    // Função para processar um lote de produtos
-    const processBatch = async (productsBatch: any[]) => {
-      const batchIds: string[] = [];
-      const currentBatch = adminDb.batch();
-      
-      for (const product of productsBatch) {
-        // Criar um novo ID de documento
-        const productRef = productsRef.doc();
-        batchIds.push(productRef.id);
-        
-        // Adicionar timestamp e limpar dados para evitar entidades aninhadas inválidas
-        const { originalData, ...cleanProduct } = product; // Remover campo originalData que causa problemas
-        
-        // Remover qualquer propriedade que contenha objetos aninhados complexos
-        const sanitizedProduct: any = {};
-        for (const [key, value] of Object.entries(cleanProduct)) {
-          // Incluir apenas valores simples (string, número, boolean, array simples)
-          if (
-            typeof value === 'string' || 
-            typeof value === 'number' || 
-            typeof value === 'boolean' ||
-            (Array.isArray(value) && value.every(item => 
-              typeof item === 'string' || typeof item === 'number'
-            )) ||
-            value === null
-          ) {
-            sanitizedProduct[key] = value;
-          } else if (key === 'sizes' && Array.isArray(value)) {
-            // Converter tamanhos complexos para formato simples
-            sanitizedProduct[key] = value.map(size => {
-              if (typeof size === 'object') {
-                // Extrair apenas propriedades numéricas ou string
-                const { width, height, depth, label } = size;
-                return { 
-                  width: typeof width === 'number' ? width : null,
-                  height: typeof height === 'number' ? height : null, 
-                  depth: typeof depth === 'number' ? depth : null,
-                  label: typeof label === 'string' ? label : null
-                };
-              }
-              return size;
-            });
-          }
-        }
-        
-        const productWithTimestamp = {
-          ...sanitizedProduct,
-          createdAt: admin.firestore.FieldValue.serverTimestamp(),
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          firestoreId: productRef.id, // Armazenar ID do Firestore no próprio documento
-          userId: typeof product.userId === 'string' || typeof product.userId === 'number' ? product.userId : null,
-          catalogId: typeof product.catalogId === 'string' ? product.catalogId : null,
-          imageProcessed: !!product.imageUrl // Marcar se tem imagem processada
-        };
-        
-        // Adicionar ao lote
-        currentBatch.set(productRef, productWithTimestamp);
-      }
-      
-      // Executar o lote
-      await currentBatch.commit();
-      
-      return batchIds;
-    };
-    
-    // Processar produtos em lotes
-    if (products.length <= MAX_BATCH_SIZE) {
-      // Se houver poucos produtos, processar em um único lote
-      productIds.push(...await processBatch(products));
-    } else {
-      // Se houver muitos produtos, dividir em lotes menores
-      const batches = [];
-      for (let i = 0; i < products.length; i += MAX_BATCH_SIZE) {
-        batches.push(products.slice(i, i + MAX_BATCH_SIZE));
-      }
-      
-      // Processar cada lote sequencialmente (evitar sobrecarga)
-      for (const batch of batches) {
-        const batchIds = await processBatch(batch);
-        productIds.push(...batchIds);
-      }
-    }
-    
-    console.log(`${products.length} produtos salvos no Firestore para o catálogo: ${catalogId}`);
-    
-    return productIds;
-  } catch (error) {
-    console.error('Erro ao salvar produtos no Firestore:', error);
-    throw new Error('Falha ao salvar produtos no Firestore');
-  }
-}
-
-// Função para atualizar o status de um catálogo no Firestore
-export async function updateCatalogStatusInFirestore(
-  userId: string | number, 
-  catalogId: string, 
-  status: string, 
-  productCount?: number
-): Promise<void> {
-  try {
-    // Converter userId para string se for número
-    const userIdStr = typeof userId === 'number' ? userId.toString() : userId;
-    
-    // Referência ao documento do catálogo
-    const catalogRef = adminDb.collection('users').doc(userIdStr)
-                            .collection('catalogs').doc(catalogId);
-    
-    // Dados a atualizar
-    const updateData: any = {
-      status,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
-    };
-    
-    // Adicionar contagem de produtos se fornecida
-    if (productCount !== undefined) {
-      updateData.productCount = productCount;
-    }
-    
-    // Atualizar o documento
-    await catalogRef.update(updateData);
-    
-    console.log(`Status do catálogo ${catalogId} atualizado para: ${status}`);
-  } catch (error) {
-    console.error('Erro ao atualizar status do catálogo no Firestore:', error);
-    throw new Error('Falha ao atualizar status do catálogo');
-  }
-}
-
-// Função para salvar uma imagem no Firebase Storage
+/**
+ * Faz upload de uma imagem para o Firebase Storage
+ * 
+ * @param imageBuffer Buffer da imagem ou string base64
+ * @param fileName Nome do arquivo
+ * @param userId ID do usuário
+ * @param catalogId ID do catálogo
+ * @returns URL pública da imagem
+ */
 export async function saveImageToFirebaseStorage(
-  base64Data: string,
+  imageBuffer: Buffer | string,
   fileName: string,
-  userId: string,
+  userId: string, 
   catalogId: string
-): Promise<string> {
+): Promise<string | null> {
+  // Verificar se o Firebase Admin foi inicializado
+  if (!admin.apps.length) {
+    console.error('Firebase Admin não inicializado. Impossível fazer upload.');
+    return null;
+  }
+  
   try {
-    // Verificar se o Storage está disponível
-    if (!storage) {
-      console.error('Firebase Storage não inicializado');
-      return '';
-    }
+    // Obter referência para o bucket
+    const bucket = admin.storage().bucket();
     
-    // Obter o bucket de armazenamento
-    const bucket = storage.bucket();
+    // Determinar o caminho completo para o arquivo
+    const filePath = `catalogs/${userId}/${catalogId}/${fileName}`;
     
-    // Verificar se o bucket está disponível
-    if (!bucket) {
-      console.error('Firebase Storage bucket não disponível');
-      return '';
-    }
+    // Se for uma string base64, converter para buffer
+    let buffer: Buffer;
     
-    // Caminho para a imagem no Storage (organizando por usuário e catálogo)
-    const filePath = `products/${userId}/${catalogId}/${fileName}`;
-    
-    // Criar buffer da imagem a partir do base64
-    const imageBuffer = Buffer.from(base64Data, 'base64');
-    
-    // Referência ao arquivo
-    const file = bucket.file(filePath);
-    
-    // Configurações para upload
-    const options = {
-      metadata: {
-        contentType: 'image/png',
-        metadata: {
-          firebaseStorageDownloadTokens: admin.firestore.FieldValue.serverTimestamp()
+    if (typeof imageBuffer === 'string') {
+      // Verificar se é uma string base64 completa (data:image/png;base64,...)
+      if (imageBuffer.startsWith('data:')) {
+        // Extrair o tipo MIME e os dados base64
+        const matches = imageBuffer.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+        
+        if (!matches || matches.length !== 3) {
+          throw new Error('Formato base64 inválido');
         }
-      },
-      public: true
-    };
+        
+        // Obter apenas os dados base64
+        const base64Data = matches[2];
+        buffer = Buffer.from(base64Data, 'base64');
+      } else {
+        // Assumir que é uma string base64 sem o prefixo
+        buffer = Buffer.from(imageBuffer, 'base64');
+      }
+    } else {
+      // Já é um buffer
+      buffer = imageBuffer;
+    }
+    
+    // Criar arquivo temporário
+    const tempFilePath = path.join(os.tmpdir(), `${randomUUID()}_${fileName}`);
+    await fs.promises.writeFile(tempFilePath, buffer);
     
     // Fazer upload do arquivo
-    await file.save(imageBuffer, options);
+    await bucket.upload(tempFilePath, {
+      destination: filePath,
+      metadata: {
+        contentType: determineContentType(fileName),
+        metadata: {
+          userId,
+          catalogId,
+          firebaseStorageDownloadTokens: randomUUID(),
+        }
+      }
+    });
     
-    // Gerar URL pública (funciona mesmo se o bucket não for público)
-    const config = firebaseApp.options;
-    const bucketName = config.storageBucket || '';
+    // Remover arquivo temporário
+    await fs.promises.unlink(tempFilePath);
     
-    // URL no formato do Firebase Storage
-    const imageUrl = `https://firebasestorage.googleapis.com/v0/b/${bucketName}/o/${encodeURIComponent(filePath)}?alt=media`;
+    // Tornar o arquivo publicamente acessível
+    await bucket.file(filePath).makePublic();
     
-    console.log(`Imagem salva no Firebase Storage: ${imageUrl}`);
+    // Obter a URL pública
+    const fileUrl = `https://storage.googleapis.com/${bucket.name}/${filePath}`;
     
-    return imageUrl;
+    console.log(`Imagem salva no Firebase Storage: ${fileUrl}`);
+    return fileUrl;
+    
   } catch (error) {
     console.error('Erro ao salvar imagem no Firebase Storage:', error);
-    return '';
+    return null;
   }
 }
 
-export default {
-  adminDb,
-  auth,
-  storage,
-  saveCatalogToFirestore,
-  saveProductsToFirestore,
-  updateCatalogStatusInFirestore,
-  saveImageToFirebaseStorage
-};
+/**
+ * Determina o tipo de conteúdo com base na extensão do arquivo
+ * @param fileName Nome do arquivo
+ * @returns Tipo MIME
+ */
+function determineContentType(fileName: string): string {
+  const extension = fileName.split('.').pop()?.toLowerCase();
+  
+  switch (extension) {
+    case 'jpg':
+    case 'jpeg':
+      return 'image/jpeg';
+    case 'png':
+      return 'image/png';
+    case 'gif':
+      return 'image/gif';
+    case 'webp':
+      return 'image/webp';
+    case 'svg':
+      return 'image/svg+xml';
+    case 'pdf':
+      return 'application/pdf';
+    default:
+      return 'application/octet-stream';
+  }
+}
+
+/**
+ * Apaga um arquivo do Firebase Storage
+ * @param fileUrl URL do arquivo a ser excluído
+ * @returns True se bem-sucedido
+ */
+export async function deleteFileFromStorage(fileUrl: string): Promise<boolean> {
+  if (!admin.apps.length) {
+    console.error('Firebase Admin não inicializado. Impossível excluir arquivo.');
+    return false;
+  }
+  
+  try {
+    // Extrair o caminho do arquivo da URL
+    const bucket = admin.storage().bucket();
+    const storageUrlPrefix = `https://storage.googleapis.com/${bucket.name}/`;
+    
+    if (!fileUrl.startsWith(storageUrlPrefix)) {
+      console.error('URL não pertence ao Firebase Storage deste projeto');
+      return false;
+    }
+    
+    const filePath = fileUrl.substring(storageUrlPrefix.length);
+    
+    // Excluir o arquivo
+    await bucket.file(filePath).delete();
+    console.log(`Arquivo excluído: ${filePath}`);
+    return true;
+    
+  } catch (error) {
+    console.error('Erro ao excluir arquivo:', error);
+    return false;
+  }
+}
+
+/**
+ * Lista todos os arquivos em um diretório do Storage
+ * @param userId ID do usuário
+ * @param catalogId ID do catálogo (opcional)
+ * @returns Lista de URLs de arquivos
+ */
+export async function listFilesInStorage(userId: string, catalogId?: string): Promise<string[]> {
+  if (!admin.apps.length) {
+    console.error('Firebase Admin não inicializado. Impossível listar arquivos.');
+    return [];
+  }
+  
+  try {
+    const bucket = admin.storage().bucket();
+    const prefix = catalogId 
+      ? `catalogs/${userId}/${catalogId}/`
+      : `catalogs/${userId}/`;
+    
+    const [files] = await bucket.getFiles({ prefix });
+    
+    // Obter URLs públicas
+    const fileUrls = files.map(file => 
+      `https://storage.googleapis.com/${bucket.name}/${file.name}`
+    );
+    
+    return fileUrls;
+    
+  } catch (error) {
+    console.error('Erro ao listar arquivos:', error);
+    return [];
+  }
+}

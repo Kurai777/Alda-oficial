@@ -1,510 +1,256 @@
+/**
+ * Extrator avançado de produtos usando OpenAI GPT-4o Vision
+ * 
+ * Este módulo implementa funções para processar imagens de catálogos
+ * e extrair informações detalhadas sobre produtos usando IA multimodal.
+ */
+
 import OpenAI from "openai";
 import fs from 'fs';
 import path from 'path';
 import { promisify } from 'util';
-import pdfConverterWrapper from './pdf-converter-wrapper.js';
-import { generateImagesFromPdf } from './alternative-pdf-processor';
-import { determineProductCategory, extractMaterialsFromDescription } from './utils';
+import { ExcelProduct } from './excel-processor';
+import { formatProductPrice, extractDimensionsFromString, determineProductCategory, extractMaterialsFromDescription } from './utils';
+import { saveImageToFirebaseStorage } from './firebase-admin';
 
-// Promisified functions
 const readFile = promisify(fs.readFile);
 const writeFile = promisify(fs.writeFile);
-const mkdir = promisify(fs.mkdir);
 
-// Verificar chave da API
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY || 'sk-mock-key-for-development-only';
-if (!process.env.OPENAI_API_KEY) {
-  console.error("AVISO: OPENAI_API_KEY não está definida, usando chave mock para desenvolvimento");
-  console.error("As solicitações reais à API OpenAI falharão, mas o código continuará funcionando");
-  console.error("Em um ambiente de produção, defina a variável de ambiente OPENAI_API_KEY");
-}
-
-// Configurar OpenAI
-const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
+// Inicializar cliente OpenAI
+// the newest OpenAI model is "gpt-4o" which was released May 13, 2024. do not change this unless explicitly requested by the user
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
 
 /**
- * Multimodal AI Extractor - Processador avançado de catálogos que usa GPT-4o para extrair
- * produtos diretamente das imagens do PDF em um único passo
+ * Processa uma imagem com OpenAI Vision para extrair produtos
+ * @param imageBase64 Imagem em formato base64
+ * @param filename Nome do arquivo (para identificação)
+ * @returns Lista de produtos extraídos
  */
-export async function processFileWithAdvancedAI(filePath: string, fileName: string, userId: number, catalogId: number): Promise<any[]> {
+export async function processImageWithOpenAI(
+  imageBase64: string, 
+  filename: string
+): Promise<ExcelProduct[]> {
+  console.log(`Processando imagem ${filename} com OpenAI Vision...`);
+  
   try {
-    console.log(`[processFileWithAdvancedAI] Iniciando processamento avançado do arquivo: ${fileName}`);
-    console.log(`[processFileWithAdvancedAI] Verificando existência do arquivo: ${filePath}`);
+    // Verificar se é uma string base64 completa ou apenas os dados
+    const base64Data = imageBase64.startsWith('data:') 
+      ? imageBase64 
+      : `data:image/jpeg;base64,${imageBase64}`;
     
-    // Verificar se o arquivo existe
-    if (!fs.existsSync(filePath)) {
-      throw new Error(`Arquivo não encontrado: ${filePath}`);
-    }
+    // Sistema de instruções específico para catálogos de móveis
+    const systemPrompt = `Você é um assistente especializado em extrair informações detalhadas de catálogos de móveis.
     
-    // Determinar se é um arquivo PDF ou imagem
-    const fileExtension = path.extname(filePath).toLowerCase();
-    const isPdf = fileExtension === '.pdf';
-    const isFratiniCatalog = fileName.toLowerCase().includes("fratini");
+    Analise cuidadosamente esta imagem de catálogo de móveis. Identifique e extraia informações sobre TODOS os produtos visíveis, com os seguintes detalhes:
     
-    console.log(`[processFileWithAdvancedAI] Tipo de arquivo: ${isPdf ? "PDF" : "Imagem"}, Fratini: ${isFratiniCatalog}`);
+    1. Nome do produto
+    2. Código/referência do produto (se visível)
+    3. Descrição detalhada
+    4. Preço (no formato brasileiro R$ X.XXX,XX)
+    5. Dimensões (largura x altura x profundidade em cm)
+    6. Materiais
+    7. Cores disponíveis
+    8. Categoria do móvel
     
-    // Caminho para salvar as imagens temporárias
-    const tempDir = path.join(process.cwd(), 'uploads', 'temp_advanced_ai');
-    console.log(`[processFileWithAdvancedAI] Criando diretório temporário: ${tempDir}`);
+    Formate sua resposta como um array JSON de produtos. Não omita nenhum produto visível.`;
     
-    try {
-      if (!fs.existsSync(tempDir)) {
-        await mkdir(tempDir, { recursive: true });
-      }
-    } catch (mkdirError) {
-      console.error(`[processFileWithAdvancedAI] Erro ao criar diretório temporário:`, mkdirError);
-      // Tentar um diretório alternativo
-      const altTempDir = path.join(process.cwd(), 'uploads');
-      console.log(`[processFileWithAdvancedAI] Tentando diretório alternativo: ${altTempDir}`);
-      if (!fs.existsSync(altTempDir)) {
-        await mkdir(altTempDir, { recursive: true });
-      }
-    }
-    
-    // Array para armazenar produtos extraídos
-    let extractedProducts: any[] = [];
-    
-    // Tentativa normal de processamento
-    if (isPdf) {
-      try {
-        console.log(`[processFileWithAdvancedAI] Convertendo PDF para imagens: ${filePath}`);
-        
-        // Converter PDF para imagens para processamento
-        // Primeiro tentar o método wrapper, se falhar, usar o método alternativo
-        let pdfImages: Buffer[] = [];
-        try {
-          console.log(`[processFileWithAdvancedAI] Tentando converter PDF com método principal`);
-          pdfImages = await pdfConverterWrapper.convert(filePath, {
-            format: 'jpeg',
-            quality: 95
-          });
-          console.log(`[processFileWithAdvancedAI] Sucesso no método principal: ${pdfImages.length} imagens`);
-        } catch (e) {
-          console.log(`[processFileWithAdvancedAI] Método principal falhou:`, e);
-          console.log(`[processFileWithAdvancedAI] Tentando método alternativo para converter PDF`);
-          try {
-            pdfImages = await generateImagesFromPdf(filePath);
-            console.log(`[processFileWithAdvancedAI] Sucesso no método alternativo: ${pdfImages.length} imagens`);
-          } catch (altError) {
-            console.error(`[processFileWithAdvancedAI] Ambos os métodos de conversão PDF falharam:`, altError);
-            throw new Error("Falha ao converter PDF para imagens. Não foi possível extrair produtos.");
-          }
-        }
-        
-        console.log(`[processFileWithAdvancedAI] PDF convertido em ${pdfImages.length} imagens`);
-        
-        // Processar todas as páginas, até um máximo razoável para evitar custos excessivos com API
-        const maxPagesToProcess = Math.min(pdfImages.length, 5); // Limite de 5 páginas por processamento
-        console.log(`[processFileWithAdvancedAI] Processando ${maxPagesToProcess} páginas do PDF`);
-        
-        for (let i = 0; i < maxPagesToProcess; i++) {
-          try {
-            const pageNumber = i + 1;
-            // Salvar imagem temporariamente
-            const tempImagePath = path.join(tempDir, `page_${pageNumber}.jpg`);
-            console.log(`[processFileWithAdvancedAI] Salvando página ${pageNumber} em: ${tempImagePath}`);
-            await writeFile(tempImagePath, pdfImages[i]);
-            
-            console.log(`[processFileWithAdvancedAI] Processando página ${pageNumber} com IA multimodal`);
-            
-            try {
-              const productsFromPage = await extractProductsFromImage(
-                tempImagePath, 
-                pageNumber, 
-                isFratiniCatalog
-              );
-              
-              if (productsFromPage && productsFromPage.length > 0) {
-                // Verificar se já temos produtos com nome similar para evitar duplicação
-                const filteredProducts = productsFromPage.filter(newProduct => {
-                  // Verificar se o produto é único com base no nome e código
-                  return !extractedProducts.some(existingProduct => 
-                    (existingProduct.name && newProduct.name && 
-                     existingProduct.name.toLowerCase() === newProduct.name.toLowerCase()) ||
-                    (existingProduct.code && newProduct.code && 
-                     existingProduct.code === newProduct.code)
-                  );
-                });
-                
-                // Adicionar os produtos extraídos ao array principal
-                extractedProducts = extractedProducts.concat(
-                  filteredProducts.map(product => ({
-                    ...product,
-                    userId,
-                    catalogId,
-                    page: pageNumber
-                  }))
-                );
-                console.log(`[processFileWithAdvancedAI] Extraídos ${productsFromPage.length} produtos da página ${pageNumber}, adicionados ${filteredProducts.length} novos produtos`);
-              } else {
-                console.log(`[processFileWithAdvancedAI] Nenhum produto encontrado na página ${pageNumber}`);
-              }
-            } catch (aiErr) {
-              console.error(`[processFileWithAdvancedAI] Erro ao processar imagem ${pageNumber} com IA:`, aiErr);
-              // Continuar para a próxima página mesmo com erro
-              continue;
-            }
-          } catch (pageErr) {
-            console.error(`[processFileWithAdvancedAI] Erro ao processar página ${i+1}:`, pageErr);
-            // Continuar para a próxima página mesmo com erro
-            continue;
-          }
-        }
-      } catch (error) {
-        console.error(`[processFileWithAdvancedAI] Erro ao processar PDF:`, error);
-        throw error;
-      }
-    } else {
-      // Processar arquivo de imagem único
-      try {
-        console.log(`[processFileWithAdvancedAI] Processando arquivo de imagem com IA multimodal: ${filePath}`);
-        const productsFromImage = await extractProductsFromImage(
-          filePath, 
-          1, 
-          isFratiniCatalog
-        );
-        
-        if (productsFromImage && productsFromImage.length > 0) {
-          // Adicionar os produtos extraídos ao array principal
-          extractedProducts = extractedProducts.concat(
-            productsFromImage.map(product => ({
-              ...product,
-              userId,
-              catalogId,
-              page: 1
-            }))
-          );
-          console.log(`[processFileWithAdvancedAI] Extraídos ${productsFromImage.length} produtos da imagem`);
-        } else {
-          console.log(`[processFileWithAdvancedAI] Nenhum produto encontrado na imagem`);
-        }
-      } catch (imgError) {
-        console.error(`[processFileWithAdvancedAI] Erro ao processar imagem:`, imgError);
-        throw imgError;
-      }
-    }
-    
-    // Processar todos os produtos extraídos para garantir o formato adequado
-    console.log(`[processFileWithAdvancedAI] Processando ${extractedProducts.length} produtos extraídos`);
-    
-    // Para cada produto, garantir que a imagem seja incluída
-    const productsWithImages = [];
-    
-    for (const product of extractedProducts) {
-      // Se o produto não tiver imagem definida, usar uma imagem padrão ou a do catálogo
-      if (!product.imageUrl && !product.image) {
-        console.log(`[processFileWithAdvancedAI] Produto sem imagem: ${product.name || 'sem nome'}`);
-        
-        // Se o arquivo for uma imagem, usar como imagem padrão para todos os produtos
-        if (!isPdf) {
-          try {
-            const originalBuffer = fs.readFileSync(filePath);
-            const base64Original = originalBuffer.toString('base64');
-            product.imageUrl = `/uploads/extracted_images/product_${Date.now()}_${Math.floor(Math.random() * 1000)}.jpg`;
-            product.image = `data:image/jpeg;base64,${base64Original}`;
-            product.originalImage = base64Original;
-            console.log(`[processFileWithAdvancedAI] Adicionada imagem do catálogo ao produto`);
-          } catch (e) {
-            console.error(`[processFileWithAdvancedAI] Erro ao ler imagem do catálogo:`, e);
-          }
-        }
-      }
-      productsWithImages.push(product);
-    }
-    
-    const processedProducts = processExtractedProducts(productsWithImages, userId, catalogId);
-    console.log(`[processFileWithAdvancedAI] Processamento concluído com ${processedProducts.length} produtos`);
-    return processedProducts;
-  } catch (error) {
-    console.error(`[processFileWithAdvancedAI] Erro crítico no processamento avançado com IA:`, error);
-    // Não gerar mais produtos mock - propagar o erro para o chamador lidar adequadamente
-    throw new Error(`Falha ao processar o catálogo ${fileName}. A análise de IA não conseguiu extrair produtos. Detalhes do erro: ${error.message}`);
-  }
-}
-
-/**
- * Extrai produtos diretamente de uma imagem usando GPT-4o
- */
-async function extractProductsFromImage(imagePath: string, pageNumber: number, isFratiniCatalog: boolean): Promise<any[]> {
-  try {
-    // Ler a imagem como base64
-    const imageBuffer = await readFile(imagePath);
-    const base64Image = imageBuffer.toString('base64');
-    
-    // Definir o prompt para extração de produtos
-    const systemMessage = isFratiniCatalog
-      ? `Você é um especialista em extrair informações detalhadas sobre produtos de móveis da marca Fratini.
-         Sua tarefa é analisar imagens de páginas de catálogos/tabelas de preço e extrair todos os produtos visíveis.
-         
-         ESPECIFICAÇÕES DA MARCA FRATINI:
-         1. Fratini é uma empresa brasileira de móveis para escritório, especialmente cadeiras, poltronas e banquetas
-         2. Os códigos de produtos Fratini geralmente seguem o padrão 1.XXXXX.XX.XXXX onde dígitos do meio indicam cores
-         3. Os preços são mostrados em Reais (R$)
-         4. Cada produto geralmente tem nome comercial, descrição, códigos de referência, cores e preços
-         
-         FORMATAÇÃO ESPERADA:
-         - Para cada produto visível na imagem, extraia: nome, descrição, código, preço, cores disponíveis e materiais
-         - Retorne os dados em formato estruturado JSON
-         - Converta os preços para centavos (R$ 750,00 = 75000)
-         - Os códigos devem ser extraídos exatamente como aparecem na imagem
-         - Não tente adivinhar informações que não estão visíveis na imagem`
-      : `Você é um especialista em extrair informações sobre produtos de móveis a partir de imagens de catálogos.
-         Sua tarefa é analisar detalhadamente a imagem fornecida e identificar TODOS os produtos de móveis visíveis.
-         
-         Para cada produto, forneça as seguintes informações:
-         1. Nome completo do produto
-         2. Descrição detalhada
-         3. Código/referência do produto (se visível)
-         4. Preço em formato numérico (MUITO IMPORTANTE: sempre converta para centavos, ex: R$ 1.234,56 → 123456)
-            * Se o preço estiver visível, mesmo que parcialmente, SEMPRE extraia-o
-            * Se o preço estiver escrito como "R$ 4.890,00", converta para 489000 (em centavos)
-            * Se o preço estiver em promoção, use o valor promocional
-            * Nunca use 0 se o preço estiver visível na imagem
-         5. Categoria (Sofá, Mesa, Cadeira, Estante, Poltrona, etc.)
-         6. Materiais utilizados na fabricação
-         7. Cores disponíveis
-         8. Dimensões (largura, altura, profundidade em cm)
-         
-         IMPORTANTE:
-         - Analise TODA a imagem cuidadosamente e extraia TODOS os produtos visíveis
-         - Não ignore nenhum produto, mesmo se estiver parcialmente visível
-         - Examine cuidadosamente tabelas, listas de preços e etiquetas nos móveis
-         - Se uma informação não estiver disponível na imagem, use null
-         - Não adicione informações que não estejam visíveis na imagem
-         - Retorne os dados em formato JSON com a seguinte estrutura:
-           {
-             "products": [
-               {
-                 "name": "Nome do Produto",
-                 "description": "Descrição detalhada",
-                 "code": "CÓDIGO-123",
-                 "price": 489000,
-                 "category": "Sofá",
-                 "materials": ["Madeira", "Tecido"],
-                 "colors": ["Azul", "Cinza"],
-                 "dimensions": {"width": 180, "height": 90, "depth": 70}
-               },
-               {...}
-             ]
-           }`;
-    
-    // Prompt específico para o usuário
-    const userPrompt = isFratiniCatalog
-      ? "Analise esta imagem de um catálogo Fratini e extraia TODOS os produtos visíveis com suas informações completas (nome, descrição, código, preço, cores, materiais). Inclua TODOS os produtos mostrados, mesmo que sejam muitos. Não pule nenhum produto visível."
-      : "Analise esta imagem de um catálogo de móveis e extraia TODOS os produtos visíveis com todas as informações disponíveis. Inclua TODOS os produtos mostrados na imagem, não apenas os principais. Não pule nenhum item.";
-    
-    console.log(`Enviando imagem para análise com GPT-4o (Página ${pageNumber})...`);
-    
-    // Fazer a chamada para a OpenAI com a imagem
+    // Chamada à API do OpenAI
     const response = await openai.chat.completions.create({
-      model: "gpt-4o", // o modelo mais recente da OpenAI (gpt-4o foi lançado em 13 de maio de 2024, não altere para gpt-4)
+      model: "gpt-4o",
+      response_format: { type: "json_object" },
       messages: [
-        { 
-          role: "system", 
-          content: systemMessage
+        {
+          role: "system",
+          content: systemPrompt
         },
-        { 
-          role: "user", 
+        {
+          role: "user",
           content: [
             {
               type: "text",
-              text: userPrompt
+              text: "Analise esta imagem de catálogo de móveis e extraia todos os produtos visíveis com seus detalhes completos em formato JSON. Inclua informações como nome, código, descrição, preço, dimensões, materiais, cores e categoria para cada produto."
             },
             {
               type: "image_url",
               image_url: {
-                url: `data:image/jpeg;base64,${base64Image}`
+                url: base64Data
               }
             }
-          ]
-        }
+          ],
+        },
       ],
       max_tokens: 4000,
-      temperature: 0.1, // Temperatura baixa para maior precisão
-      response_format: { type: "json_object" }
+      temperature: 0.2, // Valor baixo para maior precisão na extração factual
     });
     
-    // Extrair e processar a resposta
-    const responseContent = response.choices[0].message.content || '';
-    console.log(`Resposta recebida da OpenAI (tamanho: ${responseContent.length} caracteres)`);
+    // Obter o conteúdo da resposta
+    const content = response.choices[0].message.content;
     
-    // Tentar analisar a resposta como JSON
-    try {
-      const parsedResponse = JSON.parse(responseContent);
-      
-      // Verificar se a resposta contém produtos
-      if (parsedResponse && parsedResponse.products && Array.isArray(parsedResponse.products)) {
-        const products = parsedResponse.products;
-        console.log(`Extraídos ${products.length} produtos da imagem (Página ${pageNumber})`);
-        
-        // Salvar a imagem em arquivo e criar URL acessível
-        const imageFileName = `processed_${Date.now()}-${Math.floor(Math.random() * 1000000000)}-${path.basename(imagePath)}_${pageNumber}.jpg`;
-        const publicImagePath = path.join(process.cwd(), 'uploads', 'extracted_images', imageFileName);
-        
-        try {
-          // Assegurar que o diretório existe
-          const dir = path.dirname(publicImagePath);
-          if (!fs.existsSync(dir)) {
-            await mkdir(dir, { recursive: true });
-          }
-          
-          // Salvar o arquivo de imagem
-          await writeFile(publicImagePath, imageBuffer);
-          console.log(`Imagem salva com sucesso em: ${publicImagePath}`);
-          
-          // URL relativa para acesso web
-          const imageUrl = `/uploads/extracted_images/${imageFileName}`;
-          
-          // Adicionar atributos especiais a cada produto
-          return products.map((product: any) => ({
-            ...product,
-            // Armazenar a imagem de duas formas: como URL relativa e como base64 para garantir que seja exibida
-            imageUrl: imageUrl, // URL relativa para acesso web
-            image: `data:image/jpeg;base64,${base64Image}`, // Dados da imagem em base64
-            originalImage: base64Image, // Imagem original em base64 (sem prefix data:)
-            pageNumber,
-            // Garantir que os tipos de dados estejam corretos
-            price: typeof product.price === 'number' ? product.price : 
-                  typeof product.price === 'string' ? parseInt(product.price.replace(/\D/g, '')) : 0,
-            colors: Array.isArray(product.colors) ? product.colors : 
-                  typeof product.colors === 'string' ? [product.colors] : [],
-            materials: Array.isArray(product.materials) ? product.materials : 
-                      typeof product.materials === 'string' ? [product.materials] : []
-        }));
-      } else {
-        // Estrutura alternativa de resposta: o modelo pode não ter retornado um array em "products"
-        // Verificar se a resposta tem uma estrutura diferente mas utilizável
-        if (parsedResponse && Array.isArray(parsedResponse)) {
-          console.log(`Recebida resposta em formato de array direto com ${parsedResponse.length} produtos`);
-          
-          // Usar o array diretamente
-          const imagePathForUrl = `data:image/jpeg;base64,${base64Image}`;
-          
-          return parsedResponse.map((product: any) => ({
-            ...product,
-            imageUrl: imagePathForUrl,
-            pageNumber,
-            price: typeof product.price === 'number' ? product.price : 
-                  typeof product.price === 'string' ? parseInt(product.price.replace(/\D/g, '')) : 0,
-            colors: Array.isArray(product.colors) ? product.colors : 
-                  typeof product.colors === 'string' ? [product.colors] : [],
-            materials: Array.isArray(product.materials) ? product.materials : 
-                      typeof product.materials === 'string' ? [product.materials] : []
-          }));
-        }
-        
-        console.warn("Resposta da IA não contém array de produtos no formato esperado:", parsedResponse);
-        console.log("Resposta original:", responseContent);
-        
-        // Não criar produtos mock, lançar erro para forçar o tratamento adequado
-        throw new Error(`A IA não conseguiu extrair produtos da página ${pageNumber} no formato esperado. Resposta inválida.`);
-      }
-    } catch (parseError) {
-      console.error("Erro ao analisar resposta JSON da IA:", parseError);
-      console.log("Conteúdo da resposta:", responseContent);
-      
-      // Lançar erro para forçar o tratamento adequado
-      throw new Error(`A IA retornou uma resposta malformada para a página ${pageNumber}. Não foi possível analisar como JSON válido.`);
+    if (!content) {
+      console.error("OpenAI retornou resposta vazia");
+      return [];
     }
+    
+    try {
+      // Converter o JSON para objeto
+      const parsedResponse = JSON.parse(content);
+      
+      // Extração adaptativa - suporta diferentes formatos de resposta
+      let extractedProducts = [];
+      
+      // Formato 1: { "produtos": [...] }
+      if (parsedResponse.produtos && Array.isArray(parsedResponse.produtos)) {
+        extractedProducts = parsedResponse.produtos;
+      }
+      // Formato 2: { "products": [...] }
+      else if (parsedResponse.products && Array.isArray(parsedResponse.products)) {
+        extractedProducts = parsedResponse.products;
+      }
+      // Formato 3: { "items": [...] }
+      else if (parsedResponse.items && Array.isArray(parsedResponse.items)) {
+        extractedProducts = parsedResponse.items;
+      }
+      // Formato 4: Array direto [...]
+      else if (Array.isArray(parsedResponse)) {
+        extractedProducts = parsedResponse;
+      }
+      // Outro formato - tentar extrair array
+      else {
+        // Procurar primeira propriedade que seja um array
+        const arrayProps = Object.entries(parsedResponse)
+          .filter(([_, value]) => Array.isArray(value))
+          .map(([key, value]) => ({ key, length: (value as any[]).length }))
+          .sort((a, b) => b.length - a.length);
+        
+        if (arrayProps.length > 0) {
+          extractedProducts = parsedResponse[arrayProps[0].key];
+        } else {
+          console.error("Formato de resposta não reconhecido:", parsedResponse);
+          return [];
+        }
+      }
+      
+      // Normalizar produtos para o formato padrão do sistema
+      const normalizedProducts = extractedProducts.map((product: any, index: number) => {
+        // Mapeamento adaptativo de campos
+        const nome = product.nome || product.name || product.título || product.title || `Produto ${index + 1}`;
+        const codigo = product.codigo || product.code || product.referência || product.reference || `GPT-${index + 1}`;
+        const descricao = product.descricao || product.descrição || product.description || '';
+        const preco = product.preco || product.preço || product.price || 0;
+        
+        // Extrair dimensões
+        const dimensoesStr = product.dimensoes || product.dimensões || product.dimensions || '';
+        const dimensoes = extractDimensionsFromString(dimensoesStr);
+        
+        // Processar cores e materiais
+        const cores = product.cores || product.colors || [];
+        const materiais = product.materiais || product.materials || [];
+        
+        // Categoria
+        const categoria = product.categoria || product.category || 
+                         determineProductCategory(nome, descricao);
+        
+        // Normalizar para o formato de ExcelProduct
+        return {
+          nome,
+          codigo,
+          descricao,
+          preco: formatProductPrice(preco),
+          categoria,
+          cores: Array.isArray(cores) ? cores : [cores].filter(Boolean),
+          materiais: Array.isArray(materiais) ? materiais : [materiais].filter(Boolean),
+          // Adicionar dimensões extraídas, se disponíveis
+          ...(dimensoes || {}),
+          extractionMethod: 'openai-vision'
+        } as ExcelProduct;
+      });
+      
+      console.log(`OpenAI extraiu ${normalizedProducts.length} produtos da imagem`);
+      return normalizedProducts;
+      
+    } catch (parseError) {
+      console.error("Erro ao processar resposta da OpenAI:", parseError);
+      console.log("Conteúdo da resposta:", content);
+      return [];
+    }
+    
   } catch (error) {
-    console.error("Erro na extração de produtos da imagem:", error);
-    throw error;
+    console.error("Erro ao processar imagem com OpenAI:", error);
+    throw new Error(`Falha no processamento com OpenAI: ${error.message}`);
   }
 }
 
 /**
- * Processa produtos extraídos para garantir que estejam no formato esperado pela aplicação
+ * Processa um arquivo de imagem ou PDF para extrair produtos e suas imagens
+ * @param filePath Caminho para o arquivo
+ * @param fileName Nome do arquivo
+ * @param userId ID do usuário
+ * @param catalogId ID do catálogo
+ * @returns Lista de produtos extraídos com URLs de imagens
  */
-function processExtractedProducts(products: any[], userId: number, catalogId: number): any[] {
-  return products.map(product => {
-    // Determinar a categoria com base no nome do produto se não estiver definida
-    const category = product.category || determineProductCategory(product.name);
-    
-    // Extrair materiais da descrição se não estiverem definidos
-    const materials = Array.isArray(product.materials) && product.materials.length > 0 
-      ? product.materials 
-      : extractMaterialsFromDescription(product.description);
-    
-    // Processar dimensões para o formato esperado
-    let sizes = product.sizes || [];
-    if (!Array.isArray(sizes) && typeof sizes === 'object') {
-      // Converter objeto de dimensões para array
-      sizes = [sizes];
-    } else if (typeof sizes === 'string') {
-      // Tentar extrair dimensões de uma string
-      const dimensions = extractDimensionsFromString(sizes);
-      sizes = dimensions ? [dimensions] : [];
-    }
-    
-    // Verificar se tem imagem em base64 ou dimensões
-    const hasBase64Image = product.image && product.image.includes('base64');
-    const hasOriginalImage = product.originalImage && typeof product.originalImage === 'string';
-    
-    // Processar imagem para garantir que exista em algum formato
-    let imageUrl = product.imageUrl || '';
-    
-    // Se tiver imagem em base64 mas não tiver URL, criar URL
-    if ((hasBase64Image || hasOriginalImage) && !imageUrl) {
-      // Gerar um nome de arquivo temporário
-      const tempFileName = `product_${Date.now()}_${Math.floor(Math.random() * 1000000)}.jpg`;
-      imageUrl = `/uploads/extracted_images/${tempFileName}`;
-      console.log(`Criada URL temporária para imagem: ${imageUrl}`);
-    }
-    
-    // Retornar o produto no formato esperado
-    return {
-      userId,
-      catalogId,
-      name: product.name || "Produto sem nome",
-      description: product.description || "",
-      code: product.code || 'UNKNOWN-CODE',
-      price: typeof product.price === 'number' ? product.price : 0,
-      category: category || "Não categorizado",
-      colors: Array.isArray(product.colors) ? product.colors : [],
-      materials: materials,
-      sizes: Array.isArray(sizes) ? sizes : [],
-      imageUrl: imageUrl,
-      // Manter os dados da imagem em base64 para exibição/fallback
-      image: hasBase64Image ? product.image : null,
-      originalImage: hasOriginalImage ? product.originalImage : null
-  });
-}
-
-/**
- * Extrai dimensões de uma string no formato "LxAxP" ou similar
- */
-function extractDimensionsFromString(dimensionString: string): any | null {
+export async function processFileWithAdvancedAI(
+  filePath: string, 
+  fileName: string, 
+  userId: number | string, 
+  catalogId: number | string
+): Promise<ExcelProduct[]> {
+  console.log(`Processando arquivo ${fileName} com IA avançada...`);
+  
   try {
-    // Padrões comuns: "120x75x40cm", "L120 x A75 x P40 cm", etc.
-    const dimensions = dimensionString.toLowerCase().replace(/\s+/g, '');
-    const match = dimensions.match(/(\d+)[x×](\d+)[x×](\d+)/);
+    // Ler o arquivo
+    const fileBuffer = await readFile(filePath);
+    const fileBase64 = fileBuffer.toString('base64');
     
-    if (match) {
-      return {
-        width: parseInt(match[1]),
-        height: parseInt(match[2]),
-        depth: parseInt(match[3]),
-        label: dimensionString
-      };
+    // Usar OpenAI para extrair produtos
+    const products = await processImageWithOpenAI(fileBase64, fileName);
+    
+    // Se não há produtos, retornar lista vazia
+    if (!products || products.length === 0) {
+      console.warn(`Nenhum produto extraído de ${fileName}`);
+      return [];
     }
     
-    // Padrão alternativo: "L: 120cm, A: 75cm, P: 40cm"
-    const widthMatch = dimensions.match(/l[:]?(\d+)/);
-    const heightMatch = dimensions.match(/a[:]?(\d+)/);
-    const depthMatch = dimensions.match(/p[:]?(\d+)/);
-    
-    if (widthMatch || heightMatch || depthMatch) {
+    // Adicionar metadados e associar ao usuário/catálogo
+    const enhancedProducts = products.map((product, index) => {
       return {
-        width: widthMatch ? parseInt(widthMatch[1]) : null,
-        height: heightMatch ? parseInt(heightMatch[1]) : null,
-        depth: depthMatch ? parseInt(depthMatch[1]) : null,
-        label: dimensionString
+        ...product,
+        userId,
+        catalogId,
+        // Gerar um código único se não existir
+        codigo: product.codigo || `CAT${catalogId}-${index + 1}`,
+        // Adicionar data de processamento
+        processedAt: new Date().toISOString()
       };
+    });
+    
+    // Se for uma imagem única, associar a imagem diretamente aos produtos
+    // Upload da imagem para o Firebase Storage
+    const imageFileName = `catalog_${catalogId}_full_image.${path.extname(fileName).slice(1) || 'jpg'}`;
+    const imageUrl = await saveImageToFirebaseStorage(
+      fileBuffer,
+      imageFileName,
+      userId.toString(),
+      catalogId.toString()
+    );
+    
+    // Associar URL da imagem aos produtos
+    if (imageUrl) {
+      console.log(`Imagem salva no Firebase: ${imageUrl}`);
+      
+      // Adicionar URL da imagem a todos os produtos
+      return enhancedProducts.map(product => ({
+        ...product,
+        imageUrl
+      }));
     }
     
-    return null;
+    // Se o upload falhar, retornar produtos sem imagens
+    return enhancedProducts;
+    
   } catch (error) {
-    console.error("Erro ao extrair dimensões:", error);
-    return null;
+    console.error(`Erro ao processar arquivo ${fileName}:`, error);
+    throw error;
   }
 }

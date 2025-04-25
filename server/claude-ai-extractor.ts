@@ -1,268 +1,209 @@
+/**
+ * Módulo de extração de produtos com Anthropic Claude Vision
+ * 
+ * Este módulo implementa funções para extrair informações de produtos
+ * a partir de imagens de catálogos usando a API multimodal do Claude.
+ */
+
 import Anthropic from '@anthropic-ai/sdk';
 import fs from 'fs';
 import path from 'path';
 import { promisify } from 'util';
-import { determineProductCategory, extractMaterialsFromDescription } from './utils';
+import { ExcelProduct } from './excel-processor';
+import { formatProductPrice, extractDimensionsFromString, determineProductCategory } from './utils';
 
-// Promisified functions
 const readFile = promisify(fs.readFile);
-const writeFile = promisify(fs.writeFile);
-const mkdir = promisify(fs.mkdir);
 
-// Configurar Anthropic
+// Inicializar cliente Anthropic
+// the newest Anthropic model is "claude-3-7-sonnet-20250219" which was released February 24, 2025
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
 /**
- * Processador alternativo de catálogos usando Claude-3-7-Sonnet
- * Utilizado como backup quando o processador principal (GPT-4o) falha
+ * Converte uma imagem para base64
+ * @param imagePath Caminho para a imagem
+ * @returns String base64 da imagem
+ */
+async function imageToBase64(imagePath: string): Promise<string> {
+  const imageBuffer = await readFile(imagePath);
+  return imageBuffer.toString('base64');
+}
+
+/**
+ * Processa uma imagem com Claude Vision para extrair produtos
+ * @param imagePathOrBase64 Caminho para a imagem ou string base64
+ * @param filename Nome do arquivo para referência
+ * @param userId ID do usuário para associar
+ * @param catalogId ID do catálogo para associar
+ * @param pageNumber Número da página (opcional)
+ * @returns Array de produtos extraídos
  */
 export async function processImageWithClaude(
-  imagePath: string,
-  fileName: string,
-  userId: number,
-  catalogId: number,
-  pageNumber: number = 1
-): Promise<any[]> {
+  imagePathOrBase64: string,
+  filename: string,
+  userId: number | string,
+  catalogId: number | string,
+  pageNumber?: number
+): Promise<ExcelProduct[]> {
+  console.log(`Processando imagem ${filename} (página ${pageNumber || 'desconhecida'}) com Claude...`);
+  
   try {
-    console.log(`Iniciando processamento com Claude AI: ${fileName} (página ${pageNumber})`);
+    // Converter imagem para base64 se for um caminho de arquivo
+    let base64Image = imagePathOrBase64;
+    if (imagePathOrBase64.startsWith('/') || imagePathOrBase64.includes('\\')) {
+      base64Image = await imageToBase64(imagePathOrBase64);
+    }
     
-    // Ler a imagem como base64
-    const imageBuffer = await readFile(imagePath);
-    const base64Image = imageBuffer.toString('base64');
+    // Instruções específicas para Claude analisar catálogos de móveis
+    const systemPrompt = `Você é um assistente especializado em extrair informações detalhadas de catálogos de móveis.
     
-    // Determinar se é um catálogo Fratini
-    const isFratiniCatalog = fileName.toLowerCase().includes("fratini");
+    Ao analisar esta imagem de catálogo, extraia TODOS os produtos visíveis com seus detalhes:
     
-    // Definir o prompt para extração de produtos
-    const systemPrompt = isFratiniCatalog
-      ? `Você é um especialista em extrair informações detalhadas sobre produtos de móveis da marca Fratini.
-         Sua tarefa é analisar imagens de páginas de catálogos/tabelas de preço e extrair todos os produtos visíveis.
-         
-         ESPECIFICAÇÕES DA MARCA FRATINI:
-         1. Fratini é uma empresa brasileira de móveis para escritório, especialmente cadeiras, poltronas e banquetas
-         2. Os códigos de produtos Fratini geralmente seguem o padrão 1.XXXXX.XX.XXXX onde dígitos do meio indicam cores
-         3. Os preços são mostrados em Reais (R$)
-         4. Cada produto geralmente tem nome comercial, descrição, códigos de referência, cores e preços
-         
-         FORMATAÇÃO ESPERADA:
-         - Para cada produto visível na imagem, extraia: nome, descrição, código, preço, cores disponíveis e materiais
-         - Retorne os dados em formato estruturado JSON com produtos em um array
-         - Converta os preços para centavos (R$ 750,00 = 75000)
-         - Os códigos devem ser extraídos exatamente como aparecem na imagem
-         - Não tente adivinhar informações que não estão visíveis na imagem`
-      : `Você é um especialista em extrair informações sobre produtos de móveis a partir de imagens de catálogos.
-         Sua tarefa é analisar detalhadamente a imagem fornecida e identificar todos os produtos de móveis visíveis.
-         
-         Para cada produto, forneça as seguintes informações:
-         1. Nome completo do produto
-         2. Descrição detalhada
-         3. Código/referência do produto (se visível)
-         4. Preço em formato numérico (converta para centavos, ex: R$ 1.234,56 → 123456)
-         5. Categoria (Sofá, Mesa, Cadeira, Estante, Poltrona, etc.)
-         6. Materiais utilizados na fabricação
-         7. Cores disponíveis
-         8. Dimensões (largura, altura, profundidade em cm)
-         
-         IMPORTANTE:
-         - Extraia TODOS os produtos visíveis na imagem, não apenas os mais prominentes
-         - Se uma informação não estiver disponível na imagem, use null
-         - Não adicione informações que não estejam visíveis na imagem
-         - Retorne os dados em formato estruturado JSON com a chave "products" contendo um array de produtos`;
+    1. Nome do produto
+    2. Código do produto (se disponível) 
+    3. Descrição completa
+    4. Preço (formato brasileiro, como "R$ 1.299,00")
+    5. Dimensões no formato LxAxP (largura x altura x profundidade) em cm
+    6. Materiais (madeira, metal, tecido, vidro, etc.)
+    7. Cores disponíveis
+    8. Categoria do móvel
     
-    // Prompt específico para o usuário
-    const userPrompt = isFratiniCatalog
-      ? "Analise esta imagem de um catálogo Fratini e extraia TODOS os produtos visíveis com suas informações completas (nome, descrição, código, preço, cores, materiais). Inclua TODOS os produtos mostrados, mesmo que sejam muitos. Não pule nenhum produto visível."
-      : "Analise esta imagem de um catálogo de móveis e extraia TODOS os produtos visíveis com todas as informações disponíveis. Inclua TODOS os produtos mostrados na imagem, não apenas os principais. Não pule nenhum item.";
+    Formate sua resposta como um array JSON de produtos. Inclua TODOS os produtos visíveis na imagem.
     
-    console.log(`Enviando imagem para análise com Claude-3-7-Sonnet (Página ${pageNumber})...`);
+    Exemplo:
+    [
+      {
+        "nome": "Sofá Reclinável Berlin",
+        "codigo": "SR-2024",
+        "descricao": "Sofá reclinável de 3 lugares em tecido suede com estrutura em madeira maciça",
+        "preco": "R$ 3.499,90",
+        "dimensoes": "220x95x100 cm",
+        "materiais": ["Madeira", "Tecido", "Metal"],
+        "cores": ["Cinza", "Bege"],
+        "categoria": "Sofás"
+      },
+      {
+        "nome": "Mesa de Centro Oslo",
+        "codigo": "MC-105",
+        "descricao": "Mesa de centro retangular com tampo de vidro e estrutura em metal preto",
+        "preco": "R$ 899,90",
+        "dimensoes": "120x45x60 cm",
+        "materiais": ["Vidro", "Metal"],
+        "cores": ["Preto"],
+        "categoria": "Mesas"
+      }
+    ]
     
-    // Fazer a chamada para a Anthropic com a imagem
+    Certifique-se de que toda a informação extraída seja baseada exclusivamente no que está visível na imagem.`;
+    
+    // Chamada à API do Claude
     const response = await anthropic.messages.create({
-      model: "claude-3-7-sonnet-20250219", // o modelo mais recente da Anthropic foi lançado depois do seu conhecimento
+      model: 'claude-3-7-sonnet-20250219',
       max_tokens: 4000,
       system: systemPrompt,
       messages: [
-        { 
-          role: "user", 
+        {
+          role: 'user',
           content: [
             {
-              type: "text",
-              text: userPrompt
+              type: 'text',
+              text: 'Esta é uma página de catálogo de móveis. Extraia TODOS os produtos visíveis com seus detalhes completos.'
             },
             {
-              type: "image",
+              type: 'image',
               source: {
-                type: "base64",
-                media_type: "image/jpeg",
+                type: 'base64',
+                media_type: 'image/jpeg',
                 data: base64Image
               }
             }
-          ]
+          ],
         }
       ],
     });
     
-    // Extrair e processar a resposta
-    const contentBlock = response.content[0];
-    const responseContent = typeof contentBlock === 'object' && 'text' in contentBlock 
-      ? contentBlock.text 
-      : JSON.stringify(contentBlock);
-    console.log(`Resposta recebida do Claude (tamanho: ${responseContent.length} caracteres)`);
+    // Extrair o conteúdo da resposta
+    const content = response.content[0].text;
     
-    // Tentar analisar a resposta como JSON
-    try {
-      // Extrair apenas o JSON da resposta (pode vir com texto adicional)
-      const jsonMatch = responseContent.match(/\{[\s\S]*\}/);
-      const jsonString = jsonMatch ? jsonMatch[0] : responseContent;
-      
-      const parsedResponse = JSON.parse(jsonString);
-      
-      // Verificar se a resposta contém produtos
-      if (parsedResponse && parsedResponse.products && Array.isArray(parsedResponse.products)) {
-        const products = parsedResponse.products;
-        console.log(`Claude extraiu ${products.length} produtos da imagem (Página ${pageNumber})`);
-        
-        // Salvar a imagem base64 em cada produto
-        const imagePathForUrl = `data:image/jpeg;base64,${base64Image}`;
-        
-        // Adicionar atributos especiais a cada produto e retornar
-        return processExtractedProducts(
-          products.map((product: any) => ({
-            ...product,
-            imageUrl: imagePathForUrl,
-            pageNumber
-          })),
-          userId,
-          catalogId
-        );
-      } else if (parsedResponse && Array.isArray(parsedResponse)) {
-        console.log(`Claude retornou array direto com ${parsedResponse.length} produtos`);
-        
-        // Se a resposta for um array, usar diretamente
-        const imagePathForUrl = `data:image/jpeg;base64,${base64Image}`;
-        
-        // Adicionar atributos especiais a cada produto e retornar
-        return processExtractedProducts(
-          parsedResponse.map((product: any) => ({
-            ...product,
-            imageUrl: imagePathForUrl,
-            pageNumber
-          })),
-          userId,
-          catalogId
-        );
-      } else {
-        console.warn("Resposta do Claude não contém array de produtos no formato esperado");
-        console.log("Resposta original:", responseContent);
-        
-        // Criar produto único baseado na imagem
-        return processExtractedProducts([{
-          name: `Produto da Página ${pageNumber}`,
-          description: "Produto extraído automaticamente da imagem do catálogo",
-          code: `IMG-${pageNumber}-${Date.now().toString().slice(-5)}`,
-          price: 0,
-          category: "Não categorizado",
-          colors: [],
-          materials: [],
-          sizes: [],
-          imageUrl: `data:image/jpeg;base64,${base64Image}`,
-          pageNumber
-        }], userId, catalogId);
-      }
-    } catch (parseError) {
-      console.error("Erro ao analisar resposta JSON do Claude:", parseError);
-      console.log("Conteúdo da resposta:", responseContent);
-      
-      // Não gerar mais produtos fictícios, propagar o erro
-      throw new Error(`Falha ao processar resposta do modelo Claude. A resposta não pôde ser interpretada corretamente. Detalhes: ${parseError instanceof Error ? parseError.message : 'Erro ao analisar resposta JSON'}`);
-      
+    // Processar e limpar a resposta para extrair o JSON
+    const jsonContent = extractJsonFromResponse(content);
+    
+    if (!jsonContent) {
+      console.error('Não foi possível extrair JSON da resposta do Claude:', content);
+      return [];
     }
+    
+    try {
+      // Converter para objeto
+      const extractedProducts = JSON.parse(jsonContent) as any[];
+      
+      // Normalizar produtos para o formato padrão do sistema
+      const normalizedProducts = extractedProducts.map((product, index) => {
+        // Extrair dimensões da string se disponível
+        const dimensions = product.dimensoes ? 
+          extractDimensionsFromString(product.dimensoes) : null;
+        
+        // Normalizar formato
+        return {
+          nome: product.nome || `Produto em Catálogo ${index + 1}`,
+          codigo: product.codigo || `CAT${catalogId}-P${pageNumber || 1}-${index + 1}`,
+          descricao: product.descricao || '',
+          preco: formatProductPrice(product.preco || 0),
+          categoria: product.categoria || determineProductCategory(product.nome, product.descricao),
+          materiais: Array.isArray(product.materiais) ? product.materiais : 
+                     typeof product.materiais === 'string' ? [product.materiais] : [],
+          cores: Array.isArray(product.cores) ? product.cores : 
+                 typeof product.cores === 'string' ? [product.cores] : [],
+          // Adicionar dimensões se disponíveis
+          ...(dimensions || {}),
+          // Metadados
+          userId,
+          catalogId,
+          pageNumber: pageNumber || 1,
+          processedAt: new Date().toISOString(),
+          extractionMethod: 'claude-vision'
+        } as ExcelProduct;
+      });
+      
+      console.log(`Claude extraiu ${normalizedProducts.length} produtos da imagem`);
+      return normalizedProducts;
+      
+    } catch (parseError) {
+      console.error('Erro ao analisar JSON da resposta do Claude:', parseError);
+      console.log('Conteúdo que falhou:', jsonContent);
+      return [];
+    }
+    
   } catch (error) {
-    console.error("Erro no processamento com Claude AI:", error);
+    console.error('Erro ao processar imagem com Claude:', error);
     throw error;
   }
 }
 
 /**
- * Processa produtos extraídos para garantir que estejam no formato esperado pela aplicação
+ * Tenta extrair um JSON válido da resposta textual do Claude
+ * @param response Resposta do Claude
+ * @returns String JSON limpa ou null
  */
-function processExtractedProducts(products: any[], userId: number, catalogId: number): any[] {
-  return products.map(product => {
-    // Determinar a categoria com base no nome do produto se não estiver definida
-    const category = product.category || determineProductCategory(product.name || '');
-    
-    // Extrair materiais da descrição se não estiverem definidos
-    const materials = Array.isArray(product.materials) && product.materials.length > 0 
-      ? product.materials 
-      : extractMaterialsFromDescription(product.description || '');
-    
-    // Processar dimensões para o formato esperado
-    let sizes = product.sizes || product.dimensions || [];
-    if (!Array.isArray(sizes) && typeof sizes === 'object') {
-      // Converter objeto de dimensões para array
-      sizes = [sizes];
-    } else if (typeof sizes === 'string') {
-      // Tentar extrair dimensões de uma string
-      const dimensions = extractDimensionsFromString(sizes);
-      sizes = dimensions ? [dimensions] : [];
-    }
-    
-    // Retornar o produto no formato esperado
-    return {
-      userId,
-      catalogId,
-      name: product.name || "Produto sem nome",
-      description: product.description || "",
-      code: product.code || `UNKNOWN-CODE`,
-      price: typeof product.price === 'number' ? product.price : 
-            typeof product.price === 'string' ? parseInt(product.price.replace(/\D/g, '')) : 0,
-      category: category || "Não categorizado",
-      colors: Array.isArray(product.colors) ? product.colors : 
-              typeof product.colors === 'string' ? [product.colors] : [],
-      materials: materials,
-      sizes: Array.isArray(sizes) ? sizes : [],
-      imageUrl: product.imageUrl || ""
-    };
-  });
-}
-
-/**
- * Extrai dimensões de uma string no formato "LxAxP" ou similar
- */
-function extractDimensionsFromString(dimensionString: string): any | null {
-  try {
-    // Padrões comuns: "120x75x40cm", "L120 x A75 x P40 cm", etc.
-    const dimensions = dimensionString.toLowerCase().replace(/\s+/g, '');
-    const match = dimensions.match(/(\d+)[x×](\d+)[x×](\d+)/);
-    
-    if (match) {
-      return {
-        width: parseInt(match[1]),
-        height: parseInt(match[2]),
-        depth: parseInt(match[3]),
-        label: dimensionString
-      };
-    }
-    
-    // Padrão alternativo: "L: 120cm, A: 75cm, P: 40cm"
-    const widthMatch = dimensions.match(/l[:]?(\d+)/);
-    const heightMatch = dimensions.match(/a[:]?(\d+)/);
-    const depthMatch = dimensions.match(/p[:]?(\d+)/);
-    
-    if (widthMatch || heightMatch || depthMatch) {
-      return {
-        width: widthMatch ? parseInt(widthMatch[1]) : null,
-        height: heightMatch ? parseInt(heightMatch[1]) : null,
-        depth: depthMatch ? parseInt(depthMatch[1]) : null,
-        label: dimensionString
-      };
-    }
-    
-    return null;
-  } catch (error) {
-    console.error("Erro ao extrair dimensões:", error);
-    return null;
+function extractJsonFromResponse(response: string): string | null {
+  // Tentar extrair conteúdo entre colchetes para JSON de array
+  const arrayMatch = response.match(/\[\s*\{[^]*\}\s*\]/);
+  if (arrayMatch) {
+    return arrayMatch[0];
   }
+  
+  // Tentar extrair conteúdo entre chaves para JSON de objeto
+  const objectMatch = response.match(/\{\s*"[^]*"\s*:\s*[^]*\}/);
+  if (objectMatch) {
+    return objectMatch[0];
+  }
+  
+  // Procurar conteúdo dentro de blocos de código
+  const codeBlockMatch = response.match(/```(?:json)?\n([^]*?)```/);
+  if (codeBlockMatch) {
+    return codeBlockMatch[1].trim();
+  }
+  
+  return null;
 }

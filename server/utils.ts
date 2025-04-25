@@ -1,222 +1,210 @@
 /**
- * Utilitários para processamento de dados no sistema
+ * Utilitários para processamento de produtos e imagens
  */
 
 /**
- * Extrai dimensões de uma string no formato "LxAxP" ou similar
- * @param dimensionString String contendo informações de dimensão
- * @returns Objeto com dimensões extraídas ou null
+ * Formata o preço do produto para o formato brasileiro
+ * @param price Preço em qualquer formato (número ou string)
+ * @returns Preço formatado (ex: "R$ 1.299,90")
  */
-export function extractDimensionsFromString(dimensionString: string): any | null {
+export function formatProductPrice(price: number | string): string {
+  // Se for string, tentar converter para número
+  let numericPrice: number;
+  
+  if (typeof price === 'string') {
+    // Remover 'R$' e outros caracteres não numéricos, exceto pontos e vírgulas
+    const cleanPrice = price.replace(/[^\d.,]/g, '')
+      // Substituir vírgula por ponto para parsing
+      .replace(/,/g, '.');
+    
+    // Encontrar o último ponto (para sistemas que usam ponto como separador decimal)
+    const lastDotIndex = cleanPrice.lastIndexOf('.');
+    
+    if (lastDotIndex >= 0 && lastDotIndex < cleanPrice.length - 3) {
+      // Se houver mais de 2 decimais, ajustar formato
+      const intPart = cleanPrice.substring(0, lastDotIndex).replace(/\./g, '');
+      const decPart = cleanPrice.substring(lastDotIndex + 1);
+      numericPrice = parseFloat(`${intPart}.${decPart}`);
+    } else {
+      numericPrice = parseFloat(cleanPrice);
+    }
+  } else {
+    numericPrice = price;
+  }
+  
+  // Se não for um número válido, retornar valor padrão
+  if (isNaN(numericPrice)) {
+    return 'R$ 0,00';
+  }
+  
+  // Formatar para o padrão brasileiro
+  return new Intl.NumberFormat('pt-BR', {
+    style: 'currency',
+    currency: 'BRL',
+    minimumFractionDigits: 2
+  }).format(numericPrice);
+}
+
+/**
+ * Extrai dimensões de uma string no formato LxAxP ou similar
+ * @param dimensionString String com dimensões (ex: "120x45x60 cm")
+ * @returns Objeto com largura, altura e profundidade
+ */
+export function extractDimensionsFromString(dimensionString: string) {
   if (!dimensionString) return null;
   
-  // Normalizar string: remover espaços extras, converter vírgulas para pontos
-  const normalizedString = dimensionString
-    .replace(/\s+/g, ' ')
+  // Normalizar string (remover "cm" e outros caracteres, substituir vírgula por ponto)
+  const normalized = dimensionString
+    .toLowerCase()
+    .replace(/cm|metros|m|mm|"|'|pol|polegadas/g, '')
+    .replace(/[×x]/g, 'x')
     .replace(/,/g, '.')
-    .toLowerCase();
+    .trim();
   
-  // Padrões comuns de dimensões
-  // Ex: "100x50x75cm", "L: 100 x A: 50 x P: 75", "100 cm x 50 cm x 75 cm"
-  
-  // Padrão 1: "LxAxP" ou variações
-  const pattern1 = /(\d+[\.,]?\d*)[\s]*x[\s]*(\d+[\.,]?\d*)[\s]*x[\s]*(\d+[\.,]?\d*)[\s]*(cm|m)?/i;
-  
-  // Padrão 2: "L: 100 A: 50 P: 75" ou variações
-  const pattern2 = /L[\s]*:?[\s]*(\d+[\.,]?\d*)[\s]*(cm|m)?[\s]*A[\s]*:?[\s]*(\d+[\.,]?\d*)[\s]*(cm|m)?[\s]*P[\s]*:?[\s]*(\d+[\.,]?\d*)[\s]*(cm|m)?/i;
-  
-  // Padrão 3: "Largura: 100cm, Altura: 50cm, Profundidade: 75cm" ou variações
-  const pattern3 = /(?:larg|largura|comprimento|comp)[\s]*:?[\s]*(\d+[\.,]?\d*)[\s]*(cm|m)?.*?(?:alt|altura)[\s]*:?[\s]*(\d+[\.,]?\d*)[\s]*(cm|m)?.*?(?:prof|profundidade)[\s]*:?[\s]*(\d+[\.,]?\d*)[\s]*(cm|m)?/i;
-  
-  // Padrão 4: "100cm (L) x 50cm (A) x 75cm (P)" ou variações
-  const pattern4 = /(\d+[\.,]?\d*)[\s]*(cm|m)?[\s]*\(?[lL]\)?[\s]*x[\s]*(\d+[\.,]?\d*)[\s]*(cm|m)?[\s]*\(?[aA]\)?[\s]*x[\s]*(\d+[\.,]?\d*)[\s]*(cm|m)?[\s]*\(?[pP]\)?/i;
-  
-  let match;
-  
-  // Tentar padrão 1
-  match = normalizedString.match(pattern1);
-  if (match) {
-    const width = parseFloat(match[1]);
-    const height = parseFloat(match[2]);
-    const depth = parseFloat(match[3]);
-    const unit = match[4] || 'cm';
-    
-    // Aplicar conversão de unidades se necessário (m para cm)
-    const factor = unit.toLowerCase() === 'm' ? 100 : 1;
-    
+  // Padrão 1: formato "LxAxP"
+  const lxaxpMatch = normalized.match(/(\d+(?:\.\d+)?)\s*x\s*(\d+(?:\.\d+)?)\s*x\s*(\d+(?:\.\d+)?)/);
+  if (lxaxpMatch) {
     return {
-      largura: width * factor,
-      altura: height * factor,
-      profundidade: depth * factor,
-      unidade: 'cm', // Padronizado para cm
-      dimensoesOriginais: match[0]
+      largura: parseFloat(lxaxpMatch[1]),
+      altura: parseFloat(lxaxpMatch[2]),
+      profundidade: parseFloat(lxaxpMatch[3])
     };
   }
   
-  // Tentar padrão 2
-  match = normalizedString.match(pattern2);
-  if (match) {
-    const width = parseFloat(match[1]);
-    const height = parseFloat(match[3]);
-    const depth = parseFloat(match[5]);
-    
-    // Verificar unidades (pode ter unidades diferentes para cada dimensão)
-    const widthUnit = match[2] || 'cm';
-    const heightUnit = match[4] || 'cm';
-    const depthUnit = match[6] || 'cm';
-    
-    // Aplicar conversão de unidades
-    const widthFactor = widthUnit.toLowerCase() === 'm' ? 100 : 1;
-    const heightFactor = heightUnit.toLowerCase() === 'm' ? 100 : 1;
-    const depthFactor = depthUnit.toLowerCase() === 'm' ? 100 : 1;
-    
+  // Padrão 2: formato "L: XX A: XX P: XX"
+  const separateMatch = normalized.match(/l(?:argura)?:?\s*(\d+(?:\.\d+)?)[^\d]+a(?:ltura)?:?\s*(\d+(?:\.\d+)?)[^\d]+p(?:rof(?:undidade)?)?:?\s*(\d+(?:\.\d+)?)/);
+  if (separateMatch) {
     return {
-      largura: width * widthFactor,
-      altura: height * heightFactor,
-      profundidade: depth * depthFactor,
-      unidade: 'cm',
-      dimensoesOriginais: match[0]
+      largura: parseFloat(separateMatch[1]),
+      altura: parseFloat(separateMatch[2]),
+      profundidade: parseFloat(separateMatch[3])
     };
   }
   
-  // Tentar padrão 3
-  match = normalizedString.match(pattern3);
-  if (match) {
-    const width = parseFloat(match[1]);
-    const height = parseFloat(match[3]);
-    const depth = parseFloat(match[5]);
-    
-    // Verificar unidades
-    const widthUnit = match[2] || 'cm';
-    const heightUnit = match[4] || 'cm';
-    const depthUnit = match[6] || 'cm';
-    
-    // Aplicar conversão de unidades
-    const widthFactor = widthUnit.toLowerCase() === 'm' ? 100 : 1;
-    const heightFactor = heightUnit.toLowerCase() === 'm' ? 100 : 1;
-    const depthFactor = depthUnit.toLowerCase() === 'm' ? 100 : 1;
-    
+  // Padrão 3: Apenas números separados (pegar os 3 primeiros números encontrados)
+  const numbers = normalized.match(/\d+(?:\.\d+)?/g);
+  if (numbers && numbers.length >= 3) {
     return {
-      largura: width * widthFactor,
-      altura: height * heightFactor,
-      profundidade: depth * depthFactor,
-      unidade: 'cm',
-      dimensoesOriginais: match[0]
+      largura: parseFloat(numbers[0]),
+      altura: parseFloat(numbers[1]),
+      profundidade: parseFloat(numbers[2])
     };
   }
   
-  // Tentar padrão 4
-  match = normalizedString.match(pattern4);
-  if (match) {
-    const width = parseFloat(match[1]);
-    const height = parseFloat(match[3]);
-    const depth = parseFloat(match[5]);
-    
-    // Verificar unidades
-    const widthUnit = match[2] || 'cm';
-    const heightUnit = match[4] || 'cm';
-    const depthUnit = match[6] || 'cm';
-    
-    // Aplicar conversão de unidades
-    const widthFactor = widthUnit.toLowerCase() === 'm' ? 100 : 1;
-    const heightFactor = heightUnit.toLowerCase() === 'm' ? 100 : 1;
-    const depthFactor = depthUnit.toLowerCase() === 'm' ? 100 : 1;
-    
-    return {
-      largura: width * widthFactor,
-      altura: height * heightFactor,
-      profundidade: depth * depthFactor,
-      unidade: 'cm',
-      dimensoesOriginais: match[0]
-    };
-  }
-  
-  // Nenhum padrão encontrado
   return null;
 }
 
 /**
- * Formata um preço para padrão brasileiro (R$ XX.XXX,XX)
- * @param price Preço a ser formatado (string ou número)
- * @returns Preço formatado como string
+ * Determina a categoria do produto com base no nome e descrição
+ * @param nome Nome do produto
+ * @param descricao Descrição do produto
+ * @returns Categoria determinada
  */
-export function formatProductPrice(price: string | number): string {
-  if (!price) return 'R$ 0,00';
+export function determineProductCategory(nome: string, descricao: string): string {
+  const text = `${nome} ${descricao}`.toLowerCase();
   
-  // Se for uma string, verificar se já está formatada
-  if (typeof price === 'string') {
-    // Remover todos os caracteres que não sejam números, pontos ou vírgulas
-    const cleanPrice = price.replace(/[^\d.,]/g, '');
-    
-    // Se já está formatado como R$ X.XXX,XX ou similar, retornar como está
-    if (/^R\$\s*[\d.,]+$/.test(price)) {
-      return price;
+  // Lista de palavras-chave por categoria
+  const categoryKeywords = {
+    'Sofás': ['sofá', 'sofa', 'sofas', 'canto', 'reclinável', 'reclinavel', 'retrátil', 'retratil', 'chaise'],
+    'Poltronas': ['poltrona', 'puff', 'pufe', 'bergère', 'bergere', 'lounge'],
+    'Mesas': ['mesa', 'mesinha', 'console', 'aparador', 'bar', 'bancada', 'escrivaninha'],
+    'Mesas de Centro': ['mesa de centro', 'mesa centro', 'mesa lateral', 'mesa auxiliar', 'mesa de canto'],
+    'Mesas de Jantar': ['mesa de jantar', 'mesa jantar', 'mesa refeição', 'mesa refeicao'],
+    'Cadeiras': ['cadeira', 'banqueta', 'banco', 'tamborete', 'stool'],
+    'Bancos': ['banco', 'banqueta', 'puff', 'pufe'],
+    'Armários': ['armário', 'armario', 'roupeiro', 'guarda-roupa', 'guarda roupa', 'estante', 'buffet', 'aparador'],
+    'Cômodas': ['cômoda', 'comoda', 'gaveteiro', 'chest'],
+    'Estantes': ['estante', 'prateleira', 'livreiro', 'rack', 'painel'],
+    'Camas': ['cama', 'cabeceira', 'colchão', 'colchao', 'box', 'beliche', 'bicama'],
+    'Criados-mudos': ['criado mudo', 'criado-mudo', 'mesa cabeceira', 'mesa de cabeceira', 'nightstand'],
+    'Racks': ['rack', 'painel', 'tv', 'home theater', 'home cinema'],
+    'Escrivaninhas': ['escrivaninha', 'escritório', 'escritorio', 'desk', 'estação de trabalho', 'estacao de trabalho'],
+    'Jardim': ['jardim', 'varanda', 'externo', 'externa', 'outdoor', 'área externa', 'area externa'],
+    'Decoração': ['decoração', 'decoracao', 'vaso', 'espelho', 'quadro', 'tapete', 'luminária', 'luminaria']
+  };
+  
+  // Verificar cada categoria
+  for (const [category, keywords] of Object.entries(categoryKeywords)) {
+    for (const keyword of keywords) {
+      if (text.includes(keyword)) {
+        return category;
+      }
     }
-    
-    // Verificar se tem vírgula como separador decimal
-    if (cleanPrice.includes(',')) {
-      // Extrair parte decimal após a última vírgula
-      const parts = cleanPrice.split(',');
-      const decimal = parts.pop() || '00';
-      const integer = parts.join('').replace(/\./g, '');
-      
-      // Formatar com separadores de milhar
-      const formattedInteger = integer.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
-      return `R$ ${formattedInteger},${decimal.padEnd(2, '0').substring(0, 2)}`;
-    }
-    
-    // Formatar como número se não tiver formato específico
-    const numValue = parseFloat(cleanPrice.replace(/,/g, '.'));
-    if (isNaN(numValue)) return 'R$ 0,00';
-    
-    // Formatar com Intl.NumberFormat
-    return `R$ ${new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(numValue)}`;
   }
   
-  // Se for número, formatar direto
-  return `R$ ${new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(price)}`;
-}
-
-/**
- * Determina a categoria do produto com base no nome e descrição
- * @param name Nome do produto
- * @param description Descrição do produto
- * @returns Categoria detectada
- */
-export function determineProductCategory(name?: string, description?: string): string {
-  const text = `${name || ''} ${description || ''}`.toLowerCase();
-  
-  // Categorias de móveis
-  if (/sofa|sofá|sofas|sofás|chaise|recamier/i.test(text)) return 'Sofás';
-  if (/mesa|mesas|bancada|escrivaninha/i.test(text)) return 'Mesas';
-  if (/cadeira|cadeiras|poltrona|poltronas/i.test(text)) return 'Cadeiras';
-  if (/armario|armário|estante|estantes|rack|racks/i.test(text)) return 'Armários e Estantes';
-  if (/cama|camas|colchao|colchão|cabeceira/i.test(text)) return 'Camas';
-  if (/comoda|cômoda|criado|criado-mudo|mudo/i.test(text)) return 'Cômoda e Criados';
-  if (/acessorio|acessório|espelho|quadro|tapete/i.test(text)) return 'Acessórios';
-  
+  // Categoria padrão se nenhuma correspondência for encontrada
   return 'Outros';
 }
 
 /**
- * Extrai informações de materiais da descrição do produto
- * @param description Descrição do produto
- * @returns Array de materiais detectados
+ * Extrai materiais a partir da descrição do produto
+ * @param descricao Descrição do produto
+ * @returns Lista de materiais encontrados
  */
-export function extractMaterialsFromDescription(description?: string): string[] {
-  if (!description) return [];
+export function extractMaterialsFromDescription(descricao: string): string[] {
+  if (!descricao) return [];
   
-  const text = description.toLowerCase();
-  const materiais: string[] = [];
+  const text = descricao.toLowerCase();
   
-  if (/madeira|lamin|mdp|mdf|jequitiba|pinus|eucalipto/i.test(text)) materiais.push('Madeira');
-  if (/couro|courino|couro sintético|leath/i.test(text)) materiais.push('Couro');
-  if (/tecido|algodao|algodão|cotton|veludo|linho|suede|linen/i.test(text)) materiais.push('Tecido');
-  if (/vidro|glass|espelho|mirror/i.test(text)) materiais.push('Vidro');
-  if (/metal|metalico|metálico|inox|ferro|aluminio|alumínio|aço/i.test(text)) materiais.push('Metal');
-  if (/plastico|plástico|poliprop|polietil|acrilico|acrílico/i.test(text)) materiais.push('Plástico');
-  if (/marmore|mármore|granito|quartzo|pedra/i.test(text)) materiais.push('Pedra');
-  if (/rattan|vime|palha|junco|natural|fibra/i.test(text)) materiais.push('Fibras Naturais');
+  // Lista de materiais comuns em móveis
+  const commonMaterials = [
+    'madeira', 'mdf', 'mdp', 'compensado', 'maciça', 'maciça', 'pinus', 'eucalipto', 'carvalho', 'cedro',
+    'metal', 'alumínio', 'aluminio', 'aço', 'aco', 'ferro', 'inox',
+    'vidro', 'cristal', 'espelho',
+    'tecido', 'linho', 'algodão', 'algodao', 'poliéster', 'poliester', 'veludo', 'chenille', 'suede',
+    'couro', 'couro sintético', 'couro ecológico', 'couro sintetico', 'couro ecologico', 'corino',
+    'plástico', 'plastico', 'polipropileno', 'abs', 'acrílico', 'acrilico',
+    'mármore', 'marmore', 'granito', 'pedra', 'cerâmica', 'ceramica',
+    'vime', 'rattan', 'junco', 'palha', 'fibra natural'
+  ];
   
-  return materiais;
+  // Encontrar materiais na descrição
+  const foundMaterials = [];
+  
+  for (const material of commonMaterials) {
+    if (text.includes(material)) {
+      // Normalizar nome do material (primeira letra maiúscula)
+      const normalizedMaterial = material.charAt(0).toUpperCase() + material.slice(1);
+      foundMaterials.push(normalizedMaterial);
+    }
+  }
+  
+  return foundMaterials;
+}
+
+/**
+ * Gera um nome de arquivo único para armazenamento
+ * @param originalName Nome original do arquivo
+ * @param userId ID do usuário
+ * @param type Tipo do arquivo (catalog, product, etc)
+ * @returns Nome de arquivo único
+ */
+export function generateUniqueFileName(originalName: string, userId: string | number, type: string = 'generic'): string {
+  const timestamp = Date.now();
+  const randomStr = Math.random().toString(36).substring(2, 10);
+  const extension = originalName.split('.').pop()?.toLowerCase() || 'jpg';
+  
+  return `${type}_${userId}_${timestamp}_${randomStr}.${extension}`;
+}
+
+/**
+ * Valida se o texto contém informações de produto
+ * @param text Texto a ser validado
+ * @returns True se contém informações de produto
+ */
+export function validateProductText(text: string): boolean {
+  // Verificar se o texto tem um tamanho mínimo
+  if (!text || text.length < 10) return false;
+  
+  // Verificar se contém palavras-chave geralmente presentes em produtos
+  const hasPriceIndicator = /R\$|preço|preco|valor|custo|por apenas|por só|desconto|promoção/i.test(text);
+  const hasDimensionIndicator = /[0-9]+\s*x\s*[0-9]+|largura|altura|profundidade|dimensões|dimensao|tamanho|medida|cm|m²/i.test(text);
+  const hasMaterialIndicator = /madeira|tecido|couro|metal|vidro|mdf|mdp|aço|aco|alumínio|aluminio/i.test(text);
+  const hasProductIndicator = /código|codigo|referência|referencia|ref|modelo|marca|fabricante|garantia|frete/i.test(text);
+  
+  // Verificar se atende a pelo menos dois critérios
+  const criteria = [hasPriceIndicator, hasDimensionIndicator, hasMaterialIndicator, hasProductIndicator];
+  const matchCount = criteria.filter(c => c).length;
+  
+  return matchCount >= 2;
 }
