@@ -1835,6 +1835,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Rota para servir imagens extraídas
+  app.get("/uploads/extracted_images/:filename", (req: Request, res: Response) => {
+    try {
+      const { filename } = req.params;
+      
+      // Caminho da imagem no sistema de arquivos
+      const imagePath = path.join(process.cwd(), 'uploads', 'extracted_images', filename);
+      
+      console.log(`Servindo imagem extraída: ${imagePath}`);
+      
+      if (!fs.existsSync(imagePath)) {
+        console.error(`Imagem extraída não encontrada: ${imagePath}`);
+        // Gerar SVG placeholder
+        const svgContent = `
+        <svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400">
+          <rect width="600" height="400" fill="#dddddd" />
+          <text x="300" y="200" font-family="Arial" font-size="16" fill="#666666" text-anchor="middle">
+            Imagem não disponível (${filename})
+          </text>
+        </svg>`;
+        
+        res.setHeader('Content-Type', 'image/svg+xml');
+        return res.send(svgContent);
+      }
+      
+      // Determinar o tipo MIME com base na extensão do arquivo
+      const contentType = mime.lookup(filename) || 'application/octet-stream';
+      res.setHeader('Content-Type', contentType);
+      
+      // Servir o arquivo
+      res.sendFile(imagePath);
+    } catch (error) {
+      console.error('Erro ao servir imagem extraída:', error);
+      res.status(500).json({ message: "Erro ao servir imagem extraída" });
+    }
+  });
+
   // Adicionar rotas de teste
   addTestRoutes(app);
 
