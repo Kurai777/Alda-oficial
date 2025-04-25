@@ -2061,6 +2061,579 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Adicionar rotas de teste
   addTestRoutes(app);
+  
+  // Página HTML de teste para extração de imagens Excel
+  app.get("/test/excel-images", async (req: Request, res: Response) => {
+    try {
+      // Renderizar página HTML de teste
+      const htmlTemplate = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Teste de Extração de Imagens Excel</title>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>
+          body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+          }
+          h1 { color: #333; }
+          form {
+            margin-bottom: 20px;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+          }
+          .button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+          }
+          .button:hover {
+            background-color: #45a049;
+          }
+          pre {
+            background-color: #f5f5f5;
+            padding: 15px;
+            border-radius: 5px;
+            overflow-x: auto;
+          }
+          .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 20px;
+          }
+          .card {
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 15px;
+          }
+          .card img {
+            max-width: 100%;
+            height: auto;
+            margin-bottom: 10px;
+          }
+          .debug-panel {
+            background-color: #f8f9fa;
+            border: 1px solid #ddd;
+            padding: 10px;
+            margin-top: 20px;
+          }
+          .debug-panel h3 {
+            margin-top: 0;
+          }
+          .test-section {
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 1px dashed #ccc;
+          }
+        </style>
+      </head>
+      <body>
+        <h1>Teste de Extração de Imagens de Excel</h1>
+        
+        <div class="test-section">
+          <form action="/api/test/excel-images" method="post" enctype="multipart/form-data">
+            <h2>Envie um arquivo Excel com imagens</h2>
+            <p>Selecione um arquivo Excel (.xlsx ou .xls) que contenha imagens embutidas:</p>
+            <input type="file" name="file" accept=".xlsx,.xls" required>
+            <br><br>
+            <button type="submit" class="button">Processar Arquivo</button>
+          </form>
+          
+          <div id="results">
+            <p>Os resultados do processamento aparecerão aqui...</p>
+          </div>
+        </div>
+        
+        <div class="test-section">
+          <h2>Teste de Salvamento Direto de Imagens</h2>
+          <p>Esta opção salva uma imagem de teste diretamente no sistema de arquivos para verificar o funcionamento do salvamento e acesso.</p>
+          
+          <form id="testImageForm">
+            <button type="submit" class="button">Testar Salvamento de Imagem</button>
+          </form>
+          
+          <div id="imageTestResults">
+            <p>Os resultados do teste de imagem aparecerão aqui...</p>
+          </div>
+        </div>
+        
+        <div class="test-section">
+          <h2>Verificar Imagens Salvas</h2>
+          <p>Verifica a existência de imagens salvas localmente.</p>
+          
+          <form id="checkImagesForm">
+            <button type="submit" class="button">Verificar Imagens</button>
+          </form>
+          
+          <div id="checkImagesResults">
+            <p>Os resultados da verificação aparecerão aqui...</p>
+          </div>
+        </div>
+        
+        <script>
+          // Formulário principal de processamento de Excel
+          document.querySelector('form[action="/api/test/excel-images"]').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const form = e.target;
+            const formData = new FormData(form);
+            
+            // Atualizar mensagem
+            document.querySelector('#results').innerHTML = '<p>Processando arquivo... Isso pode levar alguns segundos.</p>';
+            
+            try {
+              const response = await fetch(form.action, {
+                method: form.method,
+                body: formData
+              });
+              
+              const data = await response.json();
+              
+              // Mostrar resultados
+              let html = '<h2>Resultados</h2>';
+              
+              if (data.error) {
+                html += \`<div class="error"><p>Erro: \${data.error}</p>\`;
+                if (data.details) {
+                  html += \`<p>\${data.details}</p>\`;
+                }
+                html += '</div>';
+              } else {
+                html += \`<p>\${data.message}</p>\`;
+                
+                // Mostrar resultados da extração JS
+                if (data.results?.js) {
+                  html += '<h3>Extração via JavaScript</h3>';
+                  html += \`<p>Detecção: \${data.results.js.hasImages ? 'Imagens detectadas' : 'Nenhuma imagem detectada'}</p>\`;
+                  
+                  if (data.results.js.products && data.results.js.products.length > 0) {
+                    html += \`<p>Produtos com imagens: \${data.results.js.products.filter(p => p.imageUrl).length} de \${data.results.js.products.length}</p>\`;
+                    
+                    // Mostrar amostra de produtos
+                    html += '<div class="grid">';
+                    for (const product of data.results.js.products.slice(0, 10)) {
+                      html += '<div class="card">';
+                      if (product.imageUrl) {
+                        html += \`<img src="\${product.imageUrl}" alt="\${product.name || product.code}" onerror="this.onerror=null; this.src='/placeholder.jpg'; this.title='Erro ao carregar imagem: ' + this.src;">\`;
+                        html += \`<p>URL: \${product.imageUrl}</p>\`;
+                      } else {
+                        html += '<p>Sem imagem</p>';
+                      }
+                      html += \`<p><strong>\${product.name || 'Sem nome'}</strong></p>\`;
+                      html += \`<p>Código: \${product.code || 'N/A'}</p>\`;
+                      html += '</div>';
+                    }
+                    html += '</div>';
+                  }
+                }
+                
+                // Mostrar resultados da extração Python
+                if (data.results?.python) {
+                  html += '<h3>Extração via Python</h3>';
+                  html += \`<p>Detecção: \${data.results.python.hasImages ? 'Imagens detectadas' : 'Nenhuma imagem detectada'}</p>\`;
+                  
+                  if (data.results.python.products && data.results.python.products.length > 0) {
+                    html += \`<p>Produtos com imagens: \${data.results.python.products.filter(p => p.imageUrl).length} de \${data.results.python.products.length}</p>\`;
+                    
+                    // Mostrar amostra de produtos
+                    html += '<div class="grid">';
+                    for (const product of data.results.python.products.slice(0, 10)) {
+                      html += '<div class="card">';
+                      if (product.imageUrl) {
+                        html += \`<img src="\${product.imageUrl}" alt="\${product.name || product.code}" onerror="this.onerror=null; this.src='/placeholder.jpg'; this.title='Erro ao carregar imagem: ' + this.src;">\`;
+                        html += \`<p>URL: \${product.imageUrl}</p>\`;
+                      } else {
+                        html += '<p>Sem imagem</p>';
+                      }
+                      html += \`<p><strong>\${product.name || 'Sem nome'}</strong></p>\`;
+                      html += \`<p>Código: \${product.code || 'N/A'}</p>\`;
+                      html += '</div>';
+                    }
+                    html += '</div>';
+                  }
+                }
+                
+                // Mostrar informações de debug se disponíveis
+                if (data.debugInfo) {
+                  html += '<div class="debug-panel">';
+                  html += '<h3>Informações de Debug</h3>';
+                  html += '<pre>' + JSON.stringify(data.debugInfo, null, 2) + '</pre>';
+                  html += '</div>';
+                }
+              }
+              
+              document.querySelector('#results').innerHTML = html;
+              
+            } catch (error) {
+              document.querySelector('#results').innerHTML = \`<p>Erro: \${error.message}</p>\`;
+            }
+          });
+          
+          // Formulário de teste de salvamento de imagem
+          document.getElementById('testImageForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const resultsDiv = document.getElementById('imageTestResults');
+            resultsDiv.innerHTML = '<p>Testando salvamento de imagem...</p>';
+            
+            try {
+              const response = await fetch('/api/test/save-image', {
+                method: 'POST'
+              });
+              
+              const data = await response.json();
+              
+              let html = '<h3>Resultado do Teste de Imagem</h3>';
+              
+              if (data.error) {
+                html += \`<div class="error"><p>Erro: \${data.error}</p>\`;
+                if (data.details) {
+                  html += \`<p>\${data.details}</p>\`;
+                }
+                html += '</div>';
+              } else {
+                html += \`<p>\${data.message}</p>\`;
+                
+                if (data.imageUrl) {
+                  html += '<div style="border: 1px solid #ddd; padding: 15px; text-align: center; margin-top: 15px;">';
+                  html += \`<img src="\${data.imageUrl}" alt="Imagem de teste" style="max-width: 300px; max-height: 300px;" onerror="this.onerror=null; this.src='/placeholder.jpg'; this.title='Erro ao carregar imagem';">\`;
+                  html += \`<p>URL da imagem: \${data.imageUrl}</p>\`;
+                  html += '</div>';
+                }
+                
+                if (data.debugInfo) {
+                  html += '<div class="debug-panel">';
+                  html += '<h3>Informações de Debug</h3>';
+                  html += '<pre>' + JSON.stringify(data.debugInfo, null, 2) + '</pre>';
+                  html += '</div>';
+                }
+              }
+              
+              resultsDiv.innerHTML = html;
+              
+            } catch (error) {
+              resultsDiv.innerHTML = \`<p>Erro: \${error.message}</p>\`;
+            }
+          });
+          
+          // Formulário de verificação de imagens
+          document.getElementById('checkImagesForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const resultsDiv = document.getElementById('checkImagesResults');
+            resultsDiv.innerHTML = '<p>Verificando imagens salvas...</p>';
+            
+            try {
+              const response = await fetch('/api/test/check-images', {
+                method: 'GET'
+              });
+              
+              const data = await response.json();
+              
+              let html = '<h3>Resultado da Verificação</h3>';
+              
+              if (data.error) {
+                html += \`<div class="error"><p>Erro: \${data.error}</p></div>\`;
+              } else {
+                html += \`<p>Status: \${data.message}</p>\`;
+                
+                if (data.images && data.images.length > 0) {
+                  html += \`<p>Encontradas \${data.images.length} imagens:</p>\`;
+                  
+                  html += '<div class="grid">';
+                  for (const image of data.images) {
+                    html += '<div class="card">';
+                    html += \`<img src="\${image.url}" alt="\${image.name}" onerror="this.onerror=null; this.src='/placeholder.jpg'; this.title='Erro ao carregar imagem';">\`;
+                    html += \`<p>\${image.name}</p>\`;
+                    html += \`<p>Caminho: \${image.path}</p>\`;
+                    html += '</div>';
+                  }
+                  html += '</div>';
+                } else {
+                  html += '<p>Nenhuma imagem encontrada nos diretórios esperados.</p>';
+                }
+              }
+              
+              resultsDiv.innerHTML = html;
+              
+            } catch (error) {
+              resultsDiv.innerHTML = \`<p>Erro: \${error.message}</p>\`;
+            }
+          });
+        </script>
+      </body>
+      </html>`;
+
+      res.send(htmlTemplate);
+    } catch (error) {
+      console.error('Erro na rota de teste de imagens Excel:', error);
+      res.status(500).send(\`Erro: \${error instanceof Error ? error.message : 'Erro desconhecido'}\`);
+    }
+  });
+  
+  // Rota para testar o salvamento direto de imagens
+  app.post('/api/test/save-image', async (req: Request, res: Response) => {
+    try {
+      // Importar a função de salvamento de imagens
+      const { saveImageToFirebaseStorage } = await import('./firebase-admin');
+      
+      // Criar uma imagem de teste simples (10x10 pixel vermelho)
+      const { createCanvas } = await import('canvas');
+      const imageSize = 100;
+      const canvas = createCanvas(imageSize, imageSize);
+      const ctx = canvas.getContext('2d');
+      
+      // Preencher com vermelho
+      ctx.fillStyle = 'red';
+      ctx.fillRect(0, 0, imageSize, imageSize);
+      
+      // Adicionar texto para identificação
+      ctx.fillStyle = 'white';
+      ctx.font = '14px Arial';
+      ctx.fillText('Teste', 30, 50);
+      
+      // Converter para buffer PNG
+      const buffer = canvas.toBuffer('image/png');
+      
+      // Nome de arquivo para o teste
+      const testFileName = `test-image-${Date.now()}.png`;
+      const userId = '1';
+      const catalogId = 'local-1';
+      
+      // Salvar a imagem
+      const imageUrl = await saveImageToFirebaseStorage(
+        buffer,
+        testFileName,
+        userId,
+        catalogId
+      );
+      
+      // Verificar se a imagem foi salva
+      let imageExists = false;
+      let fullPath = '';
+      
+      if (imageUrl && !imageUrl.startsWith('https://mock-firebase-storage.com')) {
+        // Extrair o caminho real do arquivo
+        const localPath = imageUrl.replace('/api/images/', '');
+        const pathParts = localPath.split('/');
+        const urlUserId = pathParts[0];
+        const urlCatalogId = pathParts[1];
+        const fileName = pathParts[2];
+        
+        fullPath = path.join(process.cwd(), 'uploads', 'images', urlUserId, urlCatalogId, fileName);
+        imageExists = fs.existsSync(fullPath);
+      }
+      
+      // Verificar a imagem na localização de compatibilidade
+      const compatPath = path.join(process.cwd(), 'uploads', 'images', '1', 'local-1', testFileName);
+      const compatExists = fs.existsSync(compatPath);
+      
+      res.status(200).json({
+        message: 'Teste de salvamento de imagem concluído',
+        imageUrl,
+        imageExists,
+        compatExists,
+        debugInfo: {
+          fileName: testFileName,
+          userId,
+          catalogId,
+          regularPath: fullPath,
+          compatPath
+        }
+      });
+      
+    } catch (error) {
+      console.error('Erro no teste de salvamento de imagem:', error);
+      res.status(500).json({
+        error: 'Falha no teste de salvamento de imagem',
+        details: error instanceof Error ? error.message : 'Erro desconhecido'
+      });
+    }
+  });
+  
+  // Rota para testar a extração de imagens do Excel
+  app.post('/api/test/excel-images', upload.single('file'), async (req: Request, res: Response) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ 
+          error: 'Nenhum arquivo enviado', 
+          details: 'É necessário enviar um arquivo Excel (.xlsx ou .xls) para o teste' 
+        });
+      }
+      
+      // Verificar tipo de arquivo
+      const fileType = req.file.mimetype;
+      if (!fileType.includes('excel') && !fileType.includes('spreadsheet') && 
+          !(req.file.originalname.endsWith('.xlsx') || req.file.originalname.endsWith('.xls'))) {
+        return res.status(400).json({
+          error: 'Tipo de arquivo inválido',
+          details: 'Apenas arquivos Excel (.xlsx ou .xls) são suportados'
+        });
+      }
+      
+      const filePath = req.file.path;
+      const fileName = req.file.originalname;
+      
+      // Resultado da análise
+      const results: any = {
+        fileName: fileName,
+        js: {
+          hasImages: false,
+          method: 'JSZip + Excel.js',
+          products: []
+        },
+        python: {
+          hasImages: false,
+          method: 'openpyxl',
+          products: []
+        }
+      };
+      
+      // Etapa 1: Verificar se o arquivo Excel contém imagens (via JavaScript)
+      try {
+        // Importar verificador de imagens
+        const hasExcelImages = await import('./excel-image-detector');
+        const jsCheckResult = await hasExcelImages.default(filePath);
+        
+        results.js.hasImages = jsCheckResult;
+        
+        if (jsCheckResult) {
+          // Tentar extrair com JavaScript
+          const excelProcessor = await import('./fixed-excel-processor');
+          
+          // Configurar diretório para este teste
+          const extractedDir = path.join(process.cwd(), 'uploads', 'extracted_images', 'test');
+          if (!fs.existsSync(extractedDir)) {
+            fs.mkdirSync(extractedDir, { recursive: true });
+          }
+          
+          // Extrair produtos e imagens
+          const jsProducts = await excelProcessor.default(filePath, '1', 'local-1');
+          results.js.products = jsProducts || [];
+        }
+      } catch (error) {
+        console.error('Erro na detecção/extração JS:', error);
+        results.js.error = error instanceof Error ? error.message : 'Erro desconhecido';
+      }
+      
+      // Etapa 2: Verificar e extrair imagens via Python
+      try {
+        // Verificar se o Python está instalado
+        const pythonCheck = await import('./python-bridge');
+        const pyBridge = new pythonCheck.PythonBridge();
+        
+        // Verificar imagens com Python
+        const pyCheckResult = await pyBridge.checkExcelImages(filePath);
+        results.python.hasImages = pyCheckResult;
+        
+        if (pyCheckResult) {
+          // Extrair com Python
+          const pyProducts = await pyBridge.extractExcelWithImages(filePath, '1', 'local-1');
+          results.python.products = pyProducts || [];
+        }
+      } catch (error) {
+        console.error('Erro na detecção/extração Python:', error);
+        results.python.error = error instanceof Error ? error.message : 'Erro desconhecido';
+      }
+      
+      // Adicionar informações de debug
+      const debugInfo = {
+        file: {
+          name: fileName,
+          path: filePath,
+          size: fs.statSync(filePath).size,
+          type: fileType
+        },
+        uploadDir: path.join(process.cwd(), 'uploads'),
+        imagesDir: path.join(process.cwd(), 'uploads', 'images', '1', 'local-1'),
+        extractedDir: path.join(process.cwd(), 'uploads', 'extracted_images')
+      };
+      
+      // Verificar existência dos diretórios
+      debugInfo.dirExists = {
+        uploads: fs.existsSync(debugInfo.uploadDir),
+        images: fs.existsSync(debugInfo.imagesDir),
+        extracted: fs.existsSync(debugInfo.extractedDir)
+      };
+      
+      // Retornar resultados
+      res.status(200).json({
+        message: 'Arquivo processado com sucesso',
+        results,
+        debugInfo
+      });
+      
+    } catch (error) {
+      console.error('Erro no processamento do arquivo Excel:', error);
+      res.status(500).json({
+        error: 'Falha no processamento do arquivo Excel',
+        details: error instanceof Error ? error.message : 'Erro desconhecido'
+      });
+    }
+  });
+  
+  // Rota para verificar imagens salvas no sistema
+  app.get('/api/test/check-images', (req: Request, res: Response) => {
+    try {
+      const userId = '1';
+      const catalogId = 'local-1';
+      
+      // Diretório onde as imagens devem estar
+      const imagesDir = path.join(process.cwd(), 'uploads', 'images', userId, catalogId);
+      
+      // Verificar se o diretório existe
+      if (!fs.existsSync(imagesDir)) {
+        return res.status(200).json({
+          message: 'Diretório de imagens não encontrado',
+          path: imagesDir,
+          exists: false,
+          images: []
+        });
+      }
+      
+      // Listar os arquivos no diretório
+      const files = fs.readdirSync(imagesDir);
+      
+      // Filtrar apenas arquivos de imagem
+      const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
+      const imageFiles = files.filter(file => {
+        const ext = path.extname(file).toLowerCase();
+        return imageExtensions.includes(ext);
+      });
+      
+      // Criar lista de imagens com URLs
+      const images = imageFiles.map(file => {
+        return {
+          name: file,
+          path: path.join(imagesDir, file),
+          url: `/api/images/${userId}/${catalogId}/${file}`
+        };
+      });
+      
+      res.status(200).json({
+        message: `Encontradas ${images.length} imagens no diretório`,
+        path: imagesDir,
+        exists: true,
+        images
+      });
+      
+    } catch (error) {
+      console.error('Erro ao verificar imagens:', error);
+      res.status(500).json({
+        error: 'Falha ao verificar imagens',
+        details: error instanceof Error ? error.message : 'Erro desconhecido'
+      });
+    }
+  });
 
   const httpServer = createServer(app);
   return httpServer;
