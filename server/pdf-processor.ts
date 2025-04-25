@@ -185,11 +185,14 @@ export async function extractTextFromPDF(filePath: string): Promise<{ text: stri
       - Banquetas e cadeiras de espera
       
       ## ESTRUTURA DE PREÇOS E CÓDIGOS
-      - Cada produto pode ter múltiplas variações de cor, cada uma com seu próprio código comercial
+      - Cada produto tem múltiplas variações de cor, cada uma com seu próprio código comercial único
+      - IMPORTANTE: Cada código comercial deve ser tratado como um produto SEPARADO na extração
       - Os códigos comerciais seguem o formato numérico 1.XXXXX.XX.XXXX
+      - A parte central do código (XX após o segundo ponto) geralmente indica a cor
       - Preços variam entre R$50 até R$900 dependendo do produto
       - O documento segue a estrutura típica de um catálogo de produtos Fratini
-      - Todos os produtos devem ser identificados com seus códigos, preços e especificações completas
+      - TODOS os produtos devem ser identificados com seus códigos, preços e especificações completas
+      - Um único produto pode aparecer com vários códigos diferentes (um para cada cor)
       
       ## CONTEXTO ADICIONAL
       Este é um catálogo de produtos Fratini 2025, que é uma marca de móveis de escritório
@@ -241,24 +244,29 @@ export async function extractTextFromPDF(filePath: string): Promise<{ text: stri
     pdfText += `
 
     # INSTRUÇÕES PARA PROCESSAMENTO
-    Você deverá analisar o conteúdo acima e extrair informações estruturadas de todos os produtos mencionados.
+    IMPORTANTE: Você deverá analisar o conteúdo acima e extrair informações estruturadas de ABSOLUTAMENTE TODOS os produtos mencionados no catálogo, sem deixar nenhum de fora.
     
     Para cada produto, identifique:
     1. Nome completo do produto (name)
-    2. Código ou referência (code)
+    2. Código ou referência (code) - É ESSENCIAL identificar CADA código ÚNICO como um produto separado
     3. Preço em formato numérico (price) - multiplique por 100 para centavos
     4. Categoria (category) 
     5. Descrição detalhada (description)
     6. Lista de cores disponíveis (colors)
     7. Lista de materiais utilizados (materials)
     8. Informações de dimensões (sizes)
-    9. Número da página onde o produto aparece (pageNumber) - se disponível
+    9. Número da página onde o produto aparece (pageNumber)
     
-    Cada produto aparece como uma entrada distinta no catálogo, com suas próprias informações.
-    É necessário percorrer todo o documento para identificar todos os produtos.
+    ATENÇÃO - REGRAS IMPORTANTES:
+    - Cada código único de produto representa um item SEPARADO e deve ter sua própria entrada
+    - Para produtos com várias cores, CADA variação de cor com código próprio deve ser uma entrada SEPARADA
+    - NÃO agrupe diferentes códigos em um único item, mesmo que sejam o mesmo produto em cores diferentes
+    - É OBRIGATÓRIO identificar todos os produtos mencionados no texto, sem exceção
+    - Faça uma varredura completa de todo o documento para garantir que nenhum produto seja omitido
     
-    Extraímos ${extractedImages.length} imagens das páginas do catálogo. 
-    Cada produto deve estar associado a pelo menos uma dessas imagens.
+    Extraímos ${extractedImages.length} imagens das páginas do catálogo.
+    As imagens estão numeradas de acordo com o número da página - utilize o campo pageNumber para associar
+    corretamente cada produto à sua imagem da página correspondente.
     `;
     
     console.log(`Texto extraído com sucesso. Tamanho: ${pdfText.length} caracteres`);
