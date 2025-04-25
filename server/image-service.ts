@@ -157,7 +157,7 @@ export async function getProductImageInfo(productId: number): Promise<{
  * @param url URL mock no formato "https://mock-firebase-storage.com/{userId}/{catalogId}/{filename}"
  * @returns Objeto com os componentes da URL ou null se o formato for inválido
  */
-function extractMockUrlComponents(url: string): { userId: string; catalogId: string; filename: string } | null {
+export function extractMockUrlComponents(url: string): { userId: string; catalogId: string; filename: string } | null {
   try {
     // Padrão: https://mock-firebase-storage.com/{userId}/{catalogId}/{filename}
     const regex = /https:\/\/mock-firebase-storage\.com\/([^\/]+)\/([^\/]+)\/([^\/]+)/;

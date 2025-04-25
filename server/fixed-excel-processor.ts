@@ -54,12 +54,31 @@ export async function processExcelWithFixedColumns(
   try {
     console.log(`Processando Excel com colunas fixas: ${filePath}`);
     
+    // Verificar se existem diretórios para salvar imagens
+    const uploadsDir = path.join(process.cwd(), 'uploads');
+    const tempExcelImagesDir = path.join(uploadsDir, 'temp-excel-images');
+    const extractedImagesDir = path.join(uploadsDir, 'extracted_images');
+    
+    // Criar diretórios se não existirem
+    for (const dir of [uploadsDir, tempExcelImagesDir, extractedImagesDir]) {
+      if (!fs.existsSync(dir)) {
+        await mkdir(dir, { recursive: true });
+        console.log(`Diretório criado: ${dir}`);
+      }
+    }
+    
+    // Criar diretório específico para este processamento
+    const uniqueDirName = `excel_${Date.now()}`;
+    const processingDir = path.join(tempExcelImagesDir, uniqueDirName);
+    await mkdir(processingDir, { recursive: true });
+    console.log(`Diretório de processamento criado: ${processingDir}`);
+    
     // NOVO MÉTODO: Tentar usar o extrator direto que salva imagens localmente
     try {
       console.log(`Tentando usar método direto de extração de imagens para ${filePath}`);
       const { processExcelDirectly } = require('./direct-excel-extractor');
       
-      // Processar utilizando o método direto
+      // Processar utilizando o método direto com o diretório específico
       const directProducts = await processExcelDirectly(
         filePath, 
         String(userId || 'unknown'), 
@@ -67,6 +86,34 @@ export async function processExcelWithFixedColumns(
       );
       
       console.log(`Método direto extraiu ${directProducts.length} produtos com imagens locais`);
+      
+      // Verificar imagens extraídas
+      let productsWithImages = 0;
+      for (const product of directProducts) {
+        if (product.imageUrl) {
+          productsWithImages++;
+          console.log(`Produto ${product.nome || product.codigo} tem imagem: ${product.imageUrl}`);
+          
+          // Copiar a imagem também para o diretório de processamento
+          try {
+            if (product.imageUrl.startsWith('/uploads/')) {
+              const sourceImagePath = path.join(process.cwd(), product.imageUrl.substring(1));
+              
+              if (fs.existsSync(sourceImagePath)) {
+                const filename = path.basename(sourceImagePath);
+                const targetImagePath = path.join(processingDir, filename);
+                
+                // Copiar o arquivo
+                fs.copyFileSync(sourceImagePath, targetImagePath);
+                console.log(`Copiada imagem para ${targetImagePath}`);
+              }
+            }
+          } catch (copyError) {
+            console.error('Erro ao copiar imagem:', copyError);
+          }
+        }
+      }
+      console.log(`${productsWithImages} de ${directProducts.length} produtos têm imagens (${(productsWithImages / directProducts.length * 100).toFixed(1)}%)`);
       
       // Adicionar campos necessários
       const processedProducts = directProducts.map(product => ({

@@ -766,6 +766,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       console.log(`Processando arquivo: ${fileName}, tipo: ${fileType}, para usuário: ${userId}, caminho: ${filePath}`);
       
+      // Criar diretórios necessários para as imagens
+      const uploadsDir = path.join(process.cwd(), 'uploads');
+      const extractedImagesDir = path.join(uploadsDir, 'extracted_images');
+      const userImagesDir = path.join(uploadsDir, 'images', String(userId));
+      
+      // Garantir que os diretórios existam
+      for (const dir of [uploadsDir, extractedImagesDir, path.join(uploadsDir, 'images'), userImagesDir]) {
+        if (!fs.existsSync(dir)) {
+          await mkdir(dir, { recursive: true });
+          console.log(`Diretório criado: ${dir}`);
+        }
+      }
+      
       // Criar o catálogo com status "processando" no banco local
       let firestoreCatalogId = ""; // Será populado logo abaixo
       
@@ -2067,37 +2080,133 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { productId } = req.params;
       
       // Usar o novo serviço de imagens para obter informações da imagem
-      const { getProductImageInfo } = await import('./image-service');
-      const imageInfo = await getProductImageInfo(parseInt(productId));
+      const { getProductImageInfo, extractMockUrlComponents } = await import('./image-service');
+      console.log(`Buscando imagem para produto ID: ${productId}`);
       
-      // Se a URL for absoluta (http, https), redirecionar para ela
-      if (imageInfo.url.startsWith('http://') || imageInfo.url.startsWith('https://')) {
-        return res.redirect(imageInfo.url);
+      // Obter o produto do banco de dados
+      const product = await storage.getProduct(parseInt(productId));
+      if (product) {
+        console.log(`Produto encontrado: ${JSON.stringify(product)}`);
       }
       
-      // Se temos um caminho local completo, servir o arquivo diretamente
+      const imageInfo = await getProductImageInfo(parseInt(productId));
+      
+      // CASO 1: Se temos um caminho local completo, servir o arquivo diretamente
       if (imageInfo.localPath && fs.existsSync(imageInfo.localPath)) {
+        console.log(`Servindo arquivo local: ${imageInfo.localPath}`);
         res.setHeader('Content-Type', imageInfo.contentType);
         return res.sendFile(imageInfo.localPath);
       }
       
-      // Se for um placeholder, servir o arquivo do diretório public
+      // CASO 2: Tentar encontrar imagens de mock-firebase-storage.com nos diretórios locais
+      if (product?.imageUrl?.includes('mock-firebase-storage.com')) {
+        try {
+          const components = extractMockUrlComponents(product.imageUrl);
+          if (components) {
+            console.log(`URL mock detectada: ${product.imageUrl}`);
+            
+            // Verificar em vários diretórios possíveis
+            const possibleDirs = [
+              path.join(process.cwd(), 'uploads', 'temp-excel-images'),
+              path.join(process.cwd(), 'uploads', 'extracted_images')
+            ];
+            
+            // Procurar em todos os diretórios temporários
+            for (const dir of possibleDirs) {
+              if (fs.existsSync(dir)) {
+                // Procurar em pastas dentro do diretório
+                const subdirs = fs.readdirSync(dir);
+                
+                for (const subdir of subdirs) {
+                  const imagePath = path.join(dir, subdir, components.filename);
+                  
+                  if (fs.existsSync(imagePath)) {
+                    console.log(`Imagem encontrada em: ${imagePath}`);
+                    const contentType = mime.lookup(imagePath) || 'application/octet-stream';
+                    res.setHeader('Content-Type', contentType);
+                    return res.sendFile(imagePath);
+                  }
+                }
+                
+                // Procurar também diretamente no diretório
+                const imagePath = path.join(dir, components.filename);
+                if (fs.existsSync(imagePath)) {
+                  console.log(`Imagem encontrada em: ${imagePath}`);
+                  const contentType = mime.lookup(imagePath) || 'application/octet-stream';
+                  res.setHeader('Content-Type', contentType);
+                  return res.sendFile(imagePath);
+                }
+              }
+            }
+            
+            // Se não encontrou nos diretórios específicos, procurar em todo o diretório uploads
+            function walkDir(dir: string): string[] {
+              let results: string[] = [];
+              const list = fs.readdirSync(dir);
+              
+              for (const file of list) {
+                const filePath = path.join(dir, file);
+                const stat = fs.statSync(filePath);
+                
+                if (stat && stat.isDirectory()) {
+                  results = results.concat(walkDir(filePath));
+                } else {
+                  results.push(filePath);
+                }
+              }
+              
+              return results;
+            }
+            
+            try {
+              const uploadsDir = path.join(process.cwd(), 'uploads');
+              console.log(`Procurando ${components.filename} em todo diretório uploads...`);
+              
+              const allFiles = walkDir(uploadsDir);
+              const matchingFiles = allFiles.filter(f => path.basename(f) === components.filename);
+              
+              if (matchingFiles.length > 0) {
+                console.log(`Imagem encontrada após busca completa: ${matchingFiles[0]}`);
+                const contentType = mime.lookup(matchingFiles[0]) || 'application/octet-stream';
+                res.setHeader('Content-Type', contentType);
+                return res.sendFile(matchingFiles[0]);
+              }
+            } catch (walkError) {
+              console.error("Erro na busca recursiva:", walkError);
+            }
+          }
+        } catch (error) {
+          console.error("Erro ao processar URL mock:", error);
+        }
+      }
+      
+      // CASO 3: Se a URL for absoluta (http, https), mas não é mock, redirecionar
+      if (imageInfo.url.startsWith('http://') || imageInfo.url.startsWith('https://')) {
+        console.log(`Redirecionando para URL externa: ${imageInfo.url}`);
+        return res.redirect(imageInfo.url);
+      }
+      
+      // CASO 4: Se for um placeholder, servir o arquivo do diretório public
       if (imageInfo.url.startsWith('/placeholders/')) {
         const placeholderPath = path.join(process.cwd(), 'public', imageInfo.url);
+        console.log(`Tentando servir placeholder: ${placeholderPath}`);
+        
         if (fs.existsSync(placeholderPath)) {
           res.setHeader('Content-Type', imageInfo.contentType);
           return res.sendFile(placeholderPath);
         }
       }
       
-      // Para qualquer outra URL relativa, servir o arquivo se existir
+      // CASO 5: Para qualquer outra URL relativa, servir o arquivo se existir
       const fullPath = path.join(process.cwd(), imageInfo.url.startsWith('/') ? imageInfo.url.substring(1) : imageInfo.url);
+      console.log(`Tentando servir arquivo relativo: ${fullPath}`);
       if (fs.existsSync(fullPath)) {
         res.setHeader('Content-Type', imageInfo.contentType);
         return res.sendFile(fullPath);
       }
       
-      // Se nada foi encontrado, servir o fallback padrão
+      // CASO 6: Se nada foi encontrado, servir o fallback padrão
+      console.log(`Imagem não encontrada, usando placeholder padrão`);
       const defaultPlaceholder = path.join(process.cwd(), 'public', 'placeholders', 'default.svg');
       res.setHeader('Content-Type', 'image/svg+xml');
       return res.sendFile(defaultPlaceholder);
