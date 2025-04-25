@@ -2296,7 +2296,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { productId } = req.params;
       
       // Usar o novo serviço de imagens para obter informações da imagem
-      const { getProductImageInfo, extractMockUrlComponents, findActualImagePath } = await import('./image-service');
+      const { getProductImageInfo } = await import('./image-service');
       console.log(`Buscando imagem para produto ID: ${productId}`);
       
       // Obter o produto do banco de dados
@@ -2315,25 +2315,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // CASO 1: Se temos um caminho local completo, servir o arquivo diretamente
       if (imageInfo.localPath && fs.existsSync(imageInfo.localPath)) {
-        console.log(`Servindo arquivo local: ${imageInfo.localPath}`);
-        res.setHeader('Content-Type', imageInfo.contentType);
+        console.log(`Imagem encontrada utilizando serviço centralizado: ${imageInfo.localPath}`);
+        res.setHeader('Content-Type', imageInfo.contentType || 'image/jpeg');
         return res.sendFile(imageInfo.localPath);
       }
       
       // CASO 2: Tentar encontrar imagens de mock-firebase-storage.com nos diretórios locais
       if (product?.imageUrl?.includes('mock-firebase-storage.com')) {
         try {
-          const components = extractMockUrlComponents(product.imageUrl);
-          if (components) {
+          // Extrair nome do arquivo da URL
+          const matches = product.imageUrl.match(/\/([^\/]+)$/);
+          if (matches && matches[1]) {
+            const filename = matches[1];
             console.log(`URL mock detectada: ${product.imageUrl}`);
             
-            // Usar a função centralizada para encontrar a imagem
-            const imagePath = await findActualImagePath(components.filename);
-            if (imagePath) {
-              console.log(`Imagem encontrada utilizando serviço centralizado: ${imagePath}`);
-              const contentType = mime.lookup(imagePath) || 'application/octet-stream';
-              res.setHeader('Content-Type', contentType);
-              return res.sendFile(imagePath);
+            // Buscar todas as imagens disponíveis no diretório
+            const uploadsDir = path.join(process.cwd(), 'uploads', 'extracted_images');
+            if (fs.existsSync(uploadsDir)) {
+              const imagesInDir = fs.readdirSync(uploadsDir).filter(file => 
+                file.endsWith('.jpg') || file.endsWith('.png') || file.endsWith('.jpeg') || file.endsWith('.gif')
+              );
+              
+              // Verificar se temos alguma imagem
+              if (imagesInDir.length > 0) {
+                const imagePath = path.join(uploadsDir, imagesInDir[0]);
+                console.log(`Imagem similar a ${filename} encontrada: ${imagePath}`);
+                const contentType = mime.lookup(imagePath) || 'application/octet-stream';
+                res.setHeader('Content-Type', contentType);
+                return res.sendFile(imagePath);
+              }
             }
             
             // Verificar em vários diretórios possíveis
@@ -2349,7 +2359,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 const subdirs = fs.readdirSync(dir);
                 
                 for (const subdir of subdirs) {
-                  const imagePath = path.join(dir, subdir, components.filename);
+                  const imagePath = path.join(dir, subdir, filename);
                   
                   if (fs.existsSync(imagePath)) {
                     console.log(`Imagem encontrada em: ${imagePath}`);
@@ -2360,7 +2370,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 }
                 
                 // Procurar também diretamente no diretório
-                const imagePath = path.join(dir, components.filename);
+                const imagePath = path.join(dir, filename);
                 if (fs.existsSync(imagePath)) {
                   console.log(`Imagem encontrada em: ${imagePath}`);
                   const contentType = mime.lookup(imagePath) || 'application/octet-stream';
@@ -2391,10 +2401,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
             
             try {
               const uploadsDir = path.join(process.cwd(), 'uploads');
-              console.log(`Procurando ${components.filename} em todo diretório uploads...`);
+              console.log(`Procurando ${filename} em todo diretório uploads...`);
               
               const allFiles = walkDir(uploadsDir);
-              const matchingFiles = allFiles.filter(f => path.basename(f) === components.filename);
+              const matchingFiles = allFiles.filter(f => path.basename(f) === filename);
               
               if (matchingFiles.length > 0) {
                 console.log(`Imagem encontrada após busca completa: ${matchingFiles[0]}`);

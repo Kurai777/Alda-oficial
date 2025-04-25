@@ -1,676 +1,481 @@
 /**
- * Serviço de Imagens - Fornece acesso confiável às imagens de produtos
+ * Serviço Centralizado de Imagens de Produtos
  * 
- * Este serviço garante que todos os produtos tenham imagens, mesmo quando
- * as imagens originais não estiverem disponíveis, servindo imagens de fallback
- * baseadas na categoria do produto.
+ * Este serviço gerencia todas as operações relacionadas a imagens de produtos,
+ * garantindo que cada produto tenha sua própria imagem única e evitando
+ * o compartilhamento de imagens entre produtos diferentes.
  */
 
 import fs from 'fs';
 import path from 'path';
+import { promisify } from 'util';
+import * as crypto from 'crypto';
 import { storage } from './storage';
-import * as mimeTypes from 'mime-types';
+import { Product } from '@shared/schema';
 
-// Mapeamento de categorias para imagens de fallback
-const categoryMap: Record<string, string> = {
-  'sofa': 'sofa.svg',
-  'sofá': 'sofa.svg',
-  'sofas': 'sofa.svg',
-  'sofás': 'sofa.svg',
-  'mesa': 'mesa.svg',
-  'mesas': 'mesa.svg',
-  'poltrona': 'poltrona.svg',
-  'poltronas': 'poltrona.svg',
-  'armario': 'armario.svg',
-  'armário': 'armario.svg',
-  'armarios': 'armario.svg',
-  'armários': 'armario.svg',
-  'cadeira': 'poltrona.svg',
-  'cadeiras': 'poltrona.svg',
-  'estante': 'armario.svg',
-  'estantes': 'armario.svg',
-  'rack': 'armario.svg',
-  'racks': 'armario.svg',
-  // Adicione mais mapeamentos conforme necessário
-};
+// Converter funções de callback para promises
+const readFileAsync = promisify(fs.readFile);
+const writeFileAsync = promisify(fs.writeFile);
+const existsAsync = promisify(fs.exists);
+const mkdirAsync = promisify(fs.mkdir);
+const copyFileAsync = promisify(fs.copyFile);
+const readdirAsync = promisify(fs.readdir);
+
+// Diretórios para imagens
+const BASE_UPLOADS_DIR = path.join(process.cwd(), 'uploads');
+const PRODUCT_IMAGES_DIR = path.join(BASE_UPLOADS_DIR, 'product_images');
+const EXTRACTED_IMAGES_DIR = path.join(BASE_UPLOADS_DIR, 'extracted_images');
+const UNIQUE_IMAGES_DIR = path.join(BASE_UPLOADS_DIR, 'unique_product_images');
+
+// Garantir que os diretórios existam
+async function ensureDirectoriesExist(): Promise<void> {
+  const dirs = [PRODUCT_IMAGES_DIR, EXTRACTED_IMAGES_DIR, UNIQUE_IMAGES_DIR];
+  
+  for (const dir of dirs) {
+    if (!await existsAsync(dir)) {
+      await mkdirAsync(dir, { recursive: true });
+    }
+  }
+}
+
+// Chamada inicial para garantir que os diretórios existam
+ensureDirectoriesExist().catch(err => {
+  console.error('Erro ao criar diretórios de imagens:', err);
+});
 
 /**
- * Obtém a URL de imagem para um produto específico
+ * Interface para informações de imagem de produto
+ */
+export interface ProductImageInfo {
+  hasImage: boolean;
+  url?: string;
+  localPath?: string;
+  contentType?: string;
+  error?: string;
+}
+
+/**
+ * Busca informações de imagem para um produto específico
  * 
  * @param productId ID do produto
- * @returns Objeto contendo informações da imagem
+ * @returns Informações da imagem
  */
-export async function getProductImageInfo(productId: number): Promise<{
-  url: string;
-  contentType: string;
-  localPath?: string;
-  fallbackUsed: boolean;
-  category?: string;
-  productCode?: string;
-  isShared?: boolean;
-}> {
+export async function getProductImageInfo(productId: number): Promise<ProductImageInfo> {
   try {
-    // Busca o produto no banco de dados
+    // Buscar o produto
+    const product = await storage.getProduct(productId);
+    
+    if (!product) {
+      console.log(`Produto não encontrado: ${productId}`);
+      return {
+        hasImage: false,
+        error: 'Produto não encontrado'
+      };
+    }
+    
+    console.log(`Produto encontrado: ${JSON.stringify(product)}`);
+    
+    // Verificar se o produto tem uma URL de imagem
+    if (!product.imageUrl) {
+      console.log(`Produto ${productId} não tem URL de imagem`);
+      
+      // Tentar buscar imagem alternativa
+      try {
+        const altImageInfo = await findAlternativeImageForProduct(product);
+        if (altImageInfo.hasImage) {
+          return altImageInfo;
+        }
+      } catch (altError) {
+        console.error(`Erro ao buscar imagem alternativa:`, altError);
+      }
+      
+      return {
+        hasImage: false
+      };
+    }
+    
+    // Se a URL for uma URL local no formato /uploads/...
+    if (product.imageUrl.startsWith('/uploads/')) {
+      const localPath = path.join(process.cwd(), product.imageUrl);
+      
+      if (await existsAsync(localPath)) {
+        console.log(`Imagem local encontrada: ${localPath}`);
+        return {
+          hasImage: true,
+          url: product.imageUrl,
+          localPath,
+          contentType: getContentTypeFromPath(localPath)
+        };
+      } else {
+        console.log(`Imagem local não encontrada: ${localPath}`);
+      }
+    }
+    
+    // Se a URL for uma URL mock do Firebase
+    if (product.imageUrl.includes('mock-firebase-storage.com')) {
+      console.log(`URL mock detectada: ${product.imageUrl}`);
+      
+      // Extrair nome do arquivo da URL
+      const matches = product.imageUrl.match(/\/([^\/]+)$/);
+      if (!matches || !matches[1]) {
+        console.log(`URL de imagem inválida: ${product.imageUrl}`);
+        return {
+          hasImage: false,
+          error: 'URL de imagem inválida'
+        };
+      }
+      
+      const filename = matches[1];
+      
+      // Buscar a imagem localmente
+      const imageFilePaths = await searchAllDirectoriesForImage(filename);
+      
+      if (imageFilePaths.length > 0) {
+        console.log(`Imagem ${filename} encontrada: ${imageFilePaths[0]}`);
+        return {
+          hasImage: true,
+          url: product.imageUrl,
+          localPath: imageFilePaths[0],
+          contentType: getContentTypeFromPath(imageFilePaths[0])
+        };
+      }
+      
+      // Se não encontrou o arquivo exato, tentar encontrar uma imagem com nome similar
+      console.log(`Buscando imagem similar a ${filename}...`);
+      const similarImage = await findSimilarImage(filename);
+      
+      if (similarImage) {
+        console.log(`Imagem similar a ${filename} encontrada: ${similarImage}`);
+        return {
+          hasImage: true,
+          url: product.imageUrl,
+          localPath: similarImage,
+          contentType: getContentTypeFromPath(similarImage)
+        };
+      }
+    }
+    
+    // Se chegou aqui, a imagem não foi encontrada
+    console.log(`Imagem não encontrada para o produto ${productId}: ${product.imageUrl}`);
+    
+    // Tentar buscar imagem alternativa
+    try {
+      const altImageInfo = await findAlternativeImageForProduct(product);
+      if (altImageInfo.hasImage) {
+        return altImageInfo;
+      }
+    } catch (altError) {
+      console.error(`Erro ao buscar imagem alternativa:`, altError);
+    }
+    
+    return {
+      hasImage: false,
+      error: 'Imagem não encontrada'
+    };
+    
+  } catch (error) {
+    console.error('Erro ao buscar informações de imagem:', error);
+    return {
+      hasImage: false,
+      error: error.message
+    };
+  }
+}
+
+/**
+ * Cria uma cópia exclusiva de uma imagem para um produto
+ * 
+ * @param productId ID do produto
+ * @param sourceImagePath Caminho para a imagem de origem
+ * @returns Informações da nova imagem
+ */
+export async function createUniqueProductImage(
+  productId: number,
+  sourceImagePath: string
+): Promise<ProductImageInfo> {
+  try {
+    // Buscar o produto
     const product = await storage.getProduct(productId);
     
     if (!product) {
       return {
-        url: '/placeholders/default.svg',
-        contentType: 'image/svg+xml',
-        fallbackUsed: true
+        hasImage: false,
+        error: 'Produto não encontrado'
       };
     }
     
-    // Determina a categoria normalizada para o produto
-    const category = normalizeCategory(product.category || '');
+    // Garantir que o diretório exista
+    await ensureDirectoriesExist();
     
-    // Se o produto não tem URL de imagem ou a URL é inválida
-    if (!product.imageUrl || !isValidImageUrl(product.imageUrl)) {
-      // Tentar encontrar uma imagem alternativa baseada nos atributos do produto
-      const alternativeImage = await findAlternativeImageForProduct(product, category);
-      
-      if (alternativeImage) {
-        return {
-          url: alternativeImage.url,
-          contentType: alternativeImage.contentType,
-          localPath: alternativeImage.localPath,
-          fallbackUsed: false,
-          category,
-          productCode: product.code,
-          isShared: true
-        };
-      }
-      
-      return {
-        url: getCategoryPlaceholder(category),
-        contentType: 'image/svg+xml',
-        fallbackUsed: true,
-        category,
-        productCode: product.code
-      };
-    }
+    // Gerar um nome de arquivo único
+    const uniqueId = generateUniqueImageId(product, sourceImagePath);
+    const targetPath = path.join(UNIQUE_IMAGES_DIR, uniqueId);
     
-    // Verifica se é uma URL mock
-    if (product.imageUrl.includes('mock-firebase-storage.com')) {
-      // Extrai os componentes da URL
-      const components = extractMockUrlComponents(product.imageUrl);
-      
-      if (!components) {
-        // Tentar encontrar uma imagem alternativa
-        const alternativeImage = await findAlternativeImageForProduct(product, category);
-        
-        if (alternativeImage) {
-          return {
-            url: alternativeImage.url,
-            contentType: alternativeImage.contentType,
-            localPath: alternativeImage.localPath,
-            fallbackUsed: false,
-            category,
-            productCode: product.code,
-            isShared: true
-          };
-        }
-        
-        return {
-          url: getCategoryPlaceholder(category),
-          contentType: 'image/svg+xml',
-          fallbackUsed: true,
-          category,
-          productCode: product.code
-        };
-      }
-      
-      // Verificar se o arquivo existe em algum dos caminhos possíveis
-      const localPath = findImageLocalPath(components.userId, components.catalogId, components.filename);
-      
-      if (localPath) {
-        return {
-          url: localPath.replace(path.join(process.cwd()), ''),
-          contentType: mimeTypes.lookup(localPath) || 'application/octet-stream',
-          localPath,
-          fallbackUsed: false,
-          category,
-          productCode: product.code
-        };
-      }
-      
-      // Arquivo não encontrado, buscar alternativa
-      const alternativeImage = await findAlternativeImageForProduct(product, category);
-      
-      if (alternativeImage) {
-        return {
-          url: alternativeImage.url,
-          contentType: alternativeImage.contentType,
-          localPath: alternativeImage.localPath,
-          fallbackUsed: false,
-          category,
-          productCode: product.code,
-          isShared: true
-        };
-      }
-      
-      // Sem alternativa, usar fallback
-      return {
-        url: getCategoryPlaceholder(category),
-        contentType: 'image/svg+xml',
-        fallbackUsed: true,
-        category,
-        productCode: product.code
-      };
-    }
+    // Copiar a imagem
+    await copyFileAsync(sourceImagePath, targetPath);
     
-    // Para URLs absolutas (http, https), retorna a URL diretamente
-    if (product.imageUrl.startsWith('http://') || product.imageUrl.startsWith('https://')) {
-      return {
-        url: product.imageUrl,
-        contentType: 'image/jpeg', // Assume-se o tipo mais comum
-        fallbackUsed: false,
-        category,
-        productCode: product.code
-      };
-    }
+    // Criar URL para o produto
+    const productUrl = `/uploads/unique_product_images/${uniqueId}`;
     
-    // Para URLs relativas, verifica se o arquivo existe
-    const localPath = path.join(process.cwd(), product.imageUrl.startsWith('/') ? product.imageUrl.substring(1) : product.imageUrl);
+    // Atualizar o produto com a nova URL
+    await storage.updateProduct(productId, { imageUrl: productUrl });
     
-    if (fs.existsSync(localPath)) {
-      return {
-        url: product.imageUrl,
-        contentType: mimeTypes.lookup(localPath) || 'application/octet-stream',
-        localPath,
-        fallbackUsed: false,
-        category,
-        productCode: product.code
-      };
-    }
-    
-    // Arquivo não encontrado, buscar alternativa
-    const alternativeImage = await findAlternativeImageForProduct(product, category);
-    
-    if (alternativeImage) {
-      return {
-        url: alternativeImage.url,
-        contentType: alternativeImage.contentType,
-        localPath: alternativeImage.localPath,
-        fallbackUsed: false,
-        category,
-        productCode: product.code,
-        isShared: true
-      };
-    }
-    
-    // Sem alternativa, usar fallback
     return {
-      url: getCategoryPlaceholder(category),
-      contentType: 'image/svg+xml',
-      fallbackUsed: true,
-      category,
-      productCode: product.code
+      hasImage: true,
+      url: productUrl,
+      localPath: targetPath,
+      contentType: getContentTypeFromPath(targetPath)
     };
     
   } catch (error) {
-    console.error('Erro ao obter informações de imagem do produto:', error);
-    
-    // Em caso de erro, retorna o fallback padrão
+    console.error('Erro ao criar imagem única para produto:', error);
     return {
-      url: '/placeholders/default.svg',
-      contentType: 'image/svg+xml',
-      fallbackUsed: true
+      hasImage: false,
+      error: error.message
     };
   }
 }
 
 /**
- * Extrai os componentes de uma URL mock
- * 
- * @param url URL mock no formato "https://mock-firebase-storage.com/{userId}/{catalogId}/{filename}"
- * @returns Objeto com os componentes da URL ou null se o formato for inválido
+ * Procura por uma imagem em todos os diretórios de uploads
  */
-export function extractMockUrlComponents(url: string): { userId: string; catalogId: string; filename: string } | null {
-  try {
-    // Padrão: https://mock-firebase-storage.com/{userId}/{catalogId}/{filename}
-    const regex = /https:\/\/mock-firebase-storage\.com\/([^\/]+)\/([^\/]+)\/([^\/]+)/;
-    const match = url.match(regex);
-    
-    if (!match || match.length < 4) {
-      return null;
-    }
-    
-    return {
-      userId: match[1],
-      catalogId: match[2],
-      filename: match[3]
-    };
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Busca o caminho real da imagem em todos os diretórios possíveis
- * Esta função centraliza a busca por imagens locais
- * 
- * @param filename Nome do arquivo para procurar
- * @returns Caminho completo do arquivo encontrado ou null
- */
-export async function findActualImagePath(filename: string): Promise<string | null> {
-  try {
-    if (!filename) return null;
-    
-    const baseDir = process.cwd();
-    
-    // Lista de diretórios prioritários para busca
-    const priorityDirs = [
-      path.join(baseDir, 'uploads', 'temp-excel-images'),
-      path.join(baseDir, 'uploads', 'extracted_images'),
-      path.join(baseDir, 'uploads', 'images'),
-      path.join(baseDir, 'uploads')
-    ];
-    
-    // 1. Verificar diretamente nos diretórios principais
-    for (const dir of priorityDirs) {
-      if (fs.existsSync(dir)) {
-        const directPath = path.join(dir, filename);
-        if (fs.existsSync(directPath)) {
-          console.log(`Imagem ${filename} encontrada diretamente em ${dir}`);
-          return directPath;
-        }
-      }
-    }
-    
-    // 2. Verificar em todos os subdiretórios de primeiro nível
-    for (const dir of priorityDirs) {
-      if (fs.existsSync(dir)) {
-        try {
-          const subdirs = fs.readdirSync(dir).filter(item => {
-            const fullPath = path.join(dir, item);
-            return fs.statSync(fullPath).isDirectory();
-          });
-          
-          for (const subdir of subdirs) {
-            const imagePath = path.join(dir, subdir, filename);
-            if (fs.existsSync(imagePath)) {
-              console.log(`Imagem ${filename} encontrada em subdiretório: ${imagePath}`);
-              return imagePath;
-            }
-          }
-        } catch (error) {
-          console.error(`Erro ao ler diretório ${dir}:`, error);
-        }
-      }
-    }
-    
-    // 3. Busca recursiva como último recurso
-    // Começamos com o diretório uploads por ser mais específico
-    const uploadsDir = path.join(baseDir, 'uploads');
-    if (fs.existsSync(uploadsDir)) {
-      // Usar a função existente de getAllFilesRecursive
-      const allFiles = getAllFilesRecursive(uploadsDir);
-      
-      // Primeiro, tentar match exato pelo nome
-      const exactMatches = allFiles.filter(f => path.basename(f) === filename);
-      if (exactMatches.length > 0) {
-        console.log(`Imagem ${filename} encontrada por busca recursiva (match exato): ${exactMatches[0]}`);
-        return exactMatches[0];
-      }
-      
-      // Então, tentar match parcial (caso o nome tenha sido alterado)
-      // Extrair parte do nome sem números e extensão para comparação mais flexível
-      const baseFilename = filename.replace(/\d+/g, '').split('.')[0];
-      if (baseFilename.length > 3) { // Apenas se tiver um nome base significativo
-        const similarMatches = allFiles.filter(f => {
-          const baseName = path.basename(f).replace(/\d+/g, '').split('.')[0];
-          return baseName.includes(baseFilename) || baseFilename.includes(baseName);
-        });
-        
-        if (similarMatches.length > 0) {
-          console.log(`Imagem similar a ${filename} encontrada: ${similarMatches[0]}`);
-          return similarMatches[0];
-        }
-      }
-    }
-    
-    console.log(`Imagem ${filename} não encontrada em nenhum local`);
-    return null;
-  } catch (error) {
-    console.error(`Erro ao buscar imagem ${filename}:`, error);
-    return null;
-  }
-}
-
-/**
- * Tenta encontrar uma imagem alternativa para um produto com base em suas características
- * 
- * @param product Produto para o qual buscar imagem alternativa
- * @param category Categoria normalizada do produto
- * @returns Informações da imagem alternativa encontrada ou null
- */
-async function findAlternativeImageForProduct(product: any, category: string): Promise<{
-  url: string;
-  contentType: string;
-  localPath?: string;
-} | null> {
-  try {
-    // Se o produto não tem informações suficientes, não podemos encontrar uma alternativa
-    if (!product || !product.name) {
-      return null;
-    }
-    
-    const db = require('./db').db;
-    const { products } = require('@shared/schema');
-    const { eq, and, like, not, isNull } = require('drizzle-orm');
-    
-    // Estratégia 1: Buscar produtos com o mesmo nome/código e que tenham imagem
-    // Primeiro procuramos produtos no mesmo catálogo
-    let similarProducts = await db.query.products.findMany({
-      where: and(
-        eq(products.catalogId, product.catalogId),
-        eq(products.name, product.name),
-        not(eq(products.id, product.id)),
-        isNull(products.imageUrl, false)
-      ),
-      limit: 5
-    });
-    
-    // Se não encontrou no mesmo catálogo, busca em outros catálogos
-    if (!similarProducts || similarProducts.length === 0) {
-      similarProducts = await db.query.products.findMany({
-        where: and(
-          eq(products.name, product.name),
-          not(eq(products.id, product.id)),
-          isNull(products.imageUrl, false)
-        ),
-        limit: 5
-      });
-    }
-    
-    // Se encontrou produtos similares com imagem, verificar se alguma imagem existe
-    for (const similarProduct of similarProducts) {
-      if (similarProduct.imageUrl) {
-        const components = extractMockUrlComponents(similarProduct.imageUrl);
-        if (components) {
-          const imagePath = findImageLocalPath(components.userId, components.catalogId, components.filename);
-          if (imagePath) {
-            console.log(`Encontrada imagem alternativa para ${product.name} (ID: ${product.id}) de produto similar ID: ${similarProduct.id}`);
-            
-            return {
-              url: imagePath.replace(path.join(process.cwd()), ''),
-              contentType: mimeTypes.lookup(imagePath) || 'application/octet-stream',
-              localPath: imagePath
-            };
-          }
-        }
-      }
-    }
-    
-    // Estratégia 2: Buscar produtos da mesma categoria que tenham imagens
-    const categoryProducts = await db.query.products.findMany({
-      where: and(
-        eq(products.category, product.category),
-        not(eq(products.id, product.id)),
-        isNull(products.imageUrl, false)
-      ),
-      limit: 10
-    });
-    
-    // Verificar imagens de produtos da mesma categoria
-    for (const categoryProduct of categoryProducts) {
-      if (categoryProduct.imageUrl) {
-        const components = extractMockUrlComponents(categoryProduct.imageUrl);
-        if (components) {
-          const imagePath = findImageLocalPath(components.userId, components.catalogId, components.filename);
-          if (imagePath) {
-            console.log(`Encontrada imagem alternativa da mesma categoria para ${product.name} (ID: ${product.id}) de produto ID: ${categoryProduct.id}`);
-            
-            return {
-              url: imagePath.replace(path.join(process.cwd()), ''),
-              contentType: mimeTypes.lookup(imagePath) || 'application/octet-stream',
-              localPath: imagePath
-            };
-          }
-        }
-      }
-    }
-    
-    // Se chegou aqui, não encontrou imagem alternativa
-    return null;
-  } catch (error) {
-    console.error('Erro ao buscar imagem alternativa:', error);
-    return null;
-  }
-}
-
-/**
- * Retorna a contagem de caminhos possíveis para debugging
- */
-function getSearchPathCount(): number {
-  return 126; // Número aproximado baseado nas possibilidades atuais
-}
-
-/**
- * Verifica todos os caminhos possíveis onde uma imagem pode estar
- * 
- * @param userId ID do usuário
- * @param catalogId ID do catálogo
- * @param filename Nome do arquivo
- * @returns Caminho completo do arquivo se encontrado, ou null se não encontrado
- */
-function findImageLocalPath(userId: string, catalogId: string, filename: string): string | null {
-  // Normalizar o nome do arquivo (remover espaços, etc.)
-  const normalizedFilename = filename.trim().replace(/\s+/g, '_');
-  
-  // Obter o nome base e a extensão
-  const { name: baseName, ext: extension } = path.parse(normalizedFilename);
-  
-  // Lista de possíveis nomes de arquivo (para casos com ou sem sufixos/prefixos)
-  const possibleFilenames = [
-    normalizedFilename,
-    `${baseName}${extension || '.png'}`,  // Com extensão garantida
-    `${baseName}_0${extension || '.png'}`,
-    `${baseName}_1${extension || '.png'}`,
-    `img_${baseName}${extension || '.png'}`
-  ];
-  
-  // Lista de possíveis caminhos
-  const possiblePaths = [];
-  
-  // Para cada possível nome de arquivo
-  for (const fname of possibleFilenames) {
-    // 1. Caminho exato a partir dos parâmetros (se o arquivo existe diretamente)
-    possiblePaths.push(path.join(process.cwd(), 'uploads', 'images', userId, catalogId, fname));
-    
-    // 2. Caminhos alternativos com local-X
-    for (let i = 1; i <= 10; i++) {
-      possiblePaths.push(path.join(process.cwd(), 'uploads', 'images', userId, `local-${i}`, fname));
-    }
-    
-    // 3. Caminhos para userId = 1 (frequentemente usado no sistema)
-    possiblePaths.push(path.join(process.cwd(), 'uploads', 'images', '1', catalogId, fname));
-    
-    // 4. Todos os locais possíveis com userId = 1
-    for (let i = 1; i <= 10; i++) {
-      possiblePaths.push(path.join(process.cwd(), 'uploads', 'images', '1', `local-${i}`, fname));
-    }
-    
-    // 5. Diretório geral de imagens extraídas
-    possiblePaths.push(path.join(process.cwd(), 'uploads', 'extracted_images', fname));
-    
-    // 6. Diretório específico para o catálogo
-    possiblePaths.push(path.join(process.cwd(), 'uploads', 'extracted_images', `catalog-${catalogId}`, fname));
-  }
-  
-  // Caso especial para códigos de produtos como nomes de arquivos
-  if (filename.startsWith('img_')) {
-    // Extrair o código do produto (assumindo que está após "img_")
-    const productCode = filename.substring(4).split('.')[0];
-    
-    // Adicionar variações de nomes de arquivos baseados no código do produto
-    const codeBasedFilenames = [
-      `${productCode}.png`,
-      `${productCode}_0.png`,
-      `${productCode}_1.png`
-    ];
-    
-    for (const codeFname of codeBasedFilenames) {
-      possiblePaths.push(path.join(process.cwd(), 'uploads', 'extracted_images', codeFname));
-      possiblePaths.push(path.join(process.cwd(), 'uploads', 'extracted_images', `catalog-${catalogId}`, codeFname));
-    }
-  }
-  
-  // Verifica cada caminho
-  console.log(`Buscando imagem ${filename} em ${possiblePaths.length} caminhos possíveis`);
-  
-  for (const pathToCheck of possiblePaths) {
-    if (fs.existsSync(pathToCheck)) {
-      console.log(`Imagem encontrada em: ${pathToCheck}`);
-      return pathToCheck;
-    }
-  }
-  
-  // Procurar recursivamente em todos os subdiretórios possíveis (caso de último recurso)
-  try {
-    // Primeiro verificar no diretório extracted_images
-    const baseExtractedImagesDir = path.join(process.cwd(), 'uploads', 'extracted_images');
-    if (fs.existsSync(baseExtractedImagesDir)) {
-      const allFilesInDir = getAllFilesRecursive(baseExtractedImagesDir);
-      const matchingFiles = allFilesInDir.filter(f => path.basename(f) === normalizedFilename);
-      
-      if (matchingFiles.length > 0) {
-        console.log(`Imagem encontrada na busca recursiva em extracted_images: ${matchingFiles[0]}`);
-        return matchingFiles[0];
-      }
-    }
-    
-    // Se não encontrado, procurar em todo o diretório uploads
-    const baseUploadsDir = path.join(process.cwd(), 'uploads');
-    if (fs.existsSync(baseUploadsDir)) {
-      console.log('Procurando em todo o diretório uploads...');
-      const allUploadsFiles = getAllFilesRecursive(baseUploadsDir);
-      
-      // Primeiro tentar match exato pelo nome do arquivo
-      const exactMatches = allUploadsFiles.filter(f => path.basename(f) === normalizedFilename);
-      if (exactMatches.length > 0) {
-        console.log(`Imagem encontrada (match exato) em uploads: ${exactMatches[0]}`);
-        return exactMatches[0];
-      }
-      
-      // Extrair código do produto, se disponível
-      let productCode = baseName;
-      if (filename.startsWith('img_')) {
-        productCode = filename.substring(4).split('.')[0];
-      }
-      
-      // Procurar por arquivos que contenham o código do produto ou o nome base
-      const similarMatches = allUploadsFiles.filter(f => {
-        const fname = path.basename(f).toLowerCase();
-        return (fname.includes(productCode.toLowerCase()) || 
-                fname.includes(baseName.toLowerCase())) && 
-               (fname.endsWith('.png') || 
-                fname.endsWith('.jpg') || 
-                fname.endsWith('.jpeg'));
-      });
-      
-      if (similarMatches.length > 0) {
-        console.log(`Imagem similar encontrada em uploads: ${similarMatches[0]}`);
-        return similarMatches[0];
-      }
-    }
-  } catch (error) {
-    console.error('Erro na busca recursiva de imagens:', error);
-  }
-  
-  console.log(`Imagem não encontrada: ${filename}`);
-  return null;
-}
-
-/**
- * Busca recursivamente em um diretório por todos os arquivos
- * 
- * @param dir Diretório base para busca
- * @returns Array com caminhos completos de todos arquivos
- */
-function getAllFilesRecursive(dir: string): string[] {
+async function searchAllDirectoriesForImage(filename: string): Promise<string[]> {
   const results: string[] = [];
   
-  if (!fs.existsSync(dir)) {
-    return results;
-  }
-  
   try {
-    const list = fs.readdirSync(dir);
-    
-    for (const file of list) {
-      const fullPath = path.join(dir, file);
-      const stat = fs.statSync(fullPath);
+    // Função recursiva para buscar em subdiretórios
+    async function searchDir(dir: string): Promise<void> {
+      if (!await existsAsync(dir)) {
+        return;
+      }
       
-      if (stat && stat.isDirectory()) {
-        // Recursivamente adicionar arquivos do subdiretório
-        const subResults = getAllFilesRecursive(fullPath);
-        results.push(...subResults);
-      } else {
-        // Adicionar arquivo
-        results.push(fullPath);
+      const entries = await readdirAsync(dir, { withFileTypes: true });
+      
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name);
+        
+        if (entry.isDirectory()) {
+          await searchDir(fullPath);
+        } else if (entry.name === filename) {
+          results.push(fullPath);
+        }
       }
     }
+    
+    // Iniciar busca a partir do diretório uploads
+    await searchDir(BASE_UPLOADS_DIR);
+    
+    return results;
   } catch (error) {
-    console.error(`Erro ao listar diretório ${dir}:`, error);
+    console.error(`Erro ao buscar ${filename} em diretórios:`, error);
+    return [];
   }
-  
-  return results;
 }
 
 /**
- * Verifica se uma URL de imagem é válida
+ * Busca por uma imagem com nome similar
  * 
- * @param url URL a ser verificada
- * @returns true se a URL for considerada válida
+ * Esta função é útil quando o nome exato não é encontrado, mas pode haver
+ * uma imagem relacionada com nome similar, como variações no formato ou versão
  */
-function isValidImageUrl(url: string): boolean {
-  if (!url) return false;
-  
-  // Verifica se é uma URL absoluta
-  if (url.startsWith('http://') || url.startsWith('https://')) {
-    return true;
-  }
-  
-  // Verifica se é uma URL relativa
-  const localPath = path.join(process.cwd(), url.startsWith('/') ? url.substring(1) : url);
-  return fs.existsSync(localPath);
-}
-
-/**
- * Normaliza uma categoria de produto para mapeamento de fallback
- * 
- * @param category Categoria do produto
- * @returns Categoria normalizada para mapeamento
- */
-function normalizeCategory(category: string): string {
-  // Remove espaços e converte para minúsculas
-  const normalized = category.trim().toLowerCase();
-  
-  // Verifica se a categoria contém alguma das palavras-chave
-  for (const [key, _] of Object.entries(categoryMap)) {
-    if (normalized.includes(key)) {
-      return key;
+async function findSimilarImage(filename: string): Promise<string | null> {
+  try {
+    // Extrair parte do nome sem a extensão
+    const baseNameMatch = filename.match(/^([^.]+)/);
+    if (!baseNameMatch) return null;
+    
+    const baseName = baseNameMatch[1].toLowerCase();
+    
+    // Lista de diretórios onde procurar
+    const searchDirs = [
+      EXTRACTED_IMAGES_DIR,
+      UNIQUE_IMAGES_DIR,
+      PRODUCT_IMAGES_DIR,
+      path.join(BASE_UPLOADS_DIR, 'temp-excel-images'),
+      BASE_UPLOADS_DIR
+    ];
+    
+    // Buscar em cada diretório
+    for (const dir of searchDirs) {
+      if (!await existsAsync(dir)) continue;
+      
+      const files = await readdirAsync(dir);
+      
+      // Primeiro, tentar encontrar imagens que contenham o nome base
+      for (const file of files) {
+        if (file.toLowerCase().includes(baseName)) {
+          return path.join(dir, file);
+        }
+      }
+      
+      // Se não encontrou, tentar imagens com partes do nome
+      if (baseName.length > 3) {
+        const parts = baseName.split(/[_-]/);
+        for (const part of parts) {
+          if (part.length < 3) continue;
+          
+          for (const file of files) {
+            if (file.toLowerCase().includes(part)) {
+              return path.join(dir, file);
+            }
+          }
+        }
+      }
     }
+    
+    return null;
+  } catch (error) {
+    console.error(`Erro ao buscar imagem similar a ${filename}:`, error);
+    return null;
   }
-  
-  // Sem correspondência, retorna a categoria original em minúsculas
-  return normalized;
 }
 
 /**
- * Obtém o caminho do placeholder para uma categoria
- * 
- * @param category Categoria do produto
- * @returns Caminho do placeholder
+ * Tenta encontrar uma imagem alternativa para um produto
+ * quando a imagem original não é encontrada
  */
-function getCategoryPlaceholder(category: string): string {
-  const placeholder = categoryMap[category];
-  
-  if (placeholder) {
-    return `/placeholders/${placeholder}`;
+async function findAlternativeImageForProduct(product: Product): Promise<ProductImageInfo> {
+  try {
+    console.log(`Buscando imagem alternativa para o produto ${product.id}`);
+    
+    // Primeiro, verificar se há outras imagens disponíveis no diretório
+    const imagesInDir = fs.readdirSync(EXTRACTED_IMAGES_DIR).filter(file => 
+      file.endsWith('.jpg') || file.endsWith('.png') || file.endsWith('.jpeg') || file.endsWith('.gif')
+    );
+    
+    if (imagesInDir.length > 0) {
+      // Usar a primeira imagem disponível como alternativa temporária
+      const imagePath = path.join(EXTRACTED_IMAGES_DIR, imagesInDir[0]);
+      console.log(`Usando imagem alternativa: ${imagePath}`);
+      
+      // Criar uma cópia única desta imagem para o produto
+      return await createUniqueProductImage(product.id, imagePath);
+    }
+    
+    return {
+      hasImage: false,
+      error: 'Nenhuma imagem alternativa encontrada'
+    };
+  } catch (error) {
+    console.error(`Erro ao buscar imagem alternativa:`, error);
+    return {
+      hasImage: false,
+      error: error.message
+    };
   }
+}
+
+/**
+ * Gera um ID único para uma imagem de produto
+ */
+function generateUniqueImageId(product: Product, imagePath: string): string {
+  try {
+    // Criar um hash baseado em:
+    // 1. O ID do produto (para garantir que cada produto tenha seu próprio ID de imagem)
+    // 2. O nome do produto
+    // 3. O código do produto (se disponível)
+    // 4. Um timestamp
+    const uniqueString = `${product.id}_${product.name}_${product.code || ''}_${Date.now()}`;
+    
+    // Criar um hash SHA-256 desta string
+    const hash = crypto.createHash('sha256').update(uniqueString).digest('hex');
+    
+    // Extrair extensão do arquivo original
+    const extension = path.extname(imagePath);
+    
+    // Retornar um ID único no formato product_ID_HASH.extensão
+    return `product_${product.id}_${hash.substring(0, 8)}${extension}`;
+  } catch (error) {
+    console.error('Erro ao gerar ID único para imagem:', error);
+    return `product_${product.id}_${Date.now()}${path.extname(imagePath)}`;
+  }
+}
+
+/**
+ * Determina o tipo de conteúdo (MIME type) a partir do caminho do arquivo
+ */
+function getContentTypeFromPath(filePath: string): string {
+  const extension = path.extname(filePath).toLowerCase();
   
-  return '/placeholders/default.svg';
+  switch (extension) {
+    case '.jpg':
+    case '.jpeg':
+      return 'image/jpeg';
+    case '.png':
+      return 'image/png';
+    case '.gif':
+      return 'image/gif';
+    case '.webp':
+      return 'image/webp';
+    case '.svg':
+      return 'image/svg+xml';
+    default:
+      return 'application/octet-stream';
+  }
+}
+
+/**
+ * Extrai imagens de produto de um diretório de catálogo e associa aos produtos
+ */
+export async function mapCatalogImagesToProducts(
+  catalogId: number,
+  catalogDir: string
+): Promise<{ success: boolean; message: string; count: number }> {
+  try {
+    // Buscar todos os produtos do catálogo
+    const products = await storage.getProductsByCatalogId(catalogId);
+    
+    if (!products.length) {
+      return {
+        success: false,
+        message: 'Nenhum produto encontrado para este catálogo',
+        count: 0
+      };
+    }
+    
+    // Buscar todas as imagens do diretório do catálogo
+    const imagesInDir = fs.readdirSync(catalogDir).filter(file => 
+      file.endsWith('.jpg') || file.endsWith('.png') || file.endsWith('.jpeg') || file.endsWith('.gif')
+    );
+    
+    if (!imagesInDir.length) {
+      return {
+        success: false,
+        message: 'Nenhuma imagem encontrada no diretório do catálogo',
+        count: 0
+      };
+    }
+    
+    // Associar cada produto a uma imagem
+    // Se houver mais produtos que imagens, algumas imagens serão reutilizadas
+    // Se houver mais imagens que produtos, algumas imagens não serão usadas
+    let updatedCount = 0;
+    
+    for (let i = 0; i < products.length; i++) {
+      const product = products[i];
+      const imageIndex = i % imagesInDir.length;
+      const imagePath = path.join(catalogDir, imagesInDir[imageIndex]);
+      
+      // Criar uma cópia única para este produto
+      const imageInfo = await createUniqueProductImage(product.id, imagePath);
+      
+      if (imageInfo.hasImage) {
+        updatedCount++;
+      }
+    }
+    
+    return {
+      success: true,
+      message: `${updatedCount} produtos atualizados com imagens únicas`,
+      count: updatedCount
+    };
+    
+  } catch (error) {
+    console.error('Erro ao mapear imagens para produtos:', error);
+    return {
+      success: false,
+      message: error.message,
+      count: 0
+    };
+  }
 }
