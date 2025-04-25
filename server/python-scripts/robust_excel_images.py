@@ -1,3 +1,4 @@
+
 import os
 import sys
 import json
@@ -70,12 +71,12 @@ def extract_images_from_excel(excel_path, output_dir):
                         with excel_zip.open(rel_file) as f:
                             rel_content = f.read().decode('utf-8')
                             # Procurar por referências a imagens
-                            img_refs = re.findall(r'Target="([^"]+\.(png|jpe?g|gif|bmp|tiff))"', rel_content)
+                            img_refs = re.findall(r'Target="([^"]+\.(?:png|jpe?g|gif|bmp|tiff))"', rel_content)
                             
                             for img_ref in img_refs:
                                 # Tentar construir o caminho completo
                                 rel_dir = os.path.dirname(rel_file)
-                                img_path = os.path.normpath(os.path.join(rel_dir, img_ref[0]))
+                                img_path = os.path.normpath(os.path.join(rel_dir, img_ref))
                                 
                                 try:
                                     with excel_zip.open(img_path) as img_file:

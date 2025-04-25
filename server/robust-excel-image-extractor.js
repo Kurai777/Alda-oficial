@@ -403,11 +403,13 @@ async function uploadToFirebase(imageBase64, fileName, userId, catalogId) {
       throw new Error('Buffer de imagem inválido');
     }
     
-    // Criar caminho para o arquivo no Storage
-    const imagePath = `users/${userId}/catalogs/${catalogId}/products/${fileName}`;
+    // Criar caminho para o arquivo no Storage (usando estrutura correta)
+    const imagePath = `products/${userId}/${catalogId}/${fileName}`;
     
     // Obter referência ao bucket
     const bucket = storage.bucket();
+
+    console.log(`Tentando salvar imagem em: ${imagePath}`);
     
     // Criar arquivo no bucket
     const file = bucket.file(imagePath);
@@ -416,22 +418,33 @@ async function uploadToFirebase(imageBase64, fileName, userId, catalogId) {
     const extension = path.extname(fileName).toLowerCase().replace('.', '') || 'jpg';
     const contentType = `image/${extension}`;
     
-    // Fazer upload do buffer
+    // Fazer upload do buffer com configurações expandidas
     await file.save(imageBuffer, {
       metadata: {
         contentType,
         metadata: {
           userId,
-          catalogId
+          catalogId,
+          firebaseStorageDownloadTokens: Date.now()
         }
-      }
+      },
+      resumable: false, // Desabilitar upload resumable para arquivos pequenos
+      public: true
     });
     
     // Tornar o arquivo público
     await file.makePublic();
     
-    // Obter URL pública
-    const publicUrl = file.publicUrl();
+    // Obter URL pública (formato especial do Firebase Storage)
+    // Obter configuração do Firebase app
+    const projectId = process.env.VITE_FIREBASE_PROJECT_ID || "ald-a-8b969";
+    const bucketName = `${projectId}.appspot.com`;
+    
+    // URL no formato do Firebase Storage
+    const encodedPath = encodeURIComponent(imagePath);
+    const publicUrl = `https://firebasestorage.googleapis.com/v0/b/${bucketName}/o/${encodedPath}?alt=media`;
+    
+    console.log(`URL de imagem gerada: ${publicUrl}`);
     
     return publicUrl;
   } catch (error) {

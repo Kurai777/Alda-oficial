@@ -3,8 +3,10 @@ import { readFile } from 'fs/promises';
 import path from 'path';
 import fs from 'fs';
 import { determineProductCategory, extractMaterialsFromDescription } from './utils';
-// Importar o novo extrator robusto de imagens
+// Importar o extrator JavaScript principal
 import { extractImagesFromExcel, hasExcelImages } from './robust-excel-image-extractor.js';
+// Importar a ponte para o Python como fallback
+import { extractImagesWithPythonBridge, hasExcelImagesWithPython } from './python-excel-bridge.js';
 
 // Configurações para mapeamento de colunas por índice em formatos específicos
 // Formato: {indiceColuna: nomeCampo}
@@ -232,13 +234,41 @@ export async function processExcelFile(filePath: string, userId?: string | numbe
             });
             
             // Extrair imagens e associar aos produtos
-            const updatedProducts = await extractImagesFromExcel(
+            // Primeiro tentar com o método JavaScript
+            let updatedProducts = await extractImagesFromExcel(
               filePath, productsFromSheet, String(userId), activeCatalogId
             );
             
             // Verificar quantos produtos foram atualizados com URLs de imagem
-            const productsWithImages = updatedProducts.filter(p => p.imageUrl).length;
+            let productsWithImages = updatedProducts.filter(p => p.imageUrl).length;
             console.log(`${productsWithImages} de ${updatedProducts.length} produtos foram atualizados com URLs de imagem`);
+            
+            // Se nenhum produto foi atualizado, tentar com o método Python como fallback
+            if (productsWithImages === 0) {
+              console.log('Nenhuma imagem extraída com método JavaScript. Tentando com Python...');
+              
+              try {
+                // Verificar se o arquivo tem imagens usando o método Python
+                const hasImagesPython = await hasExcelImagesWithPython(filePath);
+                
+                if (hasImagesPython) {
+                  console.log('Método Python detectou imagens no arquivo, extraindo...');
+                  
+                  // Extrair imagens usando o método Python
+                  updatedProducts = await extractImagesWithPythonBridge(
+                    filePath, productsFromSheet, String(userId), activeCatalogId
+                  );
+                  
+                  // Verificar novamente
+                  productsWithImages = updatedProducts.filter(p => p.imageUrl).length;
+                  console.log(`Método Python: ${productsWithImages} de ${updatedProducts.length} produtos foram atualizados com URLs de imagem`);
+                } else {
+                  console.log('Método Python também não detectou imagens no arquivo');
+                }
+              } catch (pythonError) {
+                console.error('Erro ao usar método Python:', pythonError);
+              }
+            }
           }
           
           allProducts.push(...productsFromSheet);
