@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" fill="#f8f9fa"/>
+  <rect x="156" y="120" width="200" height="280" rx="5" fill="#6c757d"/>
+  <line x1="256" y1="120" x2="256" y2="400" stroke="#495057" stroke-width="3"/>
+  <circle cx="246" cy="250" r="8" fill="#343a40"/>
+  <circle cx="266" cy="250" r="8" fill="#343a40"/>
+  <text x="256" y="440" font-family="Arial" font-size="24" text-anchor="middle" fill="#212529">Armário</text>
+</svg>

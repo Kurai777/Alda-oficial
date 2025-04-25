@@ -2064,66 +2064,49 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { productId } = req.params;
       
-      console.log(`Buscando produto com ID: ${productId}`);
-      // Buscar produto na base de dados
-      const product = await storage.getProduct(parseInt(productId));
+      // Usar o novo serviço de imagens para obter informações da imagem
+      const { getProductImageInfo } = await import('./image-service');
+      const imageInfo = await getProductImageInfo(parseInt(productId));
       
-      if (!product) {
-        return res.status(404).json({ message: "Produto não encontrado" });
+      // Se a URL for absoluta (http, https), redirecionar para ela
+      if (imageInfo.url.startsWith('http://') || imageInfo.url.startsWith('https://')) {
+        return res.redirect(imageInfo.url);
       }
       
-      console.log(`Produto encontrado:`, product);
-      
-      // Se o produto não tem URL de imagem
-      if (!product.imageUrl) {
-        // Retornar SVG placeholder
-        const svgContent = `
-        <svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400">
-          <rect width="600" height="400" fill="#f9f9f9" />
-          <text x="300" y="200" font-family="Arial" font-size="16" fill="#666666" text-anchor="middle">
-            Imagem não disponível (${product.code || product.id})
-          </text>
-        </svg>`;
-        
-        res.setHeader('Content-Type', 'image/svg+xml');
-        return res.send(svgContent);
+      // Se temos um caminho local completo, servir o arquivo diretamente
+      if (imageInfo.localPath && fs.existsSync(imageInfo.localPath)) {
+        res.setHeader('Content-Type', imageInfo.contentType);
+        return res.sendFile(imageInfo.localPath);
       }
       
-      // Se a URL da imagem é uma URL mock, não redirecionar, usar a rota de mock diretamente
-      if (product.imageUrl.includes('mock-firebase-storage.com')) {
-        // Pegar direto a URL mock inteira
-        return res.redirect(302, product.imageUrl);
+      // Se for um placeholder, servir o arquivo do diretório public
+      if (imageInfo.url.startsWith('/placeholders/')) {
+        const placeholderPath = path.join(process.cwd(), 'public', imageInfo.url);
+        if (fs.existsSync(placeholderPath)) {
+          res.setHeader('Content-Type', imageInfo.contentType);
+          return res.sendFile(placeholderPath);
+        }
       }
       
-      // Se a URL é uma URL absoluta, redirecionar
-      if (product.imageUrl.startsWith('http://') || product.imageUrl.startsWith('https://')) {
-        return res.redirect(product.imageUrl);
+      // Para qualquer outra URL relativa, servir o arquivo se existir
+      const fullPath = path.join(process.cwd(), imageInfo.url.startsWith('/') ? imageInfo.url.substring(1) : imageInfo.url);
+      if (fs.existsSync(fullPath)) {
+        res.setHeader('Content-Type', imageInfo.contentType);
+        return res.sendFile(fullPath);
       }
       
-      // Se é uma URL relativa, servir o arquivo
-      const localPath = path.join(process.cwd(), product.imageUrl.startsWith('/') ? product.imageUrl.substring(1) : product.imageUrl);
-      
-      if (fs.existsSync(localPath)) {
-        const contentType = mime.lookup(localPath) || 'application/octet-stream';
-        res.setHeader('Content-Type', contentType);
-        return res.sendFile(localPath);
-      }
-      
-      // Se não conseguiu encontrar o arquivo, retornar SVG placeholder
-      const svgContent = `
-      <svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400">
-        <rect width="600" height="400" fill="#f9f9f9" />
-        <text x="300" y="200" font-family="Arial" font-size="16" fill="#666666" text-anchor="middle">
-          Imagem não encontrada (${product.code || product.id})
-        </text>
-      </svg>`;
-      
+      // Se nada foi encontrado, servir o fallback padrão
+      const defaultPlaceholder = path.join(process.cwd(), 'public', 'placeholders', 'default.svg');
       res.setHeader('Content-Type', 'image/svg+xml');
-      return res.send(svgContent);
+      return res.sendFile(defaultPlaceholder);
       
     } catch (error) {
       console.error('Erro ao servir imagem de produto:', error);
-      res.status(500).json({ message: "Erro ao servir imagem de produto" });
+      
+      // Em caso de erro, servir o fallback padrão
+      const defaultPlaceholder = path.join(process.cwd(), 'public', 'placeholders', 'default.svg');
+      res.setHeader('Content-Type', 'image/svg+xml');
+      return res.sendFile(defaultPlaceholder);
     }
   });
 
