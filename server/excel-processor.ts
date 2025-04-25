@@ -118,90 +118,155 @@ function normalizeExcelProducts(rawProducts: ExcelProduct[]): any[] {
   });
   const keyList = Array.from(allKeys);
   
-  // Verificar se a planilha parece ser uma lista de produtos ou outro formato
-  // Para isso, analisamos a estrutura e os valores nas primeiras linhas
+  // Verificar se o arquivo é um catálogo da Sofá Home ou POE (formato especial visto na imagem)
+  let isSofaHomeOrPOEFormat = false;
+  let nameColumnKey = null;
+  let codeColumnKey = null;
+  let priceColumnKey = null;
+  let descriptionColumnKey = null;
+  let supplierColumnKey = null;
+  let imageColumnKey = null;
+  let locationColumnKey = null;
+  
+  // Primeiro, verificar se a planilha tem campos específicos que indicam o formato POE/Sofá Home
+  const possibleFields = keyList.map(key => key.toLowerCase());
+  
+  if (
+    (possibleFields.includes('forn.') || possibleFields.includes('forn') || possibleFields.includes('fornecedor')) &&
+    (possibleFields.includes('imagem') || possibleFields.includes('image') || possibleFields.includes('img')) &&
+    (possibleFields.includes('descrição') || possibleFields.includes('descricao') || possibleFields.includes('desc')) &&
+    (possibleFields.includes('cod.') || possibleFields.includes('cod') || possibleFields.includes('código'))
+  ) {
+    isSofaHomeOrPOEFormat = true;
+    console.log("Detectado formato de catálogo Sofá Home/POE");
+    
+    // Identificar as colunas específicas
+    for (const key of keyList) {
+      const keyLower = key.toLowerCase();
+      
+      // Detectar coluna de nome do produto
+      if (keyLower.includes('sofá') || keyLower.includes('sofa home') || keyLower.includes('\\\\')) {
+        nameColumnKey = key;
+      }
+      // Detectar coluna de código
+      else if (keyLower.includes('cod.') || keyLower === 'cod') {
+        codeColumnKey = key;
+      }
+      // Detectar coluna de preço
+      else if (keyLower.includes('valor') || keyLower.includes('r$') || keyLower.includes('preço') || keyLower.includes('preco')) {
+        priceColumnKey = key;
+      }
+      // Detectar coluna de descrição
+      else if (keyLower.includes('descrição') || keyLower.includes('descricao') || keyLower === 'desc') {
+        descriptionColumnKey = key;
+      }
+      // Detectar coluna de fornecedor
+      else if (keyLower.includes('forn.') || keyLower === 'forn' || keyLower.includes('fornecedor')) {
+        supplierColumnKey = key;
+      }
+      // Detectar coluna de imagem
+      else if (keyLower.includes('imagem') || keyLower.includes('image') || keyLower === 'img') {
+        imageColumnKey = key;
+      }
+      // Detectar coluna de localização (2º Piso, Depósito, etc)
+      else if (keyLower.includes('local') || keyLower.includes('localização')) {
+        locationColumnKey = key;
+      }
+    }
+    
+    // Verificar se encontramos as colunas principais
+    console.log(`Colunas identificadas no formato Sofá Home/POE:
+      - Nome: ${nameColumnKey || 'Não encontrada'}
+      - Código: ${codeColumnKey || 'Não encontrada'}
+      - Preço: ${priceColumnKey || 'Não encontrada'}
+      - Descrição: ${descriptionColumnKey || 'Não encontrada'}
+      - Fornecedor: ${supplierColumnKey || 'Não encontrada'}
+      - Imagem: ${imageColumnKey || 'Não encontrada'}
+      - Localização: ${locationColumnKey || 'Não encontrada'}
+    `);
+  }
   
   // Determinar possíveis nomes de campos com base na primeira linha
   const nameFields = ['nome', 'name', 'produto', 'product', 'titulo', 'title', 'item', 'descrição', 'description', 'descrição do produto', 'desc. produto'];
   const codeFields = ['codigo', 'code', 'sku', 'referencia', 'reference', 'id', 'item_id', 'código', 'cod', 'cod.', 'código produto'];
   const priceFields = ['preco', 'price', 'valor', 'value', 'custo', 'cost', 'preco_venda', 'sale_price', 'preço', 'preço tabela', 'valor unit', 'preço s/ imp', 'preço venda', 'valor unit.', 'valor venda'];
   
-  // Verificar se este é um formato de planilha específico
+  // Para outros formatos, verificar se é um formato de planilha baseado em datas
   let isDateBasedSheet = false;
   let productColumnKey = null;
-  let priceColumnKey = null;
-  let codeColumnKey = null;
   
-  // Verificar se temos padrões que indicam um tipo específico de planilha
-  // Por exemplo, se temos muitas entradas que parecem datas (como "maio./24", "ago./22")
-  let datePatternCount = 0;
-  let possibleDateKeys: string[] = [];
-  
-  for (const key of keyList) {
-    let dateCount = 0;
-    // Verificar primeiras 10 entradas para ver se parecem datas
-    for (let i = 0; i < Math.min(10, rawProducts.length); i++) {
-      const value = rawProducts[i][key];
-      if (typeof value === 'string' && 
-          (value.match(/^[a-z]{3,4}\.\/(2[0-9])$/i) || // padrão como "maio./24"
-           value.match(/^[a-z]{3,4}\.\/[0-9]{2}$/i) || // outros formatos de data
-           value.match(/^Data\s/i))) { // 'Data' seguida de algum texto
-        dateCount++;
-      }
-    }
+  if (!isSofaHomeOrPOEFormat) {
+    // Verificar se temos padrões que indicam um tipo específico de planilha
+    // Por exemplo, se temos muitas entradas que parecem datas (como "maio./24", "ago./22")
+    let datePatternCount = 0;
+    let possibleDateKeys: string[] = [];
     
-    if (dateCount >= 3) { // Se pelo menos 3 das primeiras 10 entradas parecem datas
-      possibleDateKeys.push(key);
-      datePatternCount += dateCount;
-    }
-  }
-  
-  // Se encontramos várias entradas que parecem datas, esta pode ser uma planilha baseada em datas/períodos
-  if (datePatternCount > 5) {
-    isDateBasedSheet = true;
-    console.log("Detectada planilha baseada em datas/períodos");
-    
-    // Agora precisamos identificar quais colunas contêm produtos, preços e códigos
-    
-    // Para planilhas organizadas por data, geralmente outras colunas contêm informações do produto
     for (const key of keyList) {
-      // Verificar se uma coluna contém valores que parecem preços
-      const priceCount = rawProducts.slice(0, 10).filter(p => {
-        const val = p[key];
-        return (typeof val === 'number' && val > 0) || 
-               (typeof val === 'string' && val.includes('R$')) ||
-               (typeof val === 'string' && /^[0-9.,]+$/.test(val.trim()));
-      }).length;
-      
-      if (priceCount >= 3 && !priceColumnKey) {
-        priceColumnKey = key;
+      let dateCount = 0;
+      // Verificar primeiras 10 entradas para ver se parecem datas
+      for (let i = 0; i < Math.min(10, rawProducts.length); i++) {
+        const value = rawProducts[i][key];
+        if (typeof value === 'string' && 
+            (value.match(/^[a-z]{3,4}\.\/(2[0-9])$/i) || // padrão como "maio./24"
+             value.match(/^[a-z]{3,4}\.\/[0-9]{2}$/i) || // outros formatos de data
+             value.match(/^Data\s/i))) { // 'Data' seguida de algum texto
+          dateCount++;
+        }
       }
       
-      // Verificar se uma coluna contém valores que parecem códigos de produto
-      const codeCount = rawProducts.slice(0, 10).filter(p => {
-        const val = p[key];
-        return typeof val === 'string' && 
-               (val.includes('OUTLET') || val.includes('Piso') || val.includes('Depósito') || 
-                /^[A-Z0-9-]{3,10}$/.test(val.trim()));
-      }).length;
-      
-      if (codeCount >= 3 && !codeColumnKey) {
-        codeColumnKey = key;
+      if (dateCount >= 3) { // Se pelo menos 3 das primeiras 10 entradas parecem datas
+        possibleDateKeys.push(key);
+        datePatternCount += dateCount;
       }
     }
     
-    // Se encontramos chaves que parecem datas, usar a primeira como coluna de produtos
-    if (possibleDateKeys.length > 0) {
-      productColumnKey = possibleDateKeys[0];
-      console.log(`Usando coluna "${productColumnKey}" como produtos (baseado em datas/períodos)`);
-    }
-    
-    if (priceColumnKey) {
-      console.log(`Usando coluna "${priceColumnKey}" como preços`);
-    }
-    
-    if (codeColumnKey) {
-      console.log(`Usando coluna "${codeColumnKey}" como códigos`);
+    // Se encontramos várias entradas que parecem datas, esta pode ser uma planilha baseada em datas/períodos
+    if (datePatternCount > 5) {
+      isDateBasedSheet = true;
+      console.log("Detectada planilha baseada em datas/períodos");
+      
+      // Agora precisamos identificar quais colunas contêm produtos, preços e códigos
+      
+      // Para planilhas organizadas por data, geralmente outras colunas contêm informações do produto
+      for (const key of keyList) {
+        // Verificar se uma coluna contém valores que parecem preços
+        const priceCount = rawProducts.slice(0, 10).filter(p => {
+          const val = p[key];
+          return (typeof val === 'number' && val > 0) || 
+                 (typeof val === 'string' && val.includes('R$')) ||
+                 (typeof val === 'string' && /^[0-9.,]+$/.test(val.trim()));
+        }).length;
+        
+        if (priceCount >= 3 && !priceColumnKey) {
+          priceColumnKey = key;
+        }
+        
+        // Verificar se uma coluna contém valores que parecem códigos de produto
+        const codeCount = rawProducts.slice(0, 10).filter(p => {
+          const val = p[key];
+          return typeof val === 'string' && 
+                 (val.includes('OUTLET') || val.includes('Piso') || val.includes('Depósito') || 
+                  /^[A-Z0-9-]{3,10}$/.test(val.trim()));
+        }).length;
+        
+        if (codeCount >= 3 && !codeColumnKey) {
+          codeColumnKey = key;
+        }
+      }
+      
+      // Se encontramos chaves que parecem datas, usar a primeira como coluna de produtos
+      if (possibleDateKeys.length > 0) {
+        productColumnKey = possibleDateKeys[0];
+        console.log(`Usando coluna "${productColumnKey}" como produtos (baseado em datas/períodos)`);
+      }
+      
+      if (priceColumnKey) {
+        console.log(`Usando coluna "${priceColumnKey}" como preços`);
+      }
+      
+      if (codeColumnKey) {
+        console.log(`Usando coluna "${codeColumnKey}" como códigos`);
+      }
     }
   }
   
