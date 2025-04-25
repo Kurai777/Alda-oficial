@@ -1977,11 +1977,85 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { userId, catalogId, filename } = req.params;
       
-      // Redirecionar para a rota de API de imagens
-      res.redirect(`/api/images/${userId}/${catalogId}/${filename}`);
+      // Verificar diretamente nos diretórios esperados de cada URL
+      const possiblePaths = [
+        // 1. Caminho exato a partir dos parâmetros (se o arquivo existe diretamente)
+        path.join(process.cwd(), 'uploads', 'images', userId, catalogId, filename),
+        
+        // 2. Caminhos alternativos com local-X
+        ...Array.from({length: 5}, (_, i) => 
+          path.join(process.cwd(), 'uploads', 'images', userId, `local-${i+1}`, filename)),
+        
+        // 3. Caminhos para userId = 1 (frequentemente usado no sistema)
+        path.join(process.cwd(), 'uploads', 'images', '1', catalogId, filename),
+        
+        // 4. Todos os locais possíveis com userId = 1
+        ...Array.from({length: 5}, (_, i) => 
+          path.join(process.cwd(), 'uploads', 'images', '1', `local-${i+1}`, filename)),
+      ];
+      
+      // Verificar se existe em algum dos caminhos
+      for (const filePath of possiblePaths) {
+        if (fs.existsSync(filePath)) {
+          // Servir diretamente o arquivo para evitar redirecionamentos adicionais
+          console.log(`Imagem mock encontrada em: ${filePath}`);
+          const contentType = mime.lookup(filePath) || 'application/octet-stream';
+          res.setHeader('Content-Type', contentType);
+          return res.sendFile(filePath);
+        }
+      }
+      
+      // Se chegou aqui, tente servir um SVG placeholder
+      // Vamos tentar criar a imagem sob demanda no local correto
+      try {
+        // Garantir que o diretório alvo existe
+        const targetDir = path.join(process.cwd(), 'uploads', 'images', userId, catalogId);
+        fs.mkdirSync(targetDir, { recursive: true });
+        
+        // Criar um SVG dinâmico para o placeholder
+        const svgContent = `<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400">
+  <rect width="600" height="400" fill="#708090" />
+  <text x="300" y="200" font-family="Arial" font-size="24" fill="white" text-anchor="middle">
+    ${filename}
+  </text>
+</svg>`;
+        
+        // Salvar o arquivo SVG no local esperado
+        const targetFile = path.join(targetDir, filename);
+        fs.writeFileSync(targetFile, svgContent);
+        
+        console.log(`Imagem placeholder criada em: ${targetFile}`);
+        
+        // Servir a imagem recém-criada
+        res.setHeader('Content-Type', 'image/svg+xml');
+        return res.sendFile(targetFile);
+      } catch (createError) {
+        console.error('Erro ao criar placeholder:', createError);
+        
+        // Se falhar a criação, servir o SVG diretamente na resposta
+        const svgContent = `<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400">
+  <rect width="600" height="400" fill="#708090" />
+  <text x="300" y="200" font-family="Arial" font-size="24" fill="white" text-anchor="middle">
+    ${filename}
+  </text>
+</svg>`;
+        
+        res.setHeader('Content-Type', 'image/svg+xml');
+        return res.send(svgContent);
+      }
     } catch (error) {
-      console.error('Erro ao redirecionar URL mock:', error);
-      res.status(500).json({ message: "Erro ao processar URL mock" });
+      console.error('Erro ao processar URL mock:', error);
+      
+      // Em último caso, enviar SVG diretamente na resposta
+      const svgContent = `<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400">
+  <rect width="600" height="400" fill="#A9A9A9" />
+  <text x="300" y="200" font-family="Arial" font-size="24" fill="white" text-anchor="middle">
+    Imagem não disponível
+  </text>
+</svg>`;
+      
+      res.setHeader('Content-Type', 'image/svg+xml');
+      return res.send(svgContent);
     }
   });
   
@@ -1990,12 +2064,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { productId } = req.params;
       
+      console.log(`Buscando produto com ID: ${productId}`);
       // Buscar produto na base de dados
       const product = await storage.getProduct(parseInt(productId));
       
       if (!product) {
         return res.status(404).json({ message: "Produto não encontrado" });
       }
+      
+      console.log(`Produto encontrado:`, product);
       
       // Se o produto não tem URL de imagem
       if (!product.imageUrl) {
@@ -2012,11 +2089,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.send(svgContent);
       }
       
-      // Se a URL da imagem é uma URL mock, redirecionar para a rota correta
+      // Se a URL da imagem é uma URL mock, não redirecionar, usar a rota de mock diretamente
       if (product.imageUrl.includes('mock-firebase-storage.com')) {
-        const parts = product.imageUrl.split('/');
-        const filename = parts[parts.length - 1];
-        return res.redirect(`/api/images/${product.userId}/${product.catalogId}/${filename}`);
+        // Pegar direto a URL mock inteira
+        return res.redirect(302, product.imageUrl);
       }
       
       // Se a URL é uma URL absoluta, redirecionar
@@ -2405,7 +2481,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.send(htmlTemplate);
     } catch (error) {
       console.error('Erro na rota de teste de imagens Excel:', error);
-      res.status(500).send(\`Erro: \${error instanceof Error ? error.message : 'Erro desconhecido'}\`);
+      res.status(500).send(`Erro: ${error instanceof Error ? error.message : 'Erro desconhecido'}`);
     }
   });
   
