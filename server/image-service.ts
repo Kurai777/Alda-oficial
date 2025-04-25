@@ -259,14 +259,50 @@ function findImageLocalPath(userId: string, catalogId: string, filename: string)
   
   // Procurar recursivamente em todos os subdiretórios possíveis (caso de último recurso)
   try {
+    // Primeiro verificar no diretório extracted_images
     const baseExtractedImagesDir = path.join(process.cwd(), 'uploads', 'extracted_images');
     if (fs.existsSync(baseExtractedImagesDir)) {
       const allFilesInDir = getAllFilesRecursive(baseExtractedImagesDir);
       const matchingFiles = allFilesInDir.filter(f => path.basename(f) === normalizedFilename);
       
       if (matchingFiles.length > 0) {
-        console.log(`Imagem encontrada na busca recursiva: ${matchingFiles[0]}`);
+        console.log(`Imagem encontrada na busca recursiva em extracted_images: ${matchingFiles[0]}`);
         return matchingFiles[0];
+      }
+    }
+    
+    // Se não encontrado, procurar em todo o diretório uploads
+    const baseUploadsDir = path.join(process.cwd(), 'uploads');
+    if (fs.existsSync(baseUploadsDir)) {
+      console.log('Procurando em todo o diretório uploads...');
+      const allUploadsFiles = getAllFilesRecursive(baseUploadsDir);
+      
+      // Primeiro tentar match exato pelo nome do arquivo
+      const exactMatches = allUploadsFiles.filter(f => path.basename(f) === normalizedFilename);
+      if (exactMatches.length > 0) {
+        console.log(`Imagem encontrada (match exato) em uploads: ${exactMatches[0]}`);
+        return exactMatches[0];
+      }
+      
+      // Extrair código do produto, se disponível
+      let productCode = baseName;
+      if (filename.startsWith('img_')) {
+        productCode = filename.substring(4).split('.')[0];
+      }
+      
+      // Procurar por arquivos que contenham o código do produto ou o nome base
+      const similarMatches = allUploadsFiles.filter(f => {
+        const fname = path.basename(f).toLowerCase();
+        return (fname.includes(productCode.toLowerCase()) || 
+                fname.includes(baseName.toLowerCase())) && 
+               (fname.endsWith('.png') || 
+                fname.endsWith('.jpg') || 
+                fname.endsWith('.jpeg'));
+      });
+      
+      if (similarMatches.length > 0) {
+        console.log(`Imagem similar encontrada em uploads: ${similarMatches[0]}`);
+        return similarMatches[0];
       }
     }
   } catch (error) {

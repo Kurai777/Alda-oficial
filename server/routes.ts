@@ -1,4 +1,4 @@
-import type { Express, Request, Response, NextFunction } from "express";
+import express, { type Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import multer from "multer";
@@ -105,6 +105,8 @@ async function extractProductsFromExcel(filePath: string): Promise<any[]> {
 // Nenhuma imagem fictícia deve ser usada
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  // Servir o diretório uploads estaticamente para imagens extraídas
+  app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
   // Rota de verificação
   app.get("/api/healthcheck", (_req: Request, res: Response) => {
     res.json({ status: "ok" });
