@@ -3,7 +3,8 @@ import { readFile } from 'fs/promises';
 import path from 'path';
 import fs from 'fs';
 import { determineProductCategory, extractMaterialsFromDescription } from './utils';
-import { extractImagesFromExcel, hasExcelImages } from './excel-image-extractor.js';
+// Importar o novo extrator robusto de imagens
+import { extractImagesFromExcel, hasExcelImages } from './robust-excel-image-extractor.js';
 
 // Configurações para mapeamento de colunas por índice em formatos específicos
 // Formato: {indiceColuna: nomeCampo}

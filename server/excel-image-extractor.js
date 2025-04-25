@@ -14,6 +14,7 @@ import JSZip from 'jszip';
 
 const mkdir = promisify(fs.mkdir);
 const writeFile = promisify(fs.writeFile);
+const readFile = promisify(fs.readFile);
 
 // Definir variáveis de controle para tratamento de imagens
 const ENABLE_IMAGE_EXTRACTION = true;
