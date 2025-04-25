@@ -46,6 +46,8 @@ export async function getProductImageInfo(productId: number): Promise<{
   localPath?: string;
   fallbackUsed: boolean;
   category?: string;
+  productCode?: string;
+  isShared?: boolean;
 }> {
   try {
     // Busca o produto no banco de dados
@@ -64,11 +66,27 @@ export async function getProductImageInfo(productId: number): Promise<{
     
     // Se o produto não tem URL de imagem ou a URL é inválida
     if (!product.imageUrl || !isValidImageUrl(product.imageUrl)) {
+      // Tentar encontrar uma imagem alternativa baseada nos atributos do produto
+      const alternativeImage = await findAlternativeImageForProduct(product, category);
+      
+      if (alternativeImage) {
+        return {
+          url: alternativeImage.url,
+          contentType: alternativeImage.contentType,
+          localPath: alternativeImage.localPath,
+          fallbackUsed: false,
+          category,
+          productCode: product.code,
+          isShared: true
+        };
+      }
+      
       return {
         url: getCategoryPlaceholder(category),
         contentType: 'image/svg+xml',
         fallbackUsed: true,
-        category
+        category,
+        productCode: product.code
       };
     }
     
@@ -78,15 +96,31 @@ export async function getProductImageInfo(productId: number): Promise<{
       const components = extractMockUrlComponents(product.imageUrl);
       
       if (!components) {
+        // Tentar encontrar uma imagem alternativa
+        const alternativeImage = await findAlternativeImageForProduct(product, category);
+        
+        if (alternativeImage) {
+          return {
+            url: alternativeImage.url,
+            contentType: alternativeImage.contentType,
+            localPath: alternativeImage.localPath,
+            fallbackUsed: false,
+            category,
+            productCode: product.code,
+            isShared: true
+          };
+        }
+        
         return {
           url: getCategoryPlaceholder(category),
           contentType: 'image/svg+xml',
           fallbackUsed: true,
-          category
+          category,
+          productCode: product.code
         };
       }
       
-      // Verifica se o arquivo existe em algum dos caminhos possíveis
+      // Verificar se o arquivo existe em algum dos caminhos possíveis
       const localPath = findImageLocalPath(components.userId, components.catalogId, components.filename);
       
       if (localPath) {
@@ -95,16 +129,33 @@ export async function getProductImageInfo(productId: number): Promise<{
           contentType: mimeTypes.lookup(localPath) || 'application/octet-stream',
           localPath,
           fallbackUsed: false,
-          category
+          category,
+          productCode: product.code
         };
       }
       
-      // Arquivo não encontrado, usar fallback
+      // Arquivo não encontrado, buscar alternativa
+      const alternativeImage = await findAlternativeImageForProduct(product, category);
+      
+      if (alternativeImage) {
+        return {
+          url: alternativeImage.url,
+          contentType: alternativeImage.contentType,
+          localPath: alternativeImage.localPath,
+          fallbackUsed: false,
+          category,
+          productCode: product.code,
+          isShared: true
+        };
+      }
+      
+      // Sem alternativa, usar fallback
       return {
         url: getCategoryPlaceholder(category),
         contentType: 'image/svg+xml',
         fallbackUsed: true,
-        category
+        category,
+        productCode: product.code
       };
     }
     
@@ -114,7 +165,8 @@ export async function getProductImageInfo(productId: number): Promise<{
         url: product.imageUrl,
         contentType: 'image/jpeg', // Assume-se o tipo mais comum
         fallbackUsed: false,
-        category
+        category,
+        productCode: product.code
       };
     }
     
@@ -127,16 +179,33 @@ export async function getProductImageInfo(productId: number): Promise<{
         contentType: mimeTypes.lookup(localPath) || 'application/octet-stream',
         localPath,
         fallbackUsed: false,
-        category
+        category,
+        productCode: product.code
       };
     }
     
-    // Arquivo não encontrado, usar fallback
+    // Arquivo não encontrado, buscar alternativa
+    const alternativeImage = await findAlternativeImageForProduct(product, category);
+    
+    if (alternativeImage) {
+      return {
+        url: alternativeImage.url,
+        contentType: alternativeImage.contentType,
+        localPath: alternativeImage.localPath,
+        fallbackUsed: false,
+        category,
+        productCode: product.code,
+        isShared: true
+      };
+    }
+    
+    // Sem alternativa, usar fallback
     return {
       url: getCategoryPlaceholder(category),
       contentType: 'image/svg+xml',
       fallbackUsed: true,
-      category
+      category,
+      productCode: product.code
     };
     
   } catch (error) {
@@ -267,6 +336,115 @@ export async function findActualImagePath(filename: string): Promise<string | nu
     console.error(`Erro ao buscar imagem ${filename}:`, error);
     return null;
   }
+}
+
+/**
+ * Tenta encontrar uma imagem alternativa para um produto com base em suas características
+ * 
+ * @param product Produto para o qual buscar imagem alternativa
+ * @param category Categoria normalizada do produto
+ * @returns Informações da imagem alternativa encontrada ou null
+ */
+async function findAlternativeImageForProduct(product: any, category: string): Promise<{
+  url: string;
+  contentType: string;
+  localPath?: string;
+} | null> {
+  try {
+    // Se o produto não tem informações suficientes, não podemos encontrar uma alternativa
+    if (!product || !product.name) {
+      return null;
+    }
+    
+    const db = require('./db').db;
+    const { products } = require('@shared/schema');
+    const { eq, and, like, not, isNull } = require('drizzle-orm');
+    
+    // Estratégia 1: Buscar produtos com o mesmo nome/código e que tenham imagem
+    // Primeiro procuramos produtos no mesmo catálogo
+    let similarProducts = await db.query.products.findMany({
+      where: and(
+        eq(products.catalogId, product.catalogId),
+        eq(products.name, product.name),
+        not(eq(products.id, product.id)),
+        isNull(products.imageUrl, false)
+      ),
+      limit: 5
+    });
+    
+    // Se não encontrou no mesmo catálogo, busca em outros catálogos
+    if (!similarProducts || similarProducts.length === 0) {
+      similarProducts = await db.query.products.findMany({
+        where: and(
+          eq(products.name, product.name),
+          not(eq(products.id, product.id)),
+          isNull(products.imageUrl, false)
+        ),
+        limit: 5
+      });
+    }
+    
+    // Se encontrou produtos similares com imagem, verificar se alguma imagem existe
+    for (const similarProduct of similarProducts) {
+      if (similarProduct.imageUrl) {
+        const components = extractMockUrlComponents(similarProduct.imageUrl);
+        if (components) {
+          const imagePath = findImageLocalPath(components.userId, components.catalogId, components.filename);
+          if (imagePath) {
+            console.log(`Encontrada imagem alternativa para ${product.name} (ID: ${product.id}) de produto similar ID: ${similarProduct.id}`);
+            
+            return {
+              url: imagePath.replace(path.join(process.cwd()), ''),
+              contentType: mimeTypes.lookup(imagePath) || 'application/octet-stream',
+              localPath: imagePath
+            };
+          }
+        }
+      }
+    }
+    
+    // Estratégia 2: Buscar produtos da mesma categoria que tenham imagens
+    const categoryProducts = await db.query.products.findMany({
+      where: and(
+        eq(products.category, product.category),
+        not(eq(products.id, product.id)),
+        isNull(products.imageUrl, false)
+      ),
+      limit: 10
+    });
+    
+    // Verificar imagens de produtos da mesma categoria
+    for (const categoryProduct of categoryProducts) {
+      if (categoryProduct.imageUrl) {
+        const components = extractMockUrlComponents(categoryProduct.imageUrl);
+        if (components) {
+          const imagePath = findImageLocalPath(components.userId, components.catalogId, components.filename);
+          if (imagePath) {
+            console.log(`Encontrada imagem alternativa da mesma categoria para ${product.name} (ID: ${product.id}) de produto ID: ${categoryProduct.id}`);
+            
+            return {
+              url: imagePath.replace(path.join(process.cwd()), ''),
+              contentType: mimeTypes.lookup(imagePath) || 'application/octet-stream',
+              localPath: imagePath
+            };
+          }
+        }
+      }
+    }
+    
+    // Se chegou aqui, não encontrou imagem alternativa
+    return null;
+  } catch (error) {
+    console.error('Erro ao buscar imagem alternativa:', error);
+    return null;
+  }
+}
+
+/**
+ * Retorna a contagem de caminhos possíveis para debugging
+ */
+function getSearchPathCount(): number {
+  return 126; // Número aproximado baseado nas possibilidades atuais
 }
 
 /**
