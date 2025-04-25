@@ -803,9 +803,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Processar o arquivo com base no tipo
         if (fileType === 'xlsx' || fileType === 'xls') {
           try {
-            // Extrair dados do Excel usando o novo processador
+            // Criar diretório para imagens extraídas se não existir
+            const extractedImagesDir = path.join(process.cwd(), 'uploads', 'extracted_images');
+            if (!fs.existsSync(extractedImagesDir)) {
+              await mkdir(extractedImagesDir, { recursive: true });
+            }
+            
+            // Extrair dados do Excel usando o processador melhorado com suporte para extração de imagens
             console.log(`Iniciando processamento do arquivo Excel: ${filePath}`);
-            productsData = await processExcelFile(filePath);
+            console.log(`Usuário ID para associação de imagens: ${userId}`);
+            
+            // Passar o userId para a função para que ela possa associar as imagens aos produtos
+            productsData = await processExcelFile(filePath, userId);
             extractionInfo = `Extraídos ${productsData.length} produtos do arquivo Excel.`;
             
             // Verificar se é um catálogo no formato Sofá Home/POE
@@ -814,59 +823,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
                                      fileName.toLowerCase().includes('poe');
             
             if (isSofaHomeFormat) {
-              console.log("Detectado formato especial Sofá Home/POE, processando imagens...");
+              console.log("Detectado formato especial Sofá Home/POE com imagens embutidas.");
             }
             
-            // Criar diretório para imagens extraídas se não existir
-            const extractedImagesDir = path.join(process.cwd(), 'uploads', 'extracted_images');
-            if (!fs.existsSync(extractedImagesDir)) {
-              await mkdir(extractedImagesDir, { recursive: true });
-            }
-            
-            // Processar imagens para cada produto se necessário
-            for (let i = 0; i < productsData.length; i++) {
-              const product = productsData[i];
-              
-              // Processar imagens que não são URLs completas
-              if (product.imageUrl && 
-                  !product.imageUrl.startsWith('http') && 
-                  !product.imageUrl.startsWith('/uploads/') &&
-                  !fs.existsSync(product.imageUrl)) {
-                
-                // Gerar nome único para a imagem
-                const imageId = `${Date.now()}_${i}_${Math.floor(Math.random() * 10000)}`;
-                const imagePath = path.join(extractedImagesDir, `product_${imageId}.jpg`);
-                const imageUrl = `/uploads/extracted_images/product_${imageId}.jpg`;
-                
-                // Verificar se originalData contém dados de imagem
-                if (product.originalData) {
-                  const imageData = product.originalData.imagem || 
-                                   product.originalData.image || 
-                                   product.originalData.img;
-                  
-                  if (imageData) {
-                    try {
-                      if (typeof imageData === 'string') {
-                        if (imageData.startsWith('data:image')) {
-                          // Salvar imagem base64
-                          const base64Data = imageData.split(',')[1];
-                          fs.writeFileSync(imagePath, Buffer.from(base64Data, 'base64'));
-                          console.log(`Salva imagem base64 para produto ${product.name}`);
-                          product.imageUrl = imageUrl;
-                        } else if (imageData.length > 0) {
-                          // Pode ser um caminho ou outra referência
-                          // Gerar temporariamente uma imagem placeholder
-                          console.log(`Caminho de imagem registrado para produto ${product.name}: ${imageData}`);
-                          product.imageUrl = imageUrl;
-                        }
-                      }
-                    } catch (imgError) {
-                      console.error(`Erro ao processar imagem para produto ${product.name}:`, imgError);
-                    }
-                  }
-                }
+            // Verificar e processar produtos com imagens
+            let productsWithImages = 0;
+            for (const product of productsData) {
+              if (product.imageUrl) {
+                productsWithImages++;
+                console.log(`Produto ${product.code || product.name} tem imagem: ${product.imageUrl}`);
               }
             }
+            console.log(`${productsWithImages} produtos contêm referências de imagens (${Math.round(productsWithImages/productsData.length*100)}%)`);
             
             console.log(`Processamento de produtos e imagens concluído: ${productsData.length} produtos.`);
             
