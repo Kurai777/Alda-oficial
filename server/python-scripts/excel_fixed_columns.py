@@ -66,23 +66,31 @@ def extract_products_fixed_columns(excel_file_path, output_dir):
 
 def extract_products_from_sheet(sheet):
     """
-    Extrai produtos da planilha com mapeamento fixo de colunas.
+    Extrai produtos da planilha com mapeamento fixo de colunas:
+    A (1): nome do produto
+    B (2): local
+    C (3): fornecedor
+    D (4): imagem (objeto gráfico)
+    F (6): código do produto
+    G (7): descrição
+    L (12): valor total (preço)
     """
     products = []
     
     # Começar da linha 2 (pular cabeçalho)
     for row_idx in range(2, sheet.max_row + 1):
         # Ler valores das colunas específicas
-        nome = sheet.cell(row=row_idx, column=1).value  # Coluna A
-        local = sheet.cell(row=row_idx, column=2).value  # Coluna B
-        fornecedor = sheet.cell(row=row_idx, column=3).value  # Coluna C
-        quantidade = sheet.cell(row=row_idx, column=5).value  # Coluna E
-        codigo = sheet.cell(row=row_idx, column=6).value  # Coluna F
-        descricao = sheet.cell(row=row_idx, column=7).value  # Coluna G
-        preco = sheet.cell(row=row_idx, column=12).value  # Coluna L
+        nome = sheet.cell(row=row_idx, column=1).value  # Coluna A (1): nome
+        local = sheet.cell(row=row_idx, column=2).value  # Coluna B (2): local
+        fornecedor = sheet.cell(row=row_idx, column=3).value  # Coluna C (3): fornecedor
+        codigo = sheet.cell(row=row_idx, column=6).value  # Coluna F (6): código
+        descricao = sheet.cell(row=row_idx, column=7).value  # Coluna G (7): descrição
+        preco = sheet.cell(row=row_idx, column=12).value  # Coluna L (12): valor total
         
-        # Pular linhas vazias ou com nome/código vazios
-        if not nome or not codigo or nome == "_EMPTY_" or codigo == "_EMPTY_":
+        # Pular linhas vazias ou com nome/código vazios ou inválidos
+        if (not nome or nome == "_EMPTY_" or nome == "" or 
+            not codigo or codigo == "_EMPTY_" or codigo == "" or 
+            codigo == "UNKNOWN-CODE"):
             continue
         
         # Formatar preço como "R$ XX.XXX,XX"
@@ -95,9 +103,9 @@ def extract_products_from_sheet(sheet):
             "fornecedor": fornecedor or "",
             "codigo": str(codigo).strip(),
             "descricao": descricao or "",
-            "quantidade": quantidade or 0,
             "preco": preco_formatado,
-            "imagem": ""  # Será preenchido depois ao associar imagens
+            "imagem": "",  # Será preenchido depois ao associar imagens
+            "row": row_idx  # Armazenar o número da linha para associar com imagens
         }
         
         products.append(produto)
@@ -137,52 +145,95 @@ def format_price(price_value):
 
 def extract_images_from_sheet(sheet, output_dir):
     """
-    Extrai imagens da planilha.
+    Extrai imagens da planilha utilizando um método mais robusto.
     """
     images = []
     
-    for image_idx, image_tuple in enumerate(sheet._images):
-        try:
-            # Acessar dados binários da imagem
-            image_data = image_tuple._data
+    # Verificar se há imagens na planilha de diferentes formas
+    try:
+        # Método 1: Tentar acessar pelas imagens embutidas se disponível
+        sheet_images = []
+        
+        # Ver se o atributo _images existe
+        if hasattr(sheet, '_images'):
+            sheet_images = sheet._images
+        # Alternativa para o atributo 'images' em versões mais recentes
+        elif hasattr(sheet, 'images'):
+            sheet_images = sheet.images
             
-            # Gerar nome temporário para a imagem
-            temp_image_name = f"temp_image_{image_idx}.png"
-            temp_image_path = os.path.join(output_dir, temp_image_name)
-            
-            # Salvar imagem em disco temporariamente
-            with open(temp_image_path, "wb") as f:
-                f.write(image_data)
-            
-            # Encontrar células próximas à imagem
-            row = image_tuple.anchor.to.row if hasattr(image_tuple.anchor, 'to') else 0
-            col = image_tuple.anchor.to.col if hasattr(image_tuple.anchor, 'to') else 0
-            
-            # Buscar código na coluna F (coluna 6)
-            codigo = None
-            if row > 0:
-                for r in range(max(1, row-3), min(sheet.max_row, row+3)):
-                    codigo_cell = sheet.cell(row=r, column=6).value
-                    if codigo_cell and str(codigo_cell).strip():
-                        codigo = str(codigo_cell).strip()
-                        break
-            
-            # Se não encontrou código, gerar nome único
-            if not codigo:
-                codigo = f"img_{image_idx}"
-            
-            # Remover caracteres inválidos do código para uso como nome de arquivo
-            safe_codigo = re.sub(r'[^\w\-\.]', '_', codigo)
-            
-            # Definir nome e caminho final da imagem
-            image_filename = f"{safe_codigo}.png"
-            image_path = os.path.join(output_dir, image_filename)
-            
-            # Renomear ou copiar a imagem para o caminho final
-            if os.path.exists(temp_image_path):
+        # Processar as imagens encontradas
+        for image_idx, image_tuple in enumerate(sheet_images):
+            try:
+                print(f"Processando imagem {image_idx}...", file=sys.stderr)
+                
+                # Gerar nome temporário para a imagem
+                temp_image_name = f"temp_image_{image_idx}.png"
+                temp_image_path = os.path.join(output_dir, temp_image_name)
+                
+                # Tentar diferentes formas de obter os dados da imagem
+                image_data = None
+                if hasattr(image_tuple, '_data') and isinstance(image_tuple._data, bytes):
+                    image_data = image_tuple._data
+                elif hasattr(image_tuple, 'data') and isinstance(image_tuple.data, bytes):
+                    image_data = image_tuple.data
+                elif hasattr(image_tuple, 'ref') and hasattr(image_tuple, 'blob') and isinstance(image_tuple.blob, bytes):
+                    image_data = image_tuple.blob
+                
+                if not image_data or not isinstance(image_data, bytes):
+                    print(f"Dados da imagem {image_idx} inválidos ou não são bytes.", file=sys.stderr)
+                    continue
+                
+                # Salvar imagem em disco temporariamente
+                with open(temp_image_path, "wb") as f:
+                    f.write(image_data)
+                
+                # Obter informação da linha onde a imagem está
+                row = 0
+                try:
+                    if hasattr(image_tuple, 'anchor') and hasattr(image_tuple.anchor, 'to') and hasattr(image_tuple.anchor.to, 'row'):
+                        row = image_tuple.anchor.to.row
+                    elif hasattr(image_tuple, 'anchor') and hasattr(image_tuple.anchor, 'row'):
+                        row = image_tuple.anchor.row
+                except:
+                    row = 0
+                
+                # Buscar código na coluna F (coluna 6) próximo à linha da imagem
+                codigo = None
+                
+                # Se temos a linha, procurar o código próximo
+                if row > 0:
+                    for r in range(max(1, row-3), min(sheet.max_row, row+3)):
+                        codigo_cell = sheet.cell(row=r, column=6).value
+                        if codigo_cell and str(codigo_cell).strip():
+                            codigo = str(codigo_cell).strip()
+                            break
+                            
+                # Se não achamos um código, tentar buscar pela coluna D (4) que é a de imagens
+                # e ver se há um código na mesma linha na coluna F (6)
+                if not codigo:
+                    for r in range(2, sheet.max_row + 1):  # Começar da linha 2
+                        # Se há algum valor na coluna D (4) desta linha
+                        if sheet.cell(row=r, column=4).value:
+                            # Verificar o código na mesma linha, coluna F (6)
+                            codigo_cell = sheet.cell(row=r, column=6).value
+                            if codigo_cell and str(codigo_cell).strip():
+                                codigo = str(codigo_cell).strip()
+                                row = r  # Guardar a linha para referência
+                                break
+                
+                # Se ainda não achou, usar o índice como identificador
+                if not codigo:
+                    codigo = f"img_{image_idx}"
+                
+                # Remover caracteres inválidos do código para uso como nome de arquivo
+                safe_codigo = re.sub(r'[^\w\-\.]', '_', codigo)
+                
+                # Definir nome e caminho final da imagem
+                image_filename = f"{safe_codigo}.png"
+                image_path = os.path.join(output_dir, image_filename)
+                
                 # Se já existe arquivo com esse nome, adicionar sufixo
                 suffix = 1
-                base_path = image_path
                 while os.path.exists(image_path):
                     image_filename = f"{safe_codigo}_{suffix}.png"
                     image_path = os.path.join(output_dir, image_filename)
@@ -190,42 +241,139 @@ def extract_images_from_sheet(sheet, output_dir):
                 
                 # Copiar para o caminho final
                 import shutil
-                shutil.copy2(temp_image_path, image_path)
+                if os.path.exists(temp_image_path):
+                    shutil.copy2(temp_image_path, image_path)
+                    os.remove(temp_image_path)  # Remover temporário
                 
-                # Remover arquivo temporário
-                os.remove(temp_image_path)
+                # Converter imagem para base64
+                with open(image_path, "rb") as image_file:
+                    encoded_image = base64.b64encode(image_file.read()).decode('utf-8')
+                
+                # Adicionar à lista de imagens
+                image_info = {
+                    "codigo": codigo,
+                    "filename": image_filename,
+                    "path": image_path,
+                    "base64": encoded_image,
+                    "row": row  # Guardar a linha para associação
+                }
+                
+                images.append(image_info)
+                print(f"Imagem {image_idx} processada com sucesso: {image_filename}", file=sys.stderr)
+                
+            except Exception as e:
+                print(f"Erro no script Python: Erro ao processar imagem {image_idx}: {str(e)}", file=sys.stderr)
+        
+    except Exception as e:
+        print(f"Erro no script Python: {str(e)}", file=sys.stderr)
+    
+    # Segundo método: usar PIL para procurar imagens (fallback)
+    if len(images) == 0:
+        try:
+            from PIL import Image as PILImage
+            import tempfile
             
-            # Converter imagem para base64
-            with open(image_path, "rb") as image_file:
-                encoded_image = base64.b64encode(image_file.read()).decode('utf-8')
+            # Salvar o arquivo Excel como temporário com extensão .xlsx
+            temp_dir = tempfile.mkdtemp()
+            temp_excel = os.path.join(temp_dir, "temp.xlsx")
+            wb = openpyxl.load_workbook(filename=excel_file_path)
+            wb.save(temp_excel)
             
-            # Adicionar à lista de imagens
-            images.append({
-                "codigo": codigo,
-                "filename": image_filename,
-                "path": image_path,
-                "base64": encoded_image
-            })
+            # Usar a biblioteca zipfile para extrair imagens
+            import zipfile
+            
+            with zipfile.ZipFile(temp_excel, 'r') as zip_ref:
+                # Extrair todas as imagens do arquivo
+                image_files = [f for f in zip_ref.namelist() if f.startswith('xl/media/')]
+                
+                for idx, image_file in enumerate(image_files):
+                    try:
+                        # Extrair a imagem para um arquivo temporário
+                        img_temp = os.path.join(temp_dir, f"temp_img_{idx}.png")
+                        with open(img_temp, 'wb') as f:
+                            f.write(zip_ref.read(image_file))
+                        
+                        # Gerar nome baseado no índice
+                        codigo = f"img_{idx}"
+                        image_filename = f"{codigo}.png"
+                        image_path = os.path.join(output_dir, image_filename)
+                        
+                        # Copiar para o destino final
+                        import shutil
+                        shutil.copy2(img_temp, image_path)
+                        
+                        # Converter para base64
+                        with open(image_path, "rb") as image_file:
+                            encoded_image = base64.b64encode(image_file.read()).decode('utf-8')
+                        
+                        # Adicionar à lista
+                        images.append({
+                            "codigo": codigo,
+                            "filename": image_filename,
+                            "path": image_path,
+                            "base64": encoded_image
+                        })
+                        
+                    except Exception as e:
+                        print(f"Erro no script Python: Erro ao processar imagem zip {idx}: {str(e)}", file=sys.stderr)
+            
+            # Limpar arquivos temporários
+            import shutil
+            shutil.rmtree(temp_dir, ignore_errors=True)
             
         except Exception as e:
-            print(f"Erro ao processar imagem {image_idx}: {str(e)}", file=sys.stderr)
+            print(f"Erro no script Python: Erro no método fallback: {str(e)}", file=sys.stderr)
     
+    print(f"Total de {len(images)} imagens extraídas", file=sys.stderr)
     return images
 
 def associate_images_with_products(products, images):
     """
-    Associa imagens aos produtos com base no código.
+    Associa imagens aos produtos com base no código e na linha.
     """
+    print(f"Associando {len(images)} imagens a {len(products)} produtos...", file=sys.stderr)
+    
     # Criar dicionário de imagens por código
     images_by_code = {}
     for img in images:
         images_by_code[img["codigo"]] = img
     
+    # Criar dicionário de imagens por linha
+    images_by_row = {}
+    for img in images:
+        if "row" in img and img["row"] > 0:
+            images_by_row[img["row"]] = img
+    
+    # Número de produtos atualizados
+    updated_products = 0
+    
     # Associar imagens aos produtos
     for product in products:
+        # Tentativa 1: Associar pelo código exato
         codigo = product["codigo"]
         if codigo in images_by_code:
             product["imagem"] = f"data:image/png;base64,{images_by_code[codigo]['base64']}"
+            updated_products += 1
+            print(f"Associada imagem ao produto '{product['nome']}' pelo código: {codigo}", file=sys.stderr)
+            continue
+        
+        # Tentativa 2: Associar pela linha
+        if "row" in product and product["row"] in images_by_row:
+            product["imagem"] = f"data:image/png;base64,{images_by_row[product['row']]['base64']}"
+            updated_products += 1
+            print(f"Associada imagem ao produto '{product['nome']}' pela linha: {product['row']}", file=sys.stderr)
+            continue
+        
+        # Tentativa 3: Procurar código parcial
+        for img_code, img in images_by_code.items():
+            # Se o código do produto está contido no código da imagem ou vice-versa
+            if codigo in img_code or img_code in codigo:
+                product["imagem"] = f"data:image/png;base64,{img['base64']}"
+                updated_products += 1
+                print(f"Associada imagem ao produto '{product['nome']}' por correspondência parcial: {codigo} ↔ {img_code}", file=sys.stderr)
+                break
+    
+    print(f"Associadas imagens a {updated_products} de {len(products)} produtos ({updated_products/len(products)*100:.1f}%)", file=sys.stderr)
 
 if __name__ == "__main__":
     if len(sys.argv) != 3:
