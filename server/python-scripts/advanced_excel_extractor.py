@@ -23,20 +23,56 @@ import tempfile
 from pathlib import Path
 import traceback
 
+def install_dependencies():
+    """Instala as dependências necessárias para o script"""
+    import subprocess
+    import sys
+    
+    # Lista de dependências
+    dependencies = ["pandas", "openpyxl", "pillow", "olefile"]
+    
+    # Verificar quais dependências já estão instaladas
+    installed_packages = []
+    try:
+        import pkg_resources
+        installed_packages = [pkg.key for pkg in pkg_resources.working_set]
+    except ImportError:
+        pass
+    
+    # Instalar pacotes faltantes
+    missing = [pkg for pkg in dependencies if pkg.lower() not in installed_packages]
+    if missing:
+        print(f"Instalando dependências: {', '.join(missing)}")
+        # Usar o pip do usuário com --user para evitar problemas de permissão
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "--user"] + missing)
+        print("Dependências instaladas com sucesso")
+    
+    # Importar novamente os módulos
+    import importlib
+    import sys
+    importlib.reload(sys)
+
+# Tentar importar dependências
 try:
     import pandas as pd
     import openpyxl
     from PIL import Image
     import olefile
 except ImportError:
-    # Se as bibliotecas não estiverem instaladas, exibir mensagem amigável
-    print("Instalando dependências necessárias...")
-    import subprocess
-    subprocess.run(["pip", "install", "pandas", "openpyxl", "pillow", "olefile"], stdout=subprocess.PIPE)
-    import pandas as pd
-    import openpyxl
-    from PIL import Image
-    import olefile
+    # Instalar dependências faltantes
+    print("Algumas dependências estão faltando. Tentando instalá-las...")
+    install_dependencies()
+    
+    # Tentar importar novamente
+    try:
+        import pandas as pd
+        import openpyxl
+        from PIL import Image
+        import olefile
+    except ImportError as e:
+        print(f"ERRO: Ainda não foi possível importar as dependências: {str(e)}")
+        # Alternativa: usar apenas bibliotecas padrão do Python
+        pd = None
 
 def debug_log(message):
     """Função para log de debug"""
@@ -79,6 +115,11 @@ def extract_images(excel_path, output_dir=None):
             debug_log("Tentando método 3: extração de objetos OLE")
             result = extract_with_olefile(excel_path, output_dir, result)
         
+        # Último recurso: método de fallback usando puro Python
+        if len(result["images"]) == 0:
+            debug_log("Tentando método de fallback com puro Python")
+            result = extract_with_pure_python(excel_path, output_dir, result)
+        
     except Exception as e:
         error_message = f"Erro durante extração: {str(e)}\n{traceback.format_exc()}"
         debug_log(error_message)
@@ -88,6 +129,64 @@ def extract_images(excel_path, output_dir=None):
     result["total_images"] = len(result["images"])
     debug_log(f"Total de imagens extraídas: {result['total_images']}")
     
+    return result
+    
+def extract_with_pure_python(excel_path, output_dir, result):
+    """
+    Método de fallback que usa apenas bibliotecas padrão do Python
+    
+    Esta função é um último recurso quando todas as outras abordagens falham,
+    por exemplo, quando as dependências necessárias não podem ser instaladas.
+    """
+    debug_log("Iniciando extração com método de fallback puro Python")
+    
+    try:
+        # Verificar se o arquivo é um ZIP (como XLSX)
+        if excel_path.lower().endswith('.xlsx') or excel_path.lower().endswith('.xlsm'):
+            try:
+                with zipfile.ZipFile(excel_path, 'r') as zip_ref:
+                    # Procurar por padrões conhecidos de arquivos de imagem em arquivos XLSX
+                    media_paths = [f for f in zip_ref.namelist() if 
+                        ('xl/media/' in f or 'ppt/media/' in f or 'word/media/' in f) and 
+                        any(f.lower().endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.gif', '.bmp'])]
+                    
+                    debug_log(f"Encontradas {len(media_paths)} potenciais imagens em caminhos de mídia")
+                    
+                    for img_index, media_path in enumerate(media_paths):
+                        # Extrair a imagem para o disco
+                        img_filename = os.path.basename(media_path)
+                        output_path = os.path.join(output_dir, f"fallback_{img_index}_{img_filename}")
+                        
+                        with zip_ref.open(media_path) as img_file:
+                            img_data = img_file.read()
+                            
+                            if not img_data or len(img_data) < 100:  # Evitar arquivos muito pequenos
+                                continue
+                                
+                            with open(output_path, 'wb') as out_file:
+                                out_file.write(img_data)
+                            
+                            # Converter para base64
+                            img_base64 = base64.b64encode(img_data).decode('utf-8')
+                            
+                            # Adicionar ao resultado
+                            result["images"].append({
+                                "image_path": output_path,
+                                "image_filename": os.path.basename(output_path),
+                                "original_path": media_path,
+                                "image_base64": img_base64
+                            })
+                            
+                            debug_log(f"Imagem de fallback {img_index+1} extraída: {output_path}")
+            except zipfile.BadZipFile:
+                debug_log("Arquivo não é um ZIP válido, continuando com outros métodos")
+                
+        # Para outros tipos de arquivo, simplesmente retornar o resultado atual
+        return result
+                
+    except Exception as e:
+        debug_log(f"Erro no método de fallback: {str(e)}")
+        
     return result
 
 def extract_with_zipfile(excel_path, output_dir, result):
@@ -261,6 +360,11 @@ def extract_with_zipfile(excel_path, output_dir, result):
 
 def extract_with_openpyxl(excel_path, output_dir, result):
     """Extração de imagens usando openpyxl (para estruturas mais complexas)"""
+    # Verificar se temos o módulo openpyxl disponível
+    if 'openpyxl' not in sys.modules:
+        debug_log("openpyxl não está disponível, pulando este método de extração")
+        return result
+    
     try:
         debug_log(f"Extraindo imagens de {excel_path} com método openpyxl")
         
@@ -275,12 +379,17 @@ def extract_with_openpyxl(excel_path, output_dir, result):
             try:
                 sheet = workbook[sheet_name]
                 
-                # Acessar imagens da planilha
-                if hasattr(sheet, '_images'):
+                # Acessar imagens da planilha - com tratamento para atributos que podem não existir
+                if hasattr(sheet, '_images') and sheet._images:
                     debug_log(f"Encontradas {len(sheet._images)} imagens na planilha {sheet_name}")
                     
                     for img in sheet._images:
                         try:
+                            # Verificar se o objeto tem o atributo _data
+                            if not hasattr(img, '_data'):
+                                debug_log("Imagem sem dados (_data), pulando")
+                                continue
+                                
                             # Obter o tipo da imagem
                             img_data = img._data
                             img_ext = 'png'  # Extensão padrão
@@ -307,42 +416,49 @@ def extract_with_openpyxl(excel_path, output_dir, result):
                         except Exception as e:
                             debug_log(f"Erro ao extrair imagem com openpyxl: {str(e)}")
                 
-                # Processar objetos de desenho (drawing)
+                # Processar objetos de desenho (drawing) - com tratamento mais robusto
                 if hasattr(sheet, '_drawings') and sheet._drawings:
                     debug_log(f"Encontrados {len(sheet._drawings)} objetos de desenho na planilha {sheet_name}")
                     
                     for drawing in sheet._drawings:
                         try:
-                            for img in drawing.images:
-                                try:
-                                    # Obter os dados da imagem
-                                    img_data = img._data()
-                                    
-                                    if not img_data or len(img_data) == 0:
-                                        debug_log("Dados de imagem vazios")
-                                        continue
-                                    
-                                    # Criar nome de arquivo único
-                                    output_path = os.path.join(output_dir, f"drawing_{img_index}_{sheet_name}.png")
-                                    
-                                    # Salvar a imagem
-                                    with open(output_path, 'wb') as f:
-                                        f.write(img_data)
-                                    
-                                    # Converter para base64
-                                    img_base64 = base64.b64encode(img_data).decode('utf-8')
-                                    
-                                    result["images"].append({
-                                        "image_path": output_path,
-                                        "image_filename": os.path.basename(output_path),
-                                        "original_path": f"{sheet_name}/drawing{img_index}",
-                                        "image_base64": img_base64
-                                    })
-                                    
-                                    img_index += 1
-                                    debug_log(f"Imagem de desenho {img_index} extraída: {output_path}")
-                                except Exception as e:
-                                    debug_log(f"Erro ao extrair imagem de desenho: {str(e)}")
+                            # Verificar se tem atributo 'images'
+                            if hasattr(drawing, 'images'):
+                                for img in drawing.images:
+                                    try:
+                                        # Verificar se tem método _data()
+                                        if not hasattr(img, '_data') or not callable(getattr(img, '_data')):
+                                            debug_log("Imagem sem método _data(), pulando")
+                                            continue
+                                            
+                                        # Obter os dados da imagem
+                                        img_data = img._data()
+                                        
+                                        if not img_data or len(img_data) == 0:
+                                            debug_log("Dados de imagem vazios")
+                                            continue
+                                        
+                                        # Criar nome de arquivo único
+                                        output_path = os.path.join(output_dir, f"drawing_{img_index}_{sheet_name}.png")
+                                        
+                                        # Salvar a imagem
+                                        with open(output_path, 'wb') as f:
+                                            f.write(img_data)
+                                        
+                                        # Converter para base64
+                                        img_base64 = base64.b64encode(img_data).decode('utf-8')
+                                        
+                                        result["images"].append({
+                                            "image_path": output_path,
+                                            "image_filename": os.path.basename(output_path),
+                                            "original_path": f"{sheet_name}/drawing{img_index}",
+                                            "image_base64": img_base64
+                                        })
+                                        
+                                        img_index += 1
+                                        debug_log(f"Imagem de desenho {img_index} extraída: {output_path}")
+                                    except Exception as e:
+                                        debug_log(f"Erro ao extrair imagem de desenho: {str(e)}")
                         except Exception as e:
                             debug_log(f"Erro ao processar objetos de desenho: {str(e)}")
             except Exception as e:
@@ -357,6 +473,11 @@ def extract_with_openpyxl(excel_path, output_dir, result):
 
 def extract_with_olefile(excel_path, output_dir, result):
     """Extração de imagens usando olefile (para arquivos .xls antigos)"""
+    # Verificar se temos o módulo olefile disponível
+    if 'olefile' not in sys.modules:
+        debug_log("olefile não está disponível, pulando este método de extração")
+        return result
+        
     try:
         debug_log(f"Extraindo imagens de {excel_path} com método olefile")
         
