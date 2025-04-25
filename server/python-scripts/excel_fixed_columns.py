@@ -360,13 +360,19 @@ def extract_images_from_sheet(sheet, output_dir):
                             print(f"Erro ao verificar célula: {cell_err}", file=sys.stderr)
                             continue
                 
-                # Estratégia 5 (último recurso): Usar índice como identificador
+                # Estratégia 5 (último recurso): Usar índice como identificador único
                 if not codigo:
-                    codigo = f"imagem_{image_idx}"
-                    print(f"Sem código identificado, usando índice: {codigo}", file=sys.stderr)
+                    # Criar código baseado em índice, linha, coluna e timestamp para garantir exclusividade
+                    import time
+                    timestamp = int(time.time())
+                    codigo = f"imagem_idx{image_idx}_r{row}_c{col}_{timestamp}"
+                    print(f"Sem código identificado, usando identificador único: {codigo}", file=sys.stderr)
                 
                 # Remover caracteres inválidos do código para uso como nome de arquivo
                 safe_codigo = re.sub(r'[^\w\-\.]', '_', codigo)
+                
+                # Adicionar o índice da imagem ao código para garantir exclusividade
+                safe_codigo = f"{safe_codigo}_{image_idx}"
                 
                 # Definir nome e caminho final da imagem
                 image_filename = f"{safe_codigo}.png"
@@ -459,9 +465,15 @@ def extract_images_from_sheet(sheet, output_dir):
                         with open(img_temp, 'wb') as f:
                             f.write(zip_ref.read(image_file))
                         
-                        # Gerar nome baseado no índice
-                        codigo = f"img_{idx}"
-                        image_filename = f"{codigo}.png"
+                        # Gerar nome único baseado no índice, timestamp e nome do arquivo original
+                        import time
+                        timestamp = int(time.time())
+                        original_name = os.path.basename(image_file)
+                        codigo = f"img_{idx}_{timestamp}_{original_name.replace('.', '_')}"
+                        
+                        # Garantir que o código seja único
+                        safe_codigo = re.sub(r'[^\w\-\.]', '_', codigo)
+                        image_filename = f"{safe_codigo}.png"
                         image_path = os.path.join(output_dir, image_filename)
                         
                         # Copiar para o destino final
@@ -495,7 +507,7 @@ def extract_images_from_sheet(sheet, output_dir):
 
 def associate_images_with_products(products, images):
     """
-    Associa imagens aos produtos com base no código e na linha.
+    Associa imagens aos produtos com base no código e na linha, garantindo uma associação 1:1 estrita.
     """
     print(f"Associando {len(images)} imagens a {len(products)} produtos...", file=sys.stderr)
     
@@ -508,36 +520,73 @@ def associate_images_with_products(products, images):
     images_by_row = {}
     for img in images:
         if "row" in img and img["row"] > 0:
-            images_by_row[img["row"]] = img
+            # Usar linha+coluna como chave única para garantir associação precisa
+            row_col_key = f"{img['row']}_{img.get('col', 0)}"
+            images_by_row[row_col_key] = img
+    
+    # Manter registro de imagens já utilizadas para evitar duplicação
+    used_images = set()
     
     # Número de produtos atualizados
     updated_products = 0
     
-    # Associar imagens aos produtos
+    # Primeira passagem: Associação exata por código
     for product in products:
-        # Tentativa 1: Associar pelo código exato
         codigo = product["codigo"]
-        if codigo in images_by_code:
+        # Associar pelo código exato apenas
+        if codigo in images_by_code and images_by_code[codigo]["codigo"] not in used_images:
             product["imagem"] = f"data:image/png;base64,{images_by_code[codigo]['base64']}"
+            used_images.add(images_by_code[codigo]["codigo"])
             updated_products += 1
-            print(f"Associada imagem ao produto '{product['nome']}' pelo código: {codigo}", file=sys.stderr)
-            continue
-        
-        # Tentativa 2: Associar pela linha
-        if "row" in product and product["row"] in images_by_row:
-            product["imagem"] = f"data:image/png;base64,{images_by_row[product['row']]['base64']}"
-            updated_products += 1
-            print(f"Associada imagem ao produto '{product['nome']}' pela linha: {product['row']}", file=sys.stderr)
-            continue
-        
-        # Tentativa 3: Procurar código parcial
-        for img_code, img in images_by_code.items():
-            # Se o código do produto está contido no código da imagem ou vice-versa
-            if codigo in img_code or img_code in codigo:
-                product["imagem"] = f"data:image/png;base64,{img['base64']}"
+            print(f"[EXATO] Associada imagem ao produto '{product['nome']}' pelo código: {codigo}", file=sys.stderr)
+            # Armazenar ID da imagem no produto para referência
+            product["image_id"] = images_by_code[codigo]["codigo"]
+    
+    # Segunda passagem: Associação por linha e coluna para produtos sem imagem
+    for product in products:
+        if "imagem" in product:
+            continue  # Já tem imagem da primeira passagem
+            
+        if "row" in product and product["row"] > 0:
+            # Gerar chave linha+coluna
+            row_col_key = f"{product['row']}_{product.get('col', 0)}"
+            
+            if row_col_key in images_by_row and images_by_row[row_col_key]["codigo"] not in used_images:
+                product["imagem"] = f"data:image/png;base64,{images_by_row[row_col_key]['base64']}"
+                used_images.add(images_by_row[row_col_key]["codigo"])
                 updated_products += 1
-                print(f"Associada imagem ao produto '{product['nome']}' por correspondência parcial: {codigo} ↔ {img_code}", file=sys.stderr)
-                break
+                print(f"[LINHA] Associada imagem ao produto '{product['nome']}' pela linha/coluna: {row_col_key}", file=sys.stderr)
+                # Armazenar ID da imagem
+                product["image_id"] = images_by_row[row_col_key]["codigo"]
+    
+    # Terceira passagem: Associação por proximidade para produtos sem imagem
+    # Usar um critério mais estrito para evitar falsas associações
+    for product in products:
+        if "imagem" in product:
+            continue  # Já tem imagem
+            
+        codigo = product["codigo"]
+        closest_img = None
+        closest_img_codigo = None
+        
+        for img_code, img in images_by_code.items():
+            if img_code in used_images:
+                continue  # Imagem já usada
+                
+            # Associar apenas se o código do produto estiver contido na imagem ou vice-versa
+            # E aplicar comparação de proximidade para escolher a melhor
+            if codigo in img_code or img_code in codigo:
+                if closest_img is None:
+                    closest_img = img
+                    closest_img_codigo = img_code
+        
+        if closest_img is not None:
+            product["imagem"] = f"data:image/png;base64,{closest_img['base64']}"
+            used_images.add(closest_img_codigo)
+            updated_products += 1
+            print(f"[PARCIAL] Associada imagem ao produto '{product['nome']}': {codigo} ↔ {closest_img_codigo}", file=sys.stderr)
+            # Armazenar ID da imagem
+            product["image_id"] = closest_img_codigo
     
     print(f"Associadas imagens a {updated_products} de {len(products)} produtos ({updated_products/len(products)*100:.1f}%)", file=sys.stderr)
 
