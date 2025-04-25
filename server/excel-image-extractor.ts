@@ -39,6 +39,7 @@ import os
 import sys
 import json
 import base64
+import re
 from openpyxl.drawing.image import Image
 from PIL import Image as PILImage
 import io
@@ -105,7 +106,7 @@ def extract_images_from_excel(excel_file_path, output_dir):
                     product_code = f"unknown_product_{len(result['images'])}"
                 
                 # Remover caracteres não permitidos para nomes de arquivo
-                safe_product_code = product_code.replace('/', '_').replace('\\', '_').replace(' ', '_')
+                safe_product_code = re.sub(r'[^\w\-\.]', '_', str(product_code))
                 
                 image_filename = f"{safe_product_code}.png"
                 image_path = os.path.join(output_dir, image_filename)
@@ -341,6 +342,7 @@ export async function hasExcelImages(excelFilePath: string): Promise<boolean> {
 import openpyxl
 import sys
 import json
+import re
 
 def check_excel_images(excel_file_path):
     # Abrir o arquivo Excel
