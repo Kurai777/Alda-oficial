@@ -8,6 +8,7 @@ import Login from "@/pages/login";
 import Dashboard from "@/pages/dashboard";
 import Catalogs from "@/pages/catalogs";
 import CatalogDetails from "@/pages/catalog-details";
+import ProductDetail from "@/pages/product-detail";
 import Quotes from "@/pages/quotes";
 import Moodboards from "@/pages/moodboards";
 import Profile from "@/pages/profile";
@@ -70,6 +71,16 @@ function Router() {
           <ProtectedRoute>
             <Layout>
               <AiDesignChat params={params} />
+            </Layout>
+          </ProtectedRoute>
+        )}
+      </Route>
+
+      <Route path="/product/:productId">
+        {params => (
+          <ProtectedRoute>
+            <Layout>
+              <ProductDetail />
             </Layout>
           </ProtectedRoute>
         )}
