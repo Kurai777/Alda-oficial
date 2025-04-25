@@ -1,118 +1,12 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { PlusCircle, Info, Image as ImageIcon } from "lucide-react";
+import { PlusCircle, Info } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { Product } from "@shared/schema";
 import { Link } from "wouter";
-
-// Componente para verificar e exibir imagens com garantia de correspondência
-interface ImageWithVerificationProps {
-  productId?: number;
-  productName: string;
-  productCode?: string;
-  category?: string;
-}
-
-function ImageWithVerification({ productId, productName, productCode, category }: ImageWithVerificationProps) {
-  const [imageUrl, setImageUrl] = useState<string>("");
-  const [isLoading, setIsLoading] = useState<boolean>(true);
-  const [hasError, setHasError] = useState<boolean>(false);
-
-  useEffect(() => {
-    if (!productId) {
-      setImageUrl("/placeholders/default.svg");
-      setIsLoading(false);
-      return;
-    }
-
-    // Verificar a disponibilidade e exclusividade da imagem
-    fetch(`/api/verify-product-image/${productId}`)
-      .then(response => {
-        if (!response.ok) {
-          throw new Error(`Erro ${response.status}: ${response.statusText}`);
-        }
-        return response.json();
-      })
-      .then(data => {
-        if (data.status === 'success' && data.hasImage) {
-          // Se a imagem é compartilhada, criar uma cópia exclusiva 
-          if (data.isShared && data.localPath) {
-            console.log(`Produto ${productId}: Imagem compartilhada detectada, criando exclusiva...`);
-            // Chamar API para criar cópia exclusiva
-            return fetch(`/api/create-unique-image/${productId}`, {
-              method: 'POST'
-            })
-            .then(uniqueResponse => uniqueResponse.json())
-            .then(uniqueData => {
-              if (uniqueData.success) {
-                console.log(`Produto ${productId}: Imagem exclusiva criada com sucesso`);
-                // Usar a URL da imagem exclusiva garantida
-                setImageUrl(`/api/product-image/${productId}?t=${Date.now()}`);
-              } else {
-                throw new Error(`Falha ao criar imagem exclusiva: ${uniqueData.error}`);
-              }
-            });
-          }
-          
-          // Se a imagem já é única, usar diretamente
-          setImageUrl(`/api/product-image/${productId}`);
-        } else {
-          // Se não há imagem, determinar um placeholder baseado na categoria
-          let placeholderFile = 'default.svg';
-          if (category) {
-            const normalizedCategory = category.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-            if (normalizedCategory.includes('sofa')) placeholderFile = 'sofa.svg';
-            else if (normalizedCategory.includes('mesa')) placeholderFile = 'mesa.svg';
-            else if (normalizedCategory.includes('poltrona')) placeholderFile = 'poltrona.svg';
-            else if (normalizedCategory.includes('armario') || normalizedCategory.includes('estante')) placeholderFile = 'armario.svg';
-          }
-          setImageUrl(`/placeholders/${placeholderFile}`);
-        }
-        setIsLoading(false);
-      })
-      .catch(error => {
-        console.error(`Erro ao verificar imagem para produto ${productId}:`, error);
-        // Tentar usar a API diretamente como último recurso
-        setImageUrl(`/api/product-image/${productId}`); 
-        setIsLoading(false);
-        setHasError(true);
-      });
-  }, [productId, category]);
-
-  const handleImageError = () => {
-    // Se a imagem falhar ao carregar, usar placeholder
-    let placeholderFile = 'default.svg';
-    if (category) {
-      const normalizedCategory = category.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-      if (normalizedCategory.includes('sofa')) placeholderFile = 'sofa.svg';
-      else if (normalizedCategory.includes('mesa')) placeholderFile = 'mesa.svg';
-      else if (normalizedCategory.includes('poltrona')) placeholderFile = 'poltrona.svg';
-      else if (normalizedCategory.includes('armario') || normalizedCategory.includes('estante')) placeholderFile = 'armario.svg';
-    }
-    setImageUrl(`/placeholders/${placeholderFile}`);
-    setHasError(true);
-  };
-
-  if (isLoading) {
-    return (
-      <div className="h-full w-full flex items-center justify-center bg-gray-100 animate-pulse">
-        <ImageIcon className="h-12 w-12 text-gray-300" />
-      </div>
-    );
-  }
-
-  return (
-    <img 
-      src={imageUrl}
-      alt={productName} 
-      className="h-full w-full object-cover"
-      loading="lazy"
-      onError={handleImageError}
-    />
-  );
-};
+import ImageWithVerification from "./ImageWithVerification";
 
 interface ProductCardProps {
   product: Product;

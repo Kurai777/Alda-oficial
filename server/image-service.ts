@@ -52,6 +52,7 @@ export interface ProductImageInfo {
   localPath?: string;
   contentType?: string;
   error?: string;
+  isShared?: boolean;
 }
 
 /**

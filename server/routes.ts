@@ -2507,6 +2507,76 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ message: "Erro ao servir imagem extraída" });
     }
   });
+  
+  // Rota para verificar se um produto tem uma imagem e se ela é compartilhada
+  app.get("/api/verify-product-image/:productId", async (req: Request, res: Response) => {
+    try {
+      const { productId } = req.params;
+      
+      // Importar o serviço de imagens
+      const { getProductImageInfo } = await import('./image-service');
+      
+      // Verificar a imagem do produto
+      const imageInfo = await getProductImageInfo(parseInt(productId));
+      
+      res.status(200).json({
+        status: 'success',
+        hasImage: imageInfo.hasImage,
+        isShared: false, // Implementar detecção de compartilhamento em uma versão futura
+        url: imageInfo.url || null,
+        localPath: imageInfo.localPath || null
+      });
+    } catch (error) {
+      console.error('Erro ao verificar imagem de produto:', error);
+      res.status(500).json({ 
+        status: 'error',
+        message: "Erro ao verificar imagem de produto",
+        error: error.message
+      });
+    }
+  });
+  
+  // Rota para criar uma cópia única de uma imagem para um produto
+  app.post("/api/create-unique-image/:productId", async (req: Request, res: Response) => {
+    try {
+      const { productId } = req.params;
+      
+      // Importar o serviço de imagens
+      const { createUniqueProductImage, getProductImageInfo } = await import('./image-service');
+      
+      // Obter informações da imagem atual
+      const imageInfo = await getProductImageInfo(parseInt(productId));
+      
+      if (!imageInfo.hasImage || !imageInfo.localPath) {
+        return res.status(400).json({
+          success: false,
+          error: "Produto não possui imagem para criar cópia"
+        });
+      }
+      
+      // Criar uma cópia única da imagem
+      const uniqueImageInfo = await createUniqueProductImage(parseInt(productId), imageInfo.localPath);
+      
+      if (uniqueImageInfo.hasImage) {
+        res.status(200).json({
+          success: true,
+          message: "Imagem única criada com sucesso",
+          imageInfo: uniqueImageInfo
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          error: uniqueImageInfo.error || "Erro ao criar imagem única"
+        });
+      }
+    } catch (error) {
+      console.error('Erro ao criar imagem única:', error);
+      res.status(500).json({
+        success: false,
+        error: error.message
+      });
+    }
+  });
 
   // Adicionar rotas de teste
   addTestRoutes(app);
