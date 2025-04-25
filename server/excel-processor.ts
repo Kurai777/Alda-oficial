@@ -1,6 +1,33 @@
 import * as XLSX from 'xlsx';
 import { readFile } from 'fs/promises';
+import path from 'path';
+import fs from 'fs';
 import { determineProductCategory, extractMaterialsFromDescription } from './utils';
+import { extractImagesFromExcel, hasExcelImages } from './excel-image-extractor.js';
+
+// Configurações para mapeamento de colunas por índice em formatos específicos
+// Formato: {indiceColuna: nomeCampo}
+const COLUMN_MAPPINGS = {
+  // Mapeamento para planilha Sofá Home/POE
+  SOFA_HOME: {
+    0: "code", // Primeira coluna como código
+    1: "name", // Segunda coluna como nome
+    2: "location", // Terceira coluna como localização
+    3: "supplier", // Quarta coluna como fornecedor
+    4: "price", // Quinta coluna como preço
+    // Mais mapeamentos podem ser adicionados conforme necessário
+  },
+  // Outros formatos de planilha podem ser adicionados aqui
+  DEFAULT: {
+    0: "code",
+    1: "name",
+    2: "description",
+    3: "price",
+    4: "category",
+    5: "location",
+    6: "supplier"
+  }
+};
 
 export interface ExcelProduct {
   nome?: string;
@@ -46,11 +73,93 @@ export interface ExcelProduct {
 }
 
 /**
+ * Detecta o formato da planilha e retorna o mapeamento de colunas por índice
+ * @param rawData Dados brutos da planilha
+ * @param fileName Nome do arquivo para reconhecer formatos específicos
+ * @returns Mapeamento de índices para nomes de campos
+ */
+function detectColumnMapping(rawData: any[], fileName: string): Record<number, string> {
+  // Verificar se o arquivo corresponde a algum formato conhecido pelo nome
+  const fileLower = fileName.toLowerCase();
+  
+  // Para Sofá Home/POE
+  if (fileLower.includes('sofa') || fileLower.includes('poe')) {
+    return COLUMN_MAPPINGS.SOFA_HOME;
+  }
+  
+  // Para outros formatos, tente descobrir analisando o conteúdo
+  if (rawData.length > 0) {
+    // Verificar se a primeira linha contém cabeçalhos que correspondem a formatos conhecidos
+    const firstRow = rawData[0];
+    const keys = Object.keys(firstRow);
+    
+    // Detectar padrão de Sofá Home/POE pelo conteúdo
+    const hasSupplierKey = keys.some(k => /forn/i.test(k));
+    const hasCodeKey = keys.some(k => /cod/i.test(k));
+    const hasImageKey = keys.some(k => /imag/i.test(k));
+    
+    if (hasSupplierKey && hasCodeKey && hasImageKey) {
+      return COLUMN_MAPPINGS.SOFA_HOME;
+    }
+  }
+  
+  // Se não corresponder a nenhum formato conhecido, use mapeamento por índice padrão
+  return COLUMN_MAPPINGS.DEFAULT;
+}
+
+/**
+ * Aplica mapeamento de colunas por índice em vez de usar nomes de cabeçalho
+ * @param rawData Dados brutos do Excel
+ * @param columnMapping Mapeamento de índices para nomes de campos
+ * @returns Dados com campos mapeados
+ */
+function applyColumnMapping(rawData: any[], columnMapping: Record<number, string>): any[] {
+  // Se não temos dados ou mapeamento, retornar vazio
+  if (!rawData.length || !Object.keys(columnMapping).length) {
+    return rawData;
+  }
+  
+  return rawData.map(row => {
+    // Para cada linha, criar um novo objeto com campos mapeados
+    const mappedRow: Record<string, any> = {};
+    const originalKeys = Object.keys(row);
+    
+    // Aplicar mapeamento de colunas
+    Object.entries(columnMapping).forEach(([indexStr, fieldName]) => {
+      const index = parseInt(indexStr, 10);
+      // Obter a chave original da posição de índice
+      if (index < originalKeys.length) {
+        const originalKey = originalKeys[index];
+        // Usar o valor da coluna original com o novo nome de campo
+        if (row[originalKey] !== null && row[originalKey] !== undefined) {
+          mappedRow[fieldName] = row[originalKey];
+        }
+      }
+    });
+    
+    // Manter campos originais também
+    return { ...row, ...mappedRow };
+  }).filter(row => {
+    // Filtrar linhas vazias ou sem código
+    if (!row.code && !row.codigo) return false;
+    
+    // Verificar se o código parece ser válido (não é apenas um número ou texto muito curto)
+    const code = row.code || row.codigo;
+    if (typeof code === 'string' && code.trim().length < 2) return false;
+    
+    // Verificar se há pelo menos um nome ou descrição
+    const hasName = row.name || row.nome || row.description || row.descricao;
+    return !!hasName;
+  });
+}
+
+/**
  * Processar um arquivo Excel para extrair produtos
  * @param filePath Caminho para o arquivo Excel
+ * @param userId ID do usuário para associar imagens ao processar
  * @returns Array de produtos processados
  */
-export async function processExcelFile(filePath: string): Promise<any[]> {
+export async function processExcelFile(filePath: string, userId?: string | number): Promise<any[]> {
   try {
     console.log(`Iniciando processamento do Excel: ${filePath}`);
     
@@ -72,8 +181,13 @@ export async function processExcelFile(filePath: string): Promise<any[]> {
     
     // Processar todas as planilhas do arquivo
     const allProducts: any[] = [];
+    const fileName = path.basename(filePath);
     
     console.log(`Encontradas ${workbook.SheetNames.length} planilhas no arquivo Excel`);
+    
+    // Verificar se o arquivo tem imagens
+    const hasImages = await hasExcelImages(filePath);
+    console.log(`Arquivo ${hasImages ? 'contém' : 'não contém'} imagens embutidas`);
     
     for (const sheetName of workbook.SheetNames) {
       try {
@@ -89,8 +203,22 @@ export async function processExcelFile(filePath: string): Promise<any[]> {
         console.log(`Extraídos ${rawData.length} registros brutos da planilha ${sheetName}`);
         
         if (rawData.length > 0) {
+          // Detectar e aplicar mapeamento de colunas por índice
+          const columnMapping = detectColumnMapping(rawData, fileName);
+          console.log(`Aplicando mapeamento de colunas por índice: ${JSON.stringify(columnMapping)}`);
+          
+          const mappedData = applyColumnMapping(rawData, columnMapping);
+          console.log(`Após mapeamento e filtragem: ${mappedData.length} registros válidos`);
+          
           // Mapear para o formato de produto padrão
-          const productsFromSheet = normalizeExcelProducts(rawData as ExcelProduct[]);
+          const productsFromSheet = normalizeExcelProducts(mappedData as ExcelProduct[]);
+          
+          // Se temos produtos e imagens, extraia e associe as imagens
+          if (productsFromSheet.length > 0 && hasImages && userId) {
+            console.log(`Extraindo imagens do Excel para ${productsFromSheet.length} produtos`);
+            await extractImagesFromExcel(filePath, productsFromSheet, userId);
+          }
+          
           allProducts.push(...productsFromSheet);
           console.log(`Processados ${productsFromSheet.length} produtos da planilha ${sheetName}`);
         }
