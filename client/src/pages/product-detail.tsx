@@ -129,14 +129,17 @@ export default function ProductDetailPage() {
             <img 
               src={product.imageUrl?.startsWith('data:') 
                 ? product.imageUrl 
-                : product.imageUrl?.startsWith('/uploads/') || product.imageUrl?.startsWith('http')
+                : product.imageUrl?.startsWith('https://') || product.imageUrl?.startsWith('http://')
                   ? product.imageUrl
-                  : product.imageUrl?.startsWith('/')
+                  : product.imageUrl?.startsWith('/uploads/') || product.imageUrl?.startsWith('/temp/')
                     ? product.imageUrl
-                    : product.imageUrl ? `/${product.imageUrl}` : ''} 
+                    : product.imageUrl?.startsWith('/')
+                      ? product.imageUrl
+                      : product.imageUrl ? `/${product.imageUrl}` : ''} 
               alt={product.name} 
               className="h-full w-full object-contain"
               onError={(e) => {
+                console.error(`Erro ao carregar imagem do detalhe do produto: ${product.imageUrl}`);
                 const target = e.target as HTMLImageElement;
                 target.parentElement?.classList.add('bg-muted');
                 target.style.display = 'none';

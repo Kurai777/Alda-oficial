@@ -1,5 +1,5 @@
 // Script para testar a extração de imagens de arquivos Excel
-import { hasExcelImages, extractImagesFromExcel } from './excel-image-extractor.js';
+import { hasExcelImages, extractImagesFromExcel } from './robust-excel-image-extractor.js';
 import path from 'path';
 
 // Caminho para um arquivo Excel de teste

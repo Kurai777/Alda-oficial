@@ -5,8 +5,12 @@ import fs from 'fs';
 import { determineProductCategory, extractMaterialsFromDescription } from './utils';
 // Importar o extrator JavaScript principal
 import { extractImagesFromExcel, hasExcelImages } from './robust-excel-image-extractor.js';
-// Importar a ponte para o Python como fallback
-import { extractImagesWithPythonBridge, hasExcelImagesWithPython } from './python-excel-bridge.js';
+// Importar o extrator avançado com múltiplos fallbacks
+import { extractImagesFromExcel as extractImagesAdvanced } from './advanced-excel-image-extractor.js';
+// Importar a ponte para o Python
+import { extractExcelImagesWithPython, associateImagesWithProducts } from './python-excel-bridge.js';
+// Importar a função de upload para o Firebase
+import { saveImageToFirebaseStorage } from './firebase-admin';
 
 // Configurações para mapeamento de colunas por índice em formatos específicos
 // Formato: {indiceColuna: nomeCampo}
@@ -243,30 +247,84 @@ export async function processExcelFile(filePath: string, userId?: string | numbe
             let productsWithImages = updatedProducts.filter(p => p.imageUrl).length;
             console.log(`${productsWithImages} de ${updatedProducts.length} produtos foram atualizados com URLs de imagem`);
             
-            // Se nenhum produto foi atualizado, tentar com o método Python como fallback
+            // Se nenhum produto foi atualizado, tentar com o método avançado como fallback
             if (productsWithImages === 0) {
-              console.log('Nenhuma imagem extraída com método JavaScript. Tentando com Python...');
+              console.log('Nenhuma imagem extraída com método JavaScript padrão. Tentando método avançado...');
               
               try {
-                // Verificar se o arquivo tem imagens usando o método Python
-                const hasImagesPython = await hasExcelImagesWithPython(filePath);
+                // Tentar com o extrator avançado que possui múltiplos fallbacks
+                console.log('Tentando extração com extrator avançado...');
+                updatedProducts = await extractImagesAdvanced(
+                  filePath, productsFromSheet, String(userId), activeCatalogId
+                );
                 
-                if (hasImagesPython) {
-                  console.log('Método Python detectou imagens no arquivo, extraindo...');
+                // Verificar novamente
+                productsWithImages = updatedProducts.filter(p => p.imageUrl).length;
+                console.log(`Método avançado: ${productsWithImages} de ${updatedProducts.length} produtos foram atualizados com URLs de imagem`);
+                
+                // Se ainda não temos imagens, tentar com a ponte Python diretamente
+                if (productsWithImages === 0) {
+                  console.log('Tentando ponte Python direta como último recurso...');
                   
-                  // Extrair imagens usando o método Python
-                  updatedProducts = await extractImagesWithPythonBridge(
-                    filePath, productsFromSheet, String(userId), activeCatalogId
-                  );
-                  
-                  // Verificar novamente
-                  productsWithImages = updatedProducts.filter(p => p.imageUrl).length;
-                  console.log(`Método Python: ${productsWithImages} de ${updatedProducts.length} produtos foram atualizados com URLs de imagem`);
-                } else {
-                  console.log('Método Python também não detectou imagens no arquivo');
+                  try {
+                    // Extrair imagens diretamente com Python
+                    const extractionResult = await extractExcelImagesWithPython(filePath);
+                    
+                    if (extractionResult.images && extractionResult.images.length > 0) {
+                      console.log(`Python extraiu ${extractionResult.images.length} imagens`);
+                      
+                      // Associar imagens com produtos
+                      const associationResult = await associateImagesWithProducts(filePath, extractionResult);
+                      
+                      if (associationResult.associations && associationResult.associations.length > 0) {
+                        console.log(`Python associou ${associationResult.associations.length} imagens a produtos`);
+                        
+                        // Para cada associação, atualizar o produto correspondente
+                        for (const assoc of associationResult.associations) {
+                          if (assoc.codigo) {
+                            const matchingProduct = productsFromSheet.find(p => 
+                              (p.code && p.code.toString() === assoc.codigo) || 
+                              (p.codigo && p.codigo.toString() === assoc.codigo)
+                            );
+                            
+                            if (matchingProduct && assoc.image) {
+                              // Salvar a imagem no Firebase
+                              try {
+                                const imageBase64 = extractionResult.images.find(
+                                  img => img.image_filename === assoc.image
+                                )?.image_base64;
+                                
+                                if (imageBase64) {
+                                  const imageUrl = await saveImageToFirebaseStorage(
+                                    imageBase64,
+                                    `${assoc.codigo}.png`,
+                                    String(userId || 'unknown'),
+                                    String(activeCatalogId || 'temp')
+                                  );
+                                  
+                                  matchingProduct.imageUrl = imageUrl;
+                                  console.log(`Imagem associada ao produto ${assoc.codigo}: ${imageUrl}`);
+                                }
+                              } catch (e) {
+                                console.error(`Erro ao salvar imagem para ${assoc.codigo}:`, e);
+                              }
+                            }
+                          }
+                        }
+                        
+                        // Verificar novamente
+                        productsWithImages = productsFromSheet.filter(p => p.imageUrl).length;
+                        console.log(`Python direto: ${productsWithImages} de ${productsFromSheet.length} produtos foram atualizados com URLs de imagem`);
+                      }
+                    } else {
+                      console.log('Python não encontrou imagens no arquivo');
+                    }
+                  } catch (pythonError) {
+                    console.error('Erro ao usar Python direto:', pythonError);
+                  }
                 }
-              } catch (pythonError) {
-                console.error('Erro ao usar método Python:', pythonError);
+              } catch (advancedError) {
+                console.error('Erro ao usar método avançado:', advancedError);
               }
             }
           }

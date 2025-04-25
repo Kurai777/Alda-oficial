@@ -941,11 +941,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
             
             // Importar o novo pipeline de processamento automatizado
             console.log("Iniciando pipeline automatizado de processamento...");
-            const { processCatalogWithAutomatedPipeline } = await import('./pdf-ai-pipeline');
+            const { processCatalogPdf } = await import('./pdf-ai-pipeline');
             
-            // Executar o pipeline completo com PaddleOCR + IA
+            // Executar o pipeline completo com PDF2Image + IA
             console.log(`Iniciando pipeline automatizado para: ${filePath}`);
-            productsData = await processCatalogWithAutomatedPipeline(filePath, fileName, userId, catalog.id);
+            productsData = await processCatalogPdf(filePath, {
+              userId,
+              catalogId: catalog.id,
+              maxPages: 20, // Limitar a 20 páginas para processamento mais rápido
+              startPage: 1
+            });
             
             // Verificar se temos produtos extraídos
             if (!productsData || productsData.length === 0) {
@@ -953,7 +958,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             }
             
             console.log(`Pipeline automatizado extraiu ${productsData.length} produtos do PDF`);
-            extractionInfo = `PDF processado com pipeline automatizado (PDF2Image + PaddleOCR + IA). Extraídos ${productsData.length} produtos.`;
+            extractionInfo = `PDF processado com pipeline automatizado (PDF2Image + OpenAI/Claude). Extraídos ${productsData.length} produtos.`;
           } catch (pipelineError) {
             console.error("Erro no pipeline automatizado:", pipelineError);
             console.log("Stack trace:", pipelineError instanceof Error ? pipelineError.stack : "Sem stack trace");
@@ -1615,6 +1620,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
   
+  // Tipos para o resultado da extração de imagens
+  type ExtractionSuccess = {
+    success: true;
+    extractedCount: number;
+    sampleUrls: string[];
+  };
+  
+  type ExtractionError = {
+    success: false;
+    error: string;
+  };
+  
+  type ExtractionResult = ExtractionSuccess | ExtractionError | null;
+  
+  interface ExcelImageResults {
+    fileName: string;
+    products: {
+      count: number;
+      sample: any[];
+    };
+    jsCheck: {
+      hasImages: boolean;
+      method: string;
+    };
+    pythonCheck: {
+      hasImages: boolean;
+      method: string;
+    };
+    extraction?: {
+      js: ExtractionResult;
+      python: ExtractionResult;
+    };
+  }
+
   // Rota de teste para extração de imagens de Excel
   app.post("/api/test/excel-images", upload.single('file'), async (req, res) => {
     try {
@@ -1650,7 +1689,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const products = await processExcelFile(filePath, "test-user", "test-catalog");
       
       // Resultados
-      const results = {
+      const results: ExcelImageResults = {
         fileName,
         products: {
           count: products.length,
@@ -1672,8 +1711,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         
         // Resultados das extrações
         const extractionResults = {
-          js: null,
-          python: null
+          js: null as ExtractionResult,
+          python: null as ExtractionResult
         };
         
         // Tentar com JavaScript
@@ -1681,12 +1720,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           try {
             console.log("Extraindo imagens com JavaScript...");
             const jsProducts = await extractImagesFromExcel(filePath, products, "test-user", "test-catalog");
-            const jsProductsWithImages = jsProducts.filter(p => p.imageUrl);
+            const jsProductsWithImages = jsProducts.filter((p: any) => p.imageUrl);
             
             extractionResults.js = {
               success: true,
               extractedCount: jsProductsWithImages.length,
-              sampleUrls: jsProductsWithImages.slice(0, 3).map(p => p.imageUrl)
+              sampleUrls: jsProductsWithImages.slice(0, 3).map((p: any) => p.imageUrl)
             };
           } catch (error) {
             console.error("Erro na extração JS:", error);
@@ -1702,12 +1741,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           try {
             console.log("Extraindo imagens com Python...");
             const pythonProducts = await extractImagesWithPythonBridge(filePath, products, "test-user", "test-catalog");
-            const pythonProductsWithImages = pythonProducts.filter(p => p.imageUrl);
+            const pythonProductsWithImages = pythonProducts.filter((p: any) => p.imageUrl);
             
             extractionResults.python = {
               success: true,
               extractedCount: pythonProductsWithImages.length,
-              sampleUrls: pythonProductsWithImages.slice(0, 3).map(p => p.imageUrl)
+              sampleUrls: pythonProductsWithImages.slice(0, 3).map((p: any) => p.imageUrl)
             };
           } catch (error) {
             console.error("Erro na extração Python:", error);

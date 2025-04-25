@@ -38,7 +38,9 @@ try {
       const configuredApp = admin.initializeApp({
         credential: admin.credential.cert(serviceAccount as admin.ServiceAccount),
         databaseURL: `https://${process.env.VITE_FIREBASE_PROJECT_ID}.firebaseio.com`,
-        storageBucket: `${process.env.VITE_FIREBASE_PROJECT_ID}.appspot.com`
+        storageBucket: process.env.VITE_FIREBASE_PROJECT_ID?.includes('.appspot.com') 
+          ? process.env.VITE_FIREBASE_PROJECT_ID 
+          : `${process.env.VITE_FIREBASE_PROJECT_ID}.appspot.com`
       });
       
       firebaseApp = configuredApp;

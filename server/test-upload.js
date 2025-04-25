@@ -8,6 +8,9 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
+// Importar API de teste
+import { addTestApiRoutes } from './test-excel-api.js';
+
 // Obter o diretório atual
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -24,6 +27,9 @@ export function addTestRoutes(app) {
   app.get('/test/excel-images', (req, res) => {
     res.sendFile(testHtmlPath);
   });
+
+  // Adicionar API de teste
+  addTestApiRoutes(app);
   
   console.log('Rotas de teste adicionadas:');
   console.log('- GET /test/excel-images - Página de teste de extração de imagens do Excel');

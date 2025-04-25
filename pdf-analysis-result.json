@@ -1,0 +1,112 @@
+{
+  "metadata": {
+    "filename": "Tabela Fratini - Fevereiro 2025.pdf",
+    "filepath": "/home/runner/workspace/attached_assets/Tabela Fratini - Fevereiro 2025.pdf",
+    "title": "Sem título",
+    "author": "Mauricio",
+    "subject": "Sem assunto",
+    "keywords": "Sem palavras-chave",
+    "creator": "Microsoft® Excel® 2013",
+    "producer": "pdf-lib (https://github.com/Hopding/pdf-lib)",
+    "creationDate": "2025-02-05T21:35:27.000Z",
+    "modificationDate": "2025-04-25T06:02:47.000Z",
+    "numPages": 18,
+    "fileSize": 1406926
+  },
+  "analysis": {
+    "extractionTimestamp": "2025-04-25T06:02:47.851Z",
+    "extractionMethod": "PDF Metadata Test",
+    "extractionStats": {
+      "totalPagesProcessed": 18,
+      "totalProductsExtracted": 5,
+      "processingTimeMs": 1500
+    }
+  },
+  "products": [
+    {
+      "nome": "Produto 1 - Armários",
+      "codigo": "PDF-1",
+      "descricao": "Descrição do produto 1 na categoria Armários",
+      "preco": "R$ 1595.96",
+      "categoria": "Armários",
+      "cores": [
+        "Bege"
+      ],
+      "materiais": [
+        "Vidro"
+      ],
+      "largura": 114,
+      "altura": 80,
+      "profundidade": 95,
+      "pageNumber": 2
+    },
+    {
+      "nome": "Produto 2 - Armários",
+      "codigo": "PDF-2",
+      "descricao": "Descrição do produto 2 na categoria Armários",
+      "preco": "R$ 666.54",
+      "categoria": "Armários",
+      "cores": [
+        "Cinza"
+      ],
+      "materiais": [
+        "Tecido"
+      ],
+      "largura": 214,
+      "altura": 125,
+      "profundidade": 76,
+      "pageNumber": 3
+    },
+    {
+      "nome": "Produto 3 - Cadeiras",
+      "codigo": "PDF-3",
+      "descricao": "Descrição do produto 3 na categoria Cadeiras",
+      "preco": "R$ 1841.30",
+      "categoria": "Cadeiras",
+      "cores": [
+        "Branco"
+      ],
+      "materiais": [
+        "Vidro"
+      ],
+      "largura": 174,
+      "altura": 63,
+      "profundidade": 75,
+      "pageNumber": 4
+    },
+    {
+      "nome": "Produto 4 - Mesas",
+      "codigo": "PDF-4",
+      "descricao": "Descrição do produto 4 na categoria Mesas",
+      "preco": "R$ 1660.28",
+      "categoria": "Mesas",
+      "cores": [
+        "Bege"
+      ],
+      "materiais": [
+        "Couro"
+      ],
+      "largura": 161,
+      "altura": 63,
+      "profundidade": 95,
+      "pageNumber": 1
+    },
+    {
+      "nome": "Produto 5 - Mesas",
+      "codigo": "PDF-5",
+      "descricao": "Descrição do produto 5 na categoria Mesas",
+      "preco": "R$ 1468.36",
+      "categoria": "Mesas",
+      "cores": [
+        "Preto"
+      ],
+      "materiais": [
+        "Tecido"
+      ],
+      "largura": 136,
+      "altura": 66,
+      "profundidade": 44,
+      "pageNumber": 3
+    }
+  ]
+}
