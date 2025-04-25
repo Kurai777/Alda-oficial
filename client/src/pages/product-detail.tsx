@@ -128,9 +128,8 @@ export default function ProductDetailPage() {
         <div className="bg-muted rounded-lg overflow-hidden h-[400px] flex items-center justify-center">
           <ImageWithVerification 
             productId={product.id} 
-            productName={product.name} 
-            productCode={product.code}
-            category={product.category}
+            altText={product.name}
+            className="h-full w-full object-cover"
           />
         </div>
         

@@ -91,9 +91,8 @@ export default function ProductCard({ product, onAddToQuote }: ProductCardProps)
             {/* Adicionar verificação prévia de imagem para resolver problema de associação */}
             <ImageWithVerification 
               productId={product.id} 
-              productName={product.name || "Produto"}
-              productCode={product.code}
-              category={product.category}
+              altText={product.name || "Produto"}
+              className="h-full w-full object-cover"
             />
           </div>
           <Badge variant="outline" className="absolute top-2 right-2 bg-white px-2 py-1 rounded-full text-xs font-medium text-primary-600">
