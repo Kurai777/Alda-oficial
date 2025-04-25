@@ -216,7 +216,10 @@ export async function processExcelFile(filePath: string, userId?: string | numbe
           // Se temos produtos e imagens, extraia e associe as imagens
           if (productsFromSheet.length > 0 && hasImages && userId) {
             console.log(`Extraindo imagens do Excel para ${productsFromSheet.length} produtos`);
-            await extractImagesFromExcel(filePath, productsFromSheet, userId);
+            // Passar catalogId como o mesmo valor que estiver associado aos produtos
+            // Pegar o catalogId do primeiro produto se disponível
+            const catalogId = productsFromSheet[0].catalogId || 'temp';
+            await extractImagesFromExcel(filePath, productsFromSheet, String(userId), catalogId);
           }
           
           allProducts.push(...productsFromSheet);
