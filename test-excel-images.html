@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Teste de Extração de Imagens do Excel</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        h1 {
+            color: #2c3e50;
+            border-bottom: 2px solid #eee;
+            padding-bottom: 10px;
+        }
+        .form-container {
+            background-color: #f9f9f9;
+            border: 1px solid #ddd;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        .button {
+            background-color: #3498db;
+            color: white;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        .button:hover {
+            background-color: #2980b9;
+        }
+        .result {
+            margin-top: 20px;
+            border: 1px solid #ddd;
+            padding: 15px;
+            border-radius: 8px;
+            background-color: #fff;
+            display: none;
+        }
+        .spinner {
+            border: 4px solid rgba(0, 0, 0, 0.1);
+            border-radius: 50%;
+            border-top: 4px solid #3498db;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+            display: none;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .error {
+            color: #e74c3c;
+            background-color: #fadbd8;
+            padding: 10px;
+            border-radius: 4px;
+            margin-top: 10px;
+            display: none;
+        }
+        .success {
+            color: #27ae60;
+            background-color: #d4efdf;
+            padding: 10px;
+            border-radius: 4px;
+            margin-top: 10px;
+            display: none;
+        }
+        .image-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+            grid-gap: 10px;
+            margin-top: 20px;
+        }
+        .image-item {
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .image-item img {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+        pre {
+            background-color: #f8f8f8;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 10px;
+            overflow: auto;
+            max-height: 400px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Teste de Extração de Imagens do Excel</h1>
+    <p>Esta página permite testar a extração de imagens de arquivos Excel (.xlsx/.xls) usando múltiplos métodos: JavaScript e Python com fallbacks.</p>
+
+    <div class="form-container">
+        <form id="upload-form">
+            <p><label for="file">Selecione um arquivo Excel (.xlsx ou .xls):</label></p>
+            <p><input type="file" id="file" name="file" accept=".xlsx,.xls" required></p>
+            <p><button type="submit" class="button">Processar Arquivo</button></p>
+        </form>
+    </div>
+
+    <div class="error" id="error-message"></div>
+    <div class="success" id="success-message"></div>
+    <div class="spinner" id="spinner"></div>
+
+    <div class="result" id="result">
+        <h2>Resultados da Extração</h2>
+        <h3>Informações Básicas</h3>
+        <div id="basic-info"></div>
+
+        <h3>Verificação de Imagens</h3>
+        <div id="image-check"></div>
+
+        <h3>Resultados da Extração</h3>
+        <div id="extraction-results"></div>
+
+        <h3>Imagens Extraídas (Amostra)</h3>
+        <div class="image-grid" id="image-grid"></div>
+
+        <h3>Resposta Completa (JSON)</h3>
+        <pre id="json-response"></pre>
+    </div>
+
+    <script>
+        document.getElementById('upload-form').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const fileInput = document.getElementById('file');
+            const file = fileInput.files[0];
+            
+            if (!file) {
+                showError('Por favor, selecione um arquivo Excel');
+                return;
+            }
+            
+            // Verificar se é um arquivo Excel
+            if (!file.name.toLowerCase().endsWith('.xlsx') && !file.name.toLowerCase().endsWith('.xls')) {
+                showError('O arquivo deve ser um Excel (.xlsx ou .xls)');
+                return;
+            }
+            
+            // Limpar resultados anteriores
+            document.getElementById('basic-info').innerHTML = '';
+            document.getElementById('image-check').innerHTML = '';
+            document.getElementById('extraction-results').innerHTML = '';
+            document.getElementById('image-grid').innerHTML = '';
+            document.getElementById('json-response').textContent = '';
+            
+            // Esconder mensagens e mostrar spinner
+            document.getElementById('error-message').style.display = 'none';
+            document.getElementById('success-message').style.display = 'none';
+            document.getElementById('result').style.display = 'none';
+            document.getElementById('spinner').style.display = 'block';
+            
+            try {
+                // Criar FormData para enviar o arquivo
+                const formData = new FormData();
+                formData.append('file', file);
+                
+                // Fazer a requisição para a API
+                const response = await fetch('/api/test/excel-images', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                // Esconder spinner
+                document.getElementById('spinner').style.display = 'none';
+                
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    showError(`Erro ao processar arquivo: ${errorData.message || errorData.error || 'Erro desconhecido'}`);
+                    return;
+                }
+                
+                // Processar resposta
+                const data = await response.json();
+                console.log('Resposta completa:', data);
+                
+                // Mostrar mensagem de sucesso
+                showSuccess(`Arquivo processado com sucesso: ${data.message}`);
+                
+                // Exibir resultados
+                renderResults(data);
+                
+                // Mostrar seção de resultados
+                document.getElementById('result').style.display = 'block';
+                
+            } catch (error) {
+                console.error('Erro ao processar arquivo:', error);
+                document.getElementById('spinner').style.display = 'none';
+                showError(`Falha ao processar o arquivo: ${error.message || 'Erro desconhecido'}`);
+            }
+        });
+        
+        function showError(message) {
+            const errorElement = document.getElementById('error-message');
+            errorElement.textContent = message;
+            errorElement.style.display = 'block';
+        }
+        
+        function showSuccess(message) {
+            const successElement = document.getElementById('success-message');
+            successElement.textContent = message;
+            successElement.style.display = 'block';
+        }
+        
+        function renderResults(data) {
+            const results = data.results;
+            
+            // Informações básicas
+            document.getElementById('basic-info').innerHTML = `
+                <p><strong>Nome do arquivo:</strong> ${results.fileName}</p>
+                <p><strong>Produtos encontrados:</strong> ${results.products.count}</p>
+                ${results.products.count > 0 ? `
+                    <p><strong>Amostra de produtos:</strong></p>
+                    <pre>${JSON.stringify(results.products.sample, null, 2)}</pre>
+                ` : ''}
+            `;
+            
+            // Verificação de imagens
+            document.getElementById('image-check').innerHTML = `
+                <p><strong>Verificação JavaScript:</strong> ${results.jsCheck.hasImages ? 'Contém imagens' : 'Não contém imagens'} (Método: ${results.jsCheck.method})</p>
+                <p><strong>Verificação Python:</strong> ${results.pythonCheck.hasImages ? 'Contém imagens' : 'Não contém imagens'} (Método: ${results.pythonCheck.method})</p>
+            `;
+            
+            // Resultados da extração
+            if (results.extraction) {
+                let extractionHtml = '<p><strong>Resultados da extração:</strong></p>';
+                
+                if (results.extraction.js) {
+                    extractionHtml += `
+                        <p><strong>JavaScript:</strong> ${results.extraction.js.success ? 'Sucesso' : 'Falha'}</p>
+                        ${results.extraction.js.success ? `
+                            <p>Imagens extraídas: ${results.extraction.js.extractedCount}</p>
+                        ` : `
+                            <p>Erro: ${results.extraction.js.error}</p>
+                        `}
+                    `;
+                }
+                
+                if (results.extraction.python) {
+                    extractionHtml += `
+                        <p><strong>Python:</strong> ${results.extraction.python.success ? 'Sucesso' : 'Falha'}</p>
+                        ${results.extraction.python.success ? `
+                            <p>Imagens extraídas: ${results.extraction.python.extractedCount}</p>
+                        ` : `
+                            <p>Erro: ${results.extraction.python.error}</p>
+                        `}
+                    `;
+                }
+                
+                document.getElementById('extraction-results').innerHTML = extractionHtml;
+                
+                // Exibir imagens extraídas
+                const imageGrid = document.getElementById('image-grid');
+                
+                // JavaScript images
+                if (results.extraction.js && results.extraction.js.success && results.extraction.js.sampleUrls) {
+                    results.extraction.js.sampleUrls.forEach(url => {
+                        if (url) {
+                            const imgContainer = document.createElement('div');
+                            imgContainer.className = 'image-item';
+                            
+                            const img = document.createElement('img');
+                            img.src = url;
+                            img.alt = 'Imagem extraída (JS)';
+                            img.title = 'Extraída via JavaScript';
+                            
+                            imgContainer.appendChild(img);
+                            imageGrid.appendChild(imgContainer);
+                        }
+                    });
+                }
+                
+                // Python images
+                if (results.extraction.python && results.extraction.python.success && results.extraction.python.sampleUrls) {
+                    results.extraction.python.sampleUrls.forEach(url => {
+                        if (url) {
+                            const imgContainer = document.createElement('div');
+                            imgContainer.className = 'image-item';
+                            
+                            const img = document.createElement('img');
+                            img.src = url;
+                            img.alt = 'Imagem extraída (Python)';
+                            img.title = 'Extraída via Python';
+                            
+                            imgContainer.appendChild(img);
+                            imageGrid.appendChild(imgContainer);
+                        }
+                    });
+                }
+            } else {
+                document.getElementById('extraction-results').innerHTML = '<p>Nenhuma imagem extraída ou o arquivo não contém imagens.</p>';
+            }
+            
+            // Resposta JSON completa
+            document.getElementById('json-response').textContent = JSON.stringify(data, null, 2);
+        }
+    </script>
+</body>
+</html>

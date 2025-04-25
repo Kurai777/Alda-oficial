@@ -19,6 +19,8 @@ import {
 import { z } from "zod";
 import "express-session";
 import fs from "fs";
+// Importar utilitário para páginas de teste
+import { addTestRoutes } from "./test-upload.js";
 
 // Estender a interface Session do express-session para incluir userId
 declare module "express-session" {
@@ -1734,6 +1736,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     }
   });
+
+  // Adicionar rotas de teste
+  addTestRoutes(app);
 
   const httpServer = createServer(app);
   return httpServer;
