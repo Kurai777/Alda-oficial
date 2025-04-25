@@ -728,7 +728,8 @@ function normalizeExcelProducts(rawProducts: ExcelProduct[], userId?: string | n
           const rawPriceVal = rawProduct[priceColumnKey];
           
           if (typeof rawPriceVal === 'number') {
-            price = Math.round(rawPriceVal * 100); // converter para centavos
+            // Se o valor já for numérico, garantir que tenha pelo menos 100 (1 real)
+            price = Math.max(100, Math.round(rawPriceVal * 100)); // converter para centavos e garantir pelo menos 1 real
           } else if (typeof rawPriceVal === 'string') {
             // Limpar a string de preço (remover R$, espaços, etc)
             let cleanPrice = rawPriceVal.replace(/[^\d,.]/g, '');
@@ -743,8 +744,15 @@ function normalizeExcelProducts(rawProducts: ExcelProduct[], userId?: string | n
             // Converter para número
             const numericPrice = parseFloat(cleanPrice);
             if (!isNaN(numericPrice)) {
-              price = Math.round(numericPrice * 100);
+              // Garantir que o preço seja pelo menos 1 real (100 centavos)
+              price = Math.max(100, Math.round(numericPrice * 100));
+            } else {
+              // Se não conseguir extrair o preço, definir um valor padrão de 100 reais
+              price = 10000; // 100 reais em centavos
             }
+          } else {
+            // Se não houver preço, definir um valor padrão de 100 reais
+            price = 10000; // 100 reais em centavos
           }
         }
         
