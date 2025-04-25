@@ -1,17 +1,14 @@
+import { useState } from "react";
+import { format, formatDistanceToNow } from "date-fns";
+import { ptBR } from "date-fns/locale";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Download } from "lucide-react";
-import { formatDistanceToNow } from "date-fns";
-import { ptBR } from "date-fns/locale";
-import jsPDF from "jspdf";
-
-interface MoodboardProduct {
-  id: number;
-  name: string;
-  code: string;
-  price: number;
-  imageUrl: string;
-}
+import { 
+  Product 
+} from "@shared/schema";
+import jsPDF from 'jspdf';
+import { useToast } from "@/hooks/use-toast";
 
 interface MoodboardPreviewProps {
   title: string;
@@ -19,7 +16,7 @@ interface MoodboardPreviewProps {
   architectName?: string;
   date: Date;
   mainImage?: string;
-  products: MoodboardProduct[];
+  products: Product[];
   onExport?: () => void;
 }
 
@@ -48,35 +45,30 @@ export default function MoodboardPreview({
   };
 
   const handleExportPDF = () => {
+    if (onExport) {
+      onExport();
+      return;
+    }
+    
+    // Create PDF
     const doc = new jsPDF();
-    
-    // Set initial position
+    const margin = 15;
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const rightMargin = pageWidth - margin;
     let yPos = 20;
-    const margin = 20;
-    const rightMargin = 190;
-    
-    // Add company header
-    doc.setFontSize(22);
+
+    // Add title
+    doc.setFontSize(18);
     doc.setFont("helvetica", "bold");
-    doc.text("ALD-A Móveis", margin, yPos);
+    doc.text(title, margin, yPos);
     yPos += 10;
-    
+
     // Add date
     doc.setFontSize(10);
     doc.setFont("helvetica", "normal");
-    doc.text(`Data: ${formatDate(date)}`, rightMargin, yPos, { align: 'right' });
+    doc.text(`Criado em: ${formatDate(date)}`, margin, yPos);
     yPos += 15;
-    
-    // Add moodboard title
-    doc.setFontSize(16);
-    doc.setFont("helvetica", "bold");
-    doc.text("MOODBOARD", margin, yPos);
-    yPos += 8;
-    
-    doc.setFontSize(14);
-    doc.text(title, margin, yPos);
-    yPos += 15;
-    
+
     // Add client information
     doc.setFontSize(12);
     doc.setFont("helvetica", "bold");
@@ -118,47 +110,38 @@ export default function MoodboardPreview({
     
     // List products
     doc.setFont("helvetica", "normal");
+    
     products.forEach((product) => {
-      // Check if we need a new page
+      doc.text(product.code || "-", margin, yPos);
+      doc.text(product.name || "Produto sem nome", margin + 30, yPos);
+      doc.text(formatPrice(product.price), rightMargin, yPos, { align: 'right' });
+      yPos += 6;
+      
       if (yPos > 270) {
         doc.addPage();
         yPos = 20;
       }
-      
-      doc.text(product.code, margin, yPos);
-      doc.text(product.name, margin + 30, yPos);
-      doc.text(formatPrice(product.price), rightMargin, yPos, { align: 'right' });
-      yPos += 6;
     });
     
     // Add a separator line
     yPos += 2;
     doc.line(margin, yPos, rightMargin, yPos);
-    yPos += 8;
+    yPos += 6;
     
     // Add total
-    const totalPrice = products.reduce((sum, product) => sum + product.price, 0);
     doc.setFont("helvetica", "bold");
-    doc.text("Total:", margin + 100, yPos);
-    doc.text(formatPrice(totalPrice), rightMargin, yPos, { align: 'right' });
+    doc.text("TOTAL", margin, yPos);
     
-    // Add footer
-    doc.setFontSize(9);
-    doc.setFont("helvetica", "italic");
-    doc.text("Moodboard gerado por ALD-A Móveis.", margin, 280);
+    const total = products.reduce((sum, product) => sum + product.price, 0);
+    doc.text(formatPrice(total), rightMargin, yPos, { align: 'right' });
     
-    // Save the document
-    doc.save(`Moodboard_${title.replace(/\s+/g, '_')}_${date.toISOString().split('T')[0]}.pdf`);
-    
-    // Call provided onExport callback if available
-    if (onExport) {
-      onExport();
-    }
+    // Save the PDF
+    doc.save(`moodboard-${title.toLowerCase().replace(/\s+/g, '-')}.pdf`);
   };
 
   return (
     <Card>
-      <CardContent className="pt-6">
+      <CardContent className="p-6">
         <div className="flex justify-between items-center mb-4">
           <h2 className="text-xl font-semibold">{title}</h2>
           <Button 
@@ -204,13 +187,10 @@ export default function MoodboardPreview({
                 {products.slice(0, 2).map((product) => (
                   <div key={product.id} className="rounded-lg overflow-hidden shadow-sm">
                     <img 
-                      src={product.imageUrl} 
-                      alt={product.name} 
+                      src={product.id ? `/api/product-image/${product.id}` : '/placeholders/default.svg'} 
+                      alt={product.name || "Produto"} 
                       className="w-full h-32 object-cover"
-                      onError={(e) => {
-                        // Fallback image if the product image fails to load
-                        (e.target as HTMLImageElement).src = 'https://via.placeholder.com/300x150?text=Sem+Imagem';
-                      }}
+                      loading="lazy"
                     />
                     <div className="p-2 bg-white">
                       <h4 className="text-xs font-medium">{product.name}</h4>
@@ -225,13 +205,10 @@ export default function MoodboardPreview({
                 {products.slice(2).map((product) => (
                   <div key={product.id} className="rounded-lg overflow-hidden shadow-sm">
                     <img 
-                      src={product.imageUrl} 
-                      alt={product.name} 
+                      src={product.id ? `/api/product-image/${product.id}` : '/placeholders/default.svg'} 
+                      alt={product.name || "Produto"} 
                       className="w-full h-32 object-cover"
-                      onError={(e) => {
-                        // Fallback image if the product image fails to load
-                        (e.target as HTMLImageElement).src = 'https://via.placeholder.com/300x150?text=Sem+Imagem';
-                      }}
+                      loading="lazy"
                     />
                     <div className="p-2 bg-white">
                       <h4 className="text-xs font-medium">{product.name}</h4>
