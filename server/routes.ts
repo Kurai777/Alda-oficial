@@ -2723,6 +2723,279 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Rota para testar a extração de imagens de Excel
+  app.post("/api/test/excel-image-extraction", upload.single('file'), async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: 'Nenhum arquivo enviado' });
+      }
+
+      const filePath = req.file.path;
+      const fileName = req.file.originalname;
+      
+      console.log(`Teste de extração de imagens: Processando arquivo ${fileName} em ${filePath}`);
+      
+      // Importar processador de Excel com colunas fixas
+      const { processExcelWithFixedColumns } = await import('./fixed-excel-processor');
+      
+      // Obter timestamp para evitar colisões
+      const timestamp = Date.now();
+      const testUserId = 'test-user-' + timestamp;
+      const testCatalogId = 'test-catalog-' + timestamp;
+      
+      // Processar Excel para extrair produtos e imagens
+      const products = await processExcelWithFixedColumns(
+        filePath,
+        testUserId,
+        testCatalogId
+      );
+      
+      // Contar produtos com imagens
+      const productsWithImages = products.filter(p => p.imageUrl).length;
+      
+      // Gerar estatísticas
+      const results = {
+        fileName,
+        totalProducts: products.length,
+        productsWithImages,
+        successRate: Math.round((productsWithImages / products.length) * 100),
+        sampleProducts: products
+          .filter(p => p.imageUrl)  // Mostrar apenas produtos com imagens
+          .slice(0, 5)              // Limitar a 5 produtos
+          .map(p => ({              // Simplificar produto para exibição
+            nome: p.nome,
+            codigo: p.codigo,
+            imageUrl: p.imageUrl,
+            preco: p.preco
+          }))
+      };
+      
+      return res.json(results);
+    } catch (error) {
+      console.error('Erro ao testar extração de imagens:', error);
+      return res.status(500).json({ 
+        error: 'Falha ao processar arquivo Excel', 
+        details: error instanceof Error ? error.message : 'Erro desconhecido'
+      });
+    }
+  });
+
+  // Adicionar página de teste HTML para extração de imagens de Excel
+  app.get("/test/excel-image-extraction", (req, res) => {
+    const html = `
+    <!DOCTYPE html>
+    <html lang="pt-BR">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Teste de Extração de Imagens do Excel</title>
+      <style>
+        body {
+          font-family: Arial, sans-serif;
+          max-width: 800px;
+          margin: 0 auto;
+          padding: 2rem;
+        }
+        form {
+          margin-bottom: 2rem;
+          padding: 1rem;
+          border: 1px solid #ccc;
+          border-radius: 8px;
+        }
+        .product-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+          gap: 1rem;
+        }
+        .product-card {
+          border: 1px solid #eee;
+          border-radius: 8px;
+          padding: 1rem;
+          box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .product-image {
+          width: 100%;
+          height: 150px;
+          object-fit: contain;
+          background: #f9f9f9;
+          border-radius: 4px;
+        }
+        .button {
+          background: #4a73e8;
+          color: white;
+          border: none;
+          padding: 0.75rem 1.5rem;
+          border-radius: 4px;
+          cursor: pointer;
+        }
+        .stats {
+          background: #f5f5f5;
+          padding: 1rem;
+          border-radius: 8px;
+          margin-bottom: 1rem;
+        }
+        .progress-bar {
+          height: 20px;
+          background: #eee;
+          border-radius: 10px;
+          overflow: hidden;
+          margin-top: 8px;
+        }
+        .progress-fill {
+          height: 100%;
+          background: #4caf50;
+          width: 0%;
+          transition: width 0.3s;
+        }
+        .loading {
+          display: none;
+          text-align: center;
+          padding: 2rem;
+        }
+        .error {
+          background: #ffebee;
+          color: #c62828;
+          padding: 1rem;
+          border-radius: 4px;
+          margin-bottom: 1rem;
+          display: none;
+        }
+      </style>
+    </head>
+    <body>
+      <h1>Teste de Extração de Imagens do Excel</h1>
+      <p>Esta página permite testar o processamento de imagens em arquivos Excel.</p>
+      
+      <form id="uploadForm" enctype="multipart/form-data">
+        <div>
+          <label for="excelFile">Selecione um arquivo Excel (.xlsx):</label>
+          <input type="file" id="excelFile" name="file" accept=".xlsx,.xls" required>
+        </div>
+        <div style="margin-top: 1rem;">
+          <button type="submit" class="button">Processar Excel</button>
+        </div>
+      </form>
+      
+      <div id="error" class="error"></div>
+      
+      <div id="loading" class="loading">
+        <p>Processando arquivo... Por favor aguarde.</p>
+        <div style="width: 50px; height: 50px; border: 5px solid #f3f3f3; border-top: 5px solid #3498db; border-radius: 50%; animation: spin 1s linear infinite; margin: 20px auto;"></div>
+      </div>
+      
+      <div id="results" style="display: none;">
+        <div class="stats">
+          <h3>Estatísticas de Processamento</h3>
+          <p>Arquivo: <span id="fileName"></span></p>
+          <p>Total de produtos: <span id="totalProducts"></span></p>
+          <p>Produtos com imagens: <span id="productsWithImages"></span></p>
+          <p>
+            Taxa de sucesso: <span id="successRate"></span>%
+            <div class="progress-bar">
+              <div id="progressFill" class="progress-fill"></div>
+            </div>
+          </p>
+        </div>
+        
+        <h3>Amostra de Produtos</h3>
+        <div id="productGrid" class="product-grid">
+          <!-- Produtos serão adicionados aqui via JavaScript -->
+        </div>
+      </div>
+      
+      <script>
+        document.getElementById('uploadForm').addEventListener('submit', async (e) => {
+          e.preventDefault();
+          
+          const fileInput = document.getElementById('excelFile');
+          const file = fileInput.files[0];
+          
+          if (!file) {
+            showError('Por favor, selecione um arquivo Excel.');
+            return;
+          }
+          
+          // Mostrar loading
+          document.getElementById('loading').style.display = 'block';
+          document.getElementById('results').style.display = 'none';
+          document.getElementById('error').style.display = 'none';
+          
+          // Criar FormData
+          const formData = new FormData();
+          formData.append('file', file);
+          
+          try {
+            // Enviar arquivo para API
+            const response = await fetch('/api/test/excel-image-extraction', {
+              method: 'POST',
+              body: formData
+            });
+            
+            if (!response.ok) {
+              const errorData = await response.json();
+              throw new Error(errorData.details || 'Erro ao processar arquivo');
+            }
+            
+            const data = await response.json();
+            
+            // Atualizar UI com os resultados
+            document.getElementById('fileName').textContent = data.fileName;
+            document.getElementById('totalProducts').textContent = data.totalProducts;
+            document.getElementById('productsWithImages').textContent = data.productsWithImages;
+            document.getElementById('successRate').textContent = data.successRate;
+            document.getElementById('progressFill').style.width = data.successRate + '%';
+            
+            // Renderizar produtos
+            const productGrid = document.getElementById('productGrid');
+            productGrid.innerHTML = '';
+            
+            if (data.sampleProducts.length === 0) {
+              productGrid.innerHTML = '<p>Nenhum produto com imagem encontrado.</p>';
+            } else {
+              data.sampleProducts.forEach(product => {
+                const card = document.createElement('div');
+                card.className = 'product-card';
+                
+                card.innerHTML = \`
+                  <img src="\${product.imageUrl}" alt="\${product.nome}" class="product-image" onerror="this.src='/placeholders/default.svg'">
+                  <h4>\${product.nome}</h4>
+                  <p>Código: \${product.codigo}</p>
+                  <p>Preço: \${product.preco}</p>
+                \`;
+                
+                productGrid.appendChild(card);
+              });
+            }
+            
+            // Mostrar resultados
+            document.getElementById('results').style.display = 'block';
+            
+          } catch (error) {
+            showError(error.message || 'Erro ao processar arquivo');
+          } finally {
+            document.getElementById('loading').style.display = 'none';
+          }
+        });
+        
+        function showError(message) {
+          const errorEl = document.getElementById('error');
+          errorEl.textContent = message;
+          errorEl.style.display = 'block';
+        }
+      </script>
+      <style>
+        @keyframes spin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+      </style>
+    </body>
+    </html>
+    `;
+    
+    res.send(html);
+  });
+
   const httpServer = createServer(app);
   return httpServer;
 }
