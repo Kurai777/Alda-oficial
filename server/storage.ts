@@ -8,7 +8,12 @@ import {
   aiDesignChatMessages, type AiDesignChatMessage, type InsertAiDesignChatMessage
 } from "@shared/schema";
 import session from "express-session";
-import { pool } from "./db";
+import { pool, db } from "./db";
+import connectPgSimple from "connect-pg-simple";
+import { eq, and } from 'drizzle-orm';
+
+// Criar store de sessão PostgreSQL
+const PostgresSessionStore = connectPgSimple(session);
 
 export interface IStorage {
   // Armazenamento de sessões
@@ -61,12 +66,6 @@ export interface IStorage {
   getAiDesignChatMessages(projectId: number): Promise<AiDesignChatMessage[]>;
   createAiDesignChatMessage(message: InsertAiDesignChatMessage): Promise<AiDesignChatMessage>;
 }
-
-import connectPgSimple from "connect-pg-simple";
-import createMemoryStore from "memorystore";
-
-const PostgresSessionStore = connectPgSimple(session);
-const MemoryStore = createMemoryStore(session);
 
 export class MemStorage implements IStorage {
   // AI Design Project methods
@@ -537,4 +536,410 @@ export class MemStorage implements IStorage {
   }
 }
 
-export const storage = new MemStorage();
+// Usando o esquema e as funções já importadas
+
+export class DatabaseStorage implements IStorage {
+  sessionStore: session.Store;
+  
+  constructor() {
+    this.sessionStore = new PostgresSessionStore({ 
+      pool, 
+      tableName: 'session',
+      createTableIfMissing: true 
+    });
+  }
+  
+  // User methods
+  async getUser(id: number): Promise<User | undefined> {
+    try {
+      const [user] = await db.select().from(users).where(eq(users.id, id));
+      return user;
+    } catch (error) {
+      console.error('Error getting user:', error);
+      return undefined;
+    }
+  }
+  
+  async getUserByEmail(email: string): Promise<User | undefined> {
+    try {
+      const [user] = await db.select().from(users).where(eq(users.email, email));
+      return user;
+    } catch (error) {
+      console.error('Error getting user by email:', error);
+      return undefined;
+    }
+  }
+  
+  async createUser(insertUser: InsertUser): Promise<User> {
+    try {
+      const [user] = await db.insert(users).values(insertUser).returning();
+      return user;
+    } catch (error) {
+      console.error('Error creating user:', error);
+      throw error;
+    }
+  }
+  
+  async updateUser(id: number, userData: Partial<User>): Promise<User | undefined> {
+    try {
+      const [user] = await db.update(users)
+        .set(userData)
+        .where(eq(users.id, id))
+        .returning();
+      return user;
+    } catch (error) {
+      console.error('Error updating user:', error);
+      return undefined;
+    }
+  }
+  
+  // Product methods
+  async getProduct(id: number): Promise<Product | undefined> {
+    try {
+      console.log(`Buscando produto com ID: ${id}`);
+      const [product] = await db.select().from(products).where(eq(products.id, id));
+      console.log(`Produto encontrado:`, product);
+      return product;
+    } catch (error) {
+      console.error('Error getting product:', error);
+      return undefined;
+    }
+  }
+  
+  async getProductsByUserId(userId: number | string, catalogId?: number): Promise<Product[]> {
+    try {
+      const parsedUserId = typeof userId === 'string' ? parseInt(userId) : userId;
+      console.log(`Buscando produtos para userId=${parsedUserId}, catalogId=${catalogId}`);
+      
+      if (catalogId) {
+        console.log(`Filtrando por catalogId=${catalogId}`);
+        const result = await db.select().from(products).where(
+          and(
+            eq(products.userId, parsedUserId),
+            eq(products.catalogId, catalogId)
+          )
+        );
+        console.log(`Encontrados ${result.length} produtos com catalogId=${catalogId}`);
+        return result;
+      } else {
+        console.log(`Retornando todos os produtos do usuário ${parsedUserId}`);
+        const result = await db.select().from(products).where(eq(products.userId, parsedUserId));
+        console.log(`Encontrados ${result.length} produtos`);
+        return result;
+      }
+    } catch (error) {
+      console.error('Error getting products by user ID:', error);
+      return [];
+    }
+  }
+  
+  async getProductsByCategory(userId: number | string, category: string): Promise<Product[]> {
+    try {
+      const parsedUserId = typeof userId === 'string' ? parseInt(userId) : userId;
+      
+      return await db.select().from(products).where(
+        and(
+          eq(products.userId, parsedUserId),
+          eq(products.category, category)
+        )
+      );
+    } catch (error) {
+      console.error('Error getting products by category:', error);
+      return [];
+    }
+  }
+  
+  async createProduct(insertProduct: InsertProduct): Promise<Product> {
+    try {
+      const [product] = await db.insert(products).values(insertProduct).returning();
+      return product;
+    } catch (error) {
+      console.error('Error creating product:', error);
+      throw error;
+    }
+  }
+  
+  async updateProduct(id: number, productUpdate: Partial<InsertProduct>): Promise<Product | undefined> {
+    try {
+      const [product] = await db.update(products)
+        .set(productUpdate)
+        .where(eq(products.id, id))
+        .returning();
+      return product;
+    } catch (error) {
+      console.error('Error updating product:', error);
+      return undefined;
+    }
+  }
+  
+  async deleteProduct(id: number): Promise<boolean> {
+    try {
+      const result = await db.delete(products).where(eq(products.id, id)).returning();
+      return result.length > 0;
+    } catch (error) {
+      console.error('Error deleting product:', error);
+      return false;
+    }
+  }
+  
+  async deleteProductsByCatalogId(catalogId: number): Promise<number> {
+    try {
+      const result = await db.delete(products).where(eq(products.catalogId, catalogId)).returning();
+      return result.length;
+    } catch (error) {
+      console.error('Error deleting products by catalog ID:', error);
+      return 0;
+    }
+  }
+  
+  // Catalog methods
+  async getCatalog(id: number): Promise<Catalog | undefined> {
+    try {
+      const [catalog] = await db.select().from(catalogs).where(eq(catalogs.id, id));
+      return catalog;
+    } catch (error) {
+      console.error('Error getting catalog:', error);
+      return undefined;
+    }
+  }
+  
+  async getCatalogsByUserId(userId: number | string): Promise<Catalog[]> {
+    try {
+      const parsedUserId = typeof userId === 'string' ? parseInt(userId) : userId;
+      console.log(`Usando userId: ${parsedUserId} para buscar catálogos`);
+      
+      const results = await db.select().from(catalogs).where(eq(catalogs.userId, parsedUserId));
+      console.log(`Encontrados ${results.length} catálogos`);
+      return results;
+    } catch (error) {
+      console.error('Error getting catalogs by user ID:', error);
+      return [];
+    }
+  }
+  
+  async createCatalog(insertCatalog: InsertCatalog): Promise<Catalog> {
+    try {
+      const [catalog] = await db.insert(catalogs).values(insertCatalog).returning();
+      return catalog;
+    } catch (error) {
+      console.error('Error creating catalog:', error);
+      throw error;
+    }
+  }
+  
+  async updateCatalogStatus(id: number, status: string, firestoreCatalogId?: string): Promise<Catalog | undefined> {
+    try {
+      const updateData: any = { status };
+      if (firestoreCatalogId) {
+        updateData.firestoreCatalogId = firestoreCatalogId;
+      }
+      
+      const [catalog] = await db.update(catalogs)
+        .set(updateData)
+        .where(eq(catalogs.id, id))
+        .returning();
+      return catalog;
+    } catch (error) {
+      console.error('Error updating catalog status:', error);
+      return undefined;
+    }
+  }
+  
+  async deleteCatalog(id: number): Promise<boolean> {
+    try {
+      // Primeiro, excluir todos os produtos associados
+      await this.deleteProductsByCatalogId(id);
+      
+      // Depois, excluir o catálogo
+      const result = await db.delete(catalogs).where(eq(catalogs.id, id)).returning();
+      return result.length > 0;
+    } catch (error) {
+      console.error('Error deleting catalog:', error);
+      return false;
+    }
+  }
+  
+  // Quote methods
+  async getQuote(id: number): Promise<Quote | undefined> {
+    try {
+      const [quote] = await db.select().from(quotes).where(eq(quotes.id, id));
+      return quote;
+    } catch (error) {
+      console.error('Error getting quote:', error);
+      return undefined;
+    }
+  }
+  
+  async getQuotesByUserId(userId: number): Promise<Quote[]> {
+    try {
+      return await db.select().from(quotes).where(eq(quotes.userId, userId));
+    } catch (error) {
+      console.error('Error getting quotes by user ID:', error);
+      return [];
+    }
+  }
+  
+  async createQuote(insertQuote: InsertQuote): Promise<Quote> {
+    try {
+      const [quote] = await db.insert(quotes).values(insertQuote).returning();
+      return quote;
+    } catch (error) {
+      console.error('Error creating quote:', error);
+      throw error;
+    }
+  }
+  
+  async updateQuote(id: number, quoteUpdate: Partial<InsertQuote>): Promise<Quote | undefined> {
+    try {
+      const [quote] = await db.update(quotes)
+        .set(quoteUpdate)
+        .where(eq(quotes.id, id))
+        .returning();
+      return quote;
+    } catch (error) {
+      console.error('Error updating quote:', error);
+      return undefined;
+    }
+  }
+  
+  async deleteQuote(id: number): Promise<boolean> {
+    try {
+      const result = await db.delete(quotes).where(eq(quotes.id, id)).returning();
+      return result.length > 0;
+    } catch (error) {
+      console.error('Error deleting quote:', error);
+      return false;
+    }
+  }
+  
+  // Moodboard methods
+  async getMoodboard(id: number): Promise<Moodboard | undefined> {
+    try {
+      const [moodboard] = await db.select().from(moodboards).where(eq(moodboards.id, id));
+      return moodboard;
+    } catch (error) {
+      console.error('Error getting moodboard:', error);
+      return undefined;
+    }
+  }
+  
+  async getMoodboardsByUserId(userId: number): Promise<Moodboard[]> {
+    try {
+      return await db.select().from(moodboards).where(eq(moodboards.userId, userId));
+    } catch (error) {
+      console.error('Error getting moodboards by user ID:', error);
+      return [];
+    }
+  }
+  
+  async createMoodboard(insertMoodboard: InsertMoodboard): Promise<Moodboard> {
+    try {
+      const [moodboard] = await db.insert(moodboards).values(insertMoodboard).returning();
+      return moodboard;
+    } catch (error) {
+      console.error('Error creating moodboard:', error);
+      throw error;
+    }
+  }
+  
+  async updateMoodboard(id: number, moodboardUpdate: Partial<InsertMoodboard>): Promise<Moodboard | undefined> {
+    try {
+      const [moodboard] = await db.update(moodboards)
+        .set(moodboardUpdate)
+        .where(eq(moodboards.id, id))
+        .returning();
+      return moodboard;
+    } catch (error) {
+      console.error('Error updating moodboard:', error);
+      return undefined;
+    }
+  }
+  
+  async deleteMoodboard(id: number): Promise<boolean> {
+    try {
+      const result = await db.delete(moodboards).where(eq(moodboards.id, id)).returning();
+      return result.length > 0;
+    } catch (error) {
+      console.error('Error deleting moodboard:', error);
+      return false;
+    }
+  }
+  
+  // AI Design Projects methods
+  async getAiDesignProject(id: number): Promise<AiDesignProject | undefined> {
+    try {
+      const [project] = await db.select().from(aiDesignProjects).where(eq(aiDesignProjects.id, id));
+      return project;
+    } catch (error) {
+      console.error('Error getting AI design project:', error);
+      return undefined;
+    }
+  }
+  
+  async getAllAiDesignProjects(userId: number | string): Promise<AiDesignProject[]> {
+    try {
+      const parsedUserId = typeof userId === 'string' ? parseInt(userId) : userId;
+      return await db.select().from(aiDesignProjects).where(eq(aiDesignProjects.userId, parsedUserId));
+    } catch (error) {
+      console.error('Error getting AI design projects:', error);
+      return [];
+    }
+  }
+  
+  async createAiDesignProject(insertProject: InsertAiDesignProject): Promise<AiDesignProject> {
+    try {
+      const [project] = await db.insert(aiDesignProjects).values({
+        ...insertProject,
+        status: "pending",
+      }).returning();
+      return project;
+    } catch (error) {
+      console.error('Error creating AI design project:', error);
+      throw error;
+    }
+  }
+  
+  async updateAiDesignProject(id: number, projectUpdate: Partial<AiDesignProject>): Promise<AiDesignProject | undefined> {
+    try {
+      const [project] = await db.update(aiDesignProjects)
+        .set(projectUpdate)
+        .where(eq(aiDesignProjects.id, id))
+        .returning();
+      return project;
+    } catch (error) {
+      console.error('Error updating AI design project:', error);
+      return undefined;
+    }
+  }
+  
+  async deleteAiDesignProject(id: number): Promise<void> {
+    try {
+      await db.delete(aiDesignProjects).where(eq(aiDesignProjects.id, id));
+    } catch (error) {
+      console.error('Error deleting AI design project:', error);
+    }
+  }
+  
+  // AI Design Chat Messages methods
+  async getAiDesignChatMessages(projectId: number): Promise<AiDesignChatMessage[]> {
+    try {
+      return await db.select().from(aiDesignChatMessages).where(eq(aiDesignChatMessages.projectId, projectId));
+    } catch (error) {
+      console.error('Error getting AI design chat messages:', error);
+      return [];
+    }
+  }
+  
+  async createAiDesignChatMessage(insertMessage: InsertAiDesignChatMessage): Promise<AiDesignChatMessage> {
+    try {
+      const [message] = await db.insert(aiDesignChatMessages).values(insertMessage).returning();
+      return message;
+    } catch (error) {
+      console.error('Error creating AI design chat message:', error);
+      throw error;
+    }
+  }
+}
+
+// Usar o DatabaseStorage em vez do MemStorage
+export const storage = new DatabaseStorage();

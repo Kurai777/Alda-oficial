@@ -4,15 +4,16 @@ import { setupVite, serveStatic, log } from "./vite";
 import session from "express-session";
 import testRoutes from "./test-routes";
 
+// Importar módulos de banco de dados e storage
+import { migrate } from "./db";
+import { storage } from "./storage";
+
 const app = express();
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ extended: false, limit: '100mb' }));
 
 // Registrar rotas de teste
 app.use('/api/test', testRoutes);
-
-// Importar storage para acessar o sessionStore
-import { storage } from "./storage";
 
 // Configuração da sessão
 const SESSION_SECRET = process.env.SESSION_SECRET || 'alda-session-secret';
@@ -59,6 +60,15 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  // Executar migração para garantir que as tabelas existam
+  try {
+    console.log("Iniciando migração do banco de dados...");
+    await migrate();
+    console.log("Migração concluída com sucesso!");
+  } catch (error) {
+    console.error("Erro durante migração do banco de dados:", error);
+  }
+  
   const server = await registerRoutes(app);
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
