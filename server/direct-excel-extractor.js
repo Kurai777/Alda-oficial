@@ -44,6 +44,9 @@ async function ensureDirectoriesExist(userId, catalogId) {
  */
 async function extractImagesWithJSZip(excelPath, outputDir) {
   try {
+    // Usar um timestamp para garantir unicidade na extração
+    const timestamp = new Date().getTime();
+    
     // Ler o arquivo Excel como Buffer
     const data = await readFileAsync(excelPath);
     console.log(`Arquivo Excel lido: ${excelPath} (${data.length} bytes)`);
@@ -67,7 +70,8 @@ async function extractImagesWithJSZip(excelPath, outputDir) {
         
         matches.forEach(match => {
           const [, rId, imageId, ext] = match.match(/Relationship Id="rId(\d+)" Target="\.\.\/\.\.\/media\/image(\d+)\.(png|jpeg|jpg)"/);
-          drawingRels[`${drawingName}-rId${rId}`] = { imageId, ext };
+          // Adicionar timestamp ao identificador para garantir unicidade
+          drawingRels[`${drawingName}-rId${rId}-${timestamp}`] = { imageId, ext };
         });
       }
     }
@@ -228,6 +232,7 @@ function readExcelSheet(excelPath) {
 /**
  * Processa um arquivo Excel para extrair produtos com imagens
  * Salva as imagens localmente e associa aos produtos
+ * Garante uma relação 1:1 estrita entre produtos e imagens
  */
 async function processExcelDirectly(excelPath, userId, catalogId) {
   try {
@@ -237,9 +242,16 @@ async function processExcelDirectly(excelPath, userId, catalogId) {
     console.log(`Processando Excel: ${excelPath}`);
     console.log(`Diretório para imagens: ${catalogDir}`);
     
-    // Extrair imagens do Excel
-    const extractedImages = await extractImagesWithJSZip(excelPath, catalogDir);
-    console.log(`Extraídas ${extractedImages.length} imagens do Excel`);
+    // Extrair imagens do Excel (com timestamp para garantir exclusividade)
+    const timestamp = new Date().getTime();
+    const tempDir = path.join(process.cwd(), 'uploads', 'temp-excel-images', `excel_${timestamp}`);
+    if (!fs.existsSync(tempDir)) {
+      await mkdirAsync(tempDir, { recursive: true });
+    }
+    
+    // Extrair imagens do Excel para pasta temporária única
+    const extractedImages = await extractImagesWithJSZip(excelPath, tempDir);
+    console.log(`Extraídas ${extractedImages.length} imagens do Excel para diretório exclusivo: ${tempDir}`);
     
     // Ler dados da planilha
     const { jsonData } = readExcelSheet(excelPath);
@@ -247,6 +259,9 @@ async function processExcelDirectly(excelPath, userId, catalogId) {
     
     // Processar linhas para criar produtos
     const products = [];
+    
+    // Registro de imagens já utilizadas (para garantir associação 1:1)
+    const usedImageIndices = new Set();
     
     // Pular cabeçalhos (geralmente as primeiras 3 linhas)
     for (let i = 3; i < jsonData.length; i++) {
