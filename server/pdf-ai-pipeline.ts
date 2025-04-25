@@ -13,6 +13,7 @@ import { processImageWithOpenAI, processFileWithAdvancedAI } from './advanced-ai
 import { processImageWithClaude } from './claude-ai-extractor';
 import { saveImageToFirebaseStorage } from './firebase-admin';
 import { extractAllProductImages } from './image-extractor';
+import sharp from 'sharp';
 
 /**
  * Interface para produto extraído dos catálogos
@@ -69,6 +70,72 @@ export async function convertPdfToImages(pdfPath: string): Promise<Buffer[]> {
 }
 
 /**
+ * Extrai a imagem individual do produto de uma página do PDF
+ * @param pageBuffer Buffer da imagem da página
+ * @param pageNumber Número da página
+ * @param outputDir Diretório para salvar a imagem extraída
+ * @param fileName Nome base do arquivo
+ * @returns Caminho para a imagem extraída
+ */
+async function extractProductImageFromPage(
+  pageBuffer: Buffer,
+  pageNumber: number,
+  outputDir: string,
+  fileName: string
+): Promise<string> {
+  try {
+    // Garantir que o diretório de saída exista
+    if (!fs.existsSync(outputDir)) {
+      fs.mkdirSync(outputDir, { recursive: true });
+    }
+
+    // Para catálogos Fratini, sabemos que as imagens de produtos geralmente estão
+    // no topo da página, ocupando aproximadamente 40-60% da altura
+    
+    // Criar uma imagem temporária para análise
+    const tempImagePath = path.join(outputDir, `temp_${pageNumber}_${Date.now()}.png`);
+    await fs.promises.writeFile(tempImagePath, pageBuffer);
+    
+    // Obter dimensões da imagem
+    const metadata = await sharp(pageBuffer).metadata();
+    const { width = 800, height = 1000 } = metadata;
+    
+    // Para catálogos Fratini, a imagem do produto geralmente ocupa o terço superior da página
+    const productImageTop = Math.floor(height * 0.05);  // 5% do topo
+    const productImageHeight = Math.floor(height * 0.35); // 35% da altura
+    const productImageWidth = Math.floor(width * 0.8);  // 80% da largura
+    const productImageLeft = Math.floor((width - productImageWidth) / 2); // centralizado
+    
+    console.log(`Extraindo imagem do produto da página ${pageNumber} em: top=${productImageTop}, height=${productImageHeight}`);
+    
+    // Recortar a área onde provavelmente está a imagem do produto
+    const productImageBuffer = await sharp(pageBuffer)
+      .extract({
+        left: productImageLeft,
+        top: productImageTop,
+        width: productImageWidth,
+        height: productImageHeight
+      })
+      .toBuffer();
+    
+    // Salvar a imagem do produto extraída
+    const outputFilename = `product_${fileName}_page${pageNumber}_${Date.now()}.png`;
+    const outputPath = path.join(outputDir, outputFilename);
+    await fs.promises.writeFile(outputPath, productImageBuffer);
+    
+    console.log(`Extraída imagem de produto da página ${pageNumber} em: ${outputPath}`);
+    
+    // Remover imagem temporária
+    fs.unlinkSync(tempImagePath);
+    
+    return outputPath;
+  } catch (error) {
+    console.error(`Erro ao extrair imagem do produto da página ${pageNumber}:`, error);
+    throw error;
+  }
+}
+
+/**
  * Função principal que executa o pipeline completo de processamento de PDF
  * @param pdfPath Caminho para o arquivo PDF
  * @param userId ID do usuário
@@ -87,78 +154,62 @@ export async function processPdfWithAI(
     const pdfImages = await convertPdfToImages(pdfPath);
     console.log(`PDF convertido em ${pdfImages.length} imagens`);
     
+    // Diretório para imagens extraídas de produtos
+    const productImagesDir = path.join(process.cwd(), 'uploads', 'product_images');
+    if (!fs.existsSync(productImagesDir)) {
+      fs.mkdirSync(productImagesDir, { recursive: true });
+    }
+    
     // 2. Processar cada página (imagem) para extrair produtos
-    // Para demonstração, alternamos entre OpenAI e Claude para as primeiras páginas
+    // Agora processamos TODAS as páginas em vez de apenas as primeiras
     let allProducts: ExtractedProduct[] = [];
     
-    // Processar primeiras páginas com OpenAI (limite para demonstração)
-    const pagesForOpenAI = pdfImages.slice(0, Math.min(3, pdfImages.length));
-    
-    for (let i = 0; i < pagesForOpenAI.length; i++) {
-      const pageBuffer = pagesForOpenAI[i];
-      const fileName = `page_${i + 1}_${path.basename(pdfPath, '.pdf')}.png`;
+    // Processar todas as páginas com OpenAI
+    for (let i = 0; i < pdfImages.length; i++) {
+      const pageBuffer = pdfImages[i];
+      const pageNumber = i + 1;
+      const fileName = `${path.basename(pdfPath, '.pdf')}`;
       
       try {
-        // Salvar imagem da página no Firebase
-        const pageImageUrl = await saveImageToFirebaseStorage(
+        // Extrair a imagem do produto da página
+        const productImagePath = await extractProductImageFromPage(
           pageBuffer,
-          fileName,
-          userId,
-          catalogId
+          pageNumber,
+          productImagesDir,
+          fileName
         );
+        
+        // Ler o buffer da imagem extraída do produto
+        const productImageBuffer = await fs.promises.readFile(productImagePath);
+        
+        // Converter caminho absoluto para caminho relativo para armazenamento no banco de dados
+        const relativeProductImagePath = '/' + path.relative(process.cwd(), productImagePath);
         
         // Extrair produtos da imagem usando OpenAI
         const pageProducts = await processFileWithAdvancedAI(
-          pageBuffer,
+          pageBuffer, // Enviamos a página completa para análise do texto
           fileName,
           userId,
           catalogId
         );
         
-        // Adicionar metadados adicionais
+        // Adicionar metadados adicionais e a imagem isolada do produto
         const enhancedProducts = pageProducts.map(product => ({
           ...product,
-          pageNumber: i + 1,
-          pageImageUrl: pageImageUrl || undefined
+          pageNumber,
+          // Usar o caminho da imagem isolada do produto em vez da página completa
+          imageUrl: relativeProductImagePath 
         }));
         
         allProducts = [...allProducts, ...enhancedProducts];
-        console.log(`Processada página ${i + 1} com OpenAI: ${pageProducts.length} produtos extraídos`);
+        console.log(`Processada página ${pageNumber} com OpenAI: ${pageProducts.length} produtos extraídos`);
         
       } catch (error) {
-        console.error(`Erro ao processar página ${i + 1} com OpenAI:`, error);
+        console.error(`Erro ao processar página ${pageNumber}:`, error);
       }
     }
     
-    // 3. Processar algumas páginas adicionais com Claude (opcionalmente, para demonstração)
-    if (pdfImages.length > 3) {
-      const pagesForClaude = pdfImages.slice(3, Math.min(5, pdfImages.length));
-      
-      for (let i = 0; i < pagesForClaude.length; i++) {
-        const pageIndex = i + 3; // Começando da página 4
-        const pageBuffer = pagesForClaude[i];
-        const fileName = `page_${pageIndex + 1}_${path.basename(pdfPath, '.pdf')}.png`;
-        
-        try {
-          // Extrair produtos da imagem usando Claude
-          const pageProducts = await processImageWithClaude(
-            pageBuffer,
-            fileName,
-            userId,
-            catalogId,
-            pageIndex + 1
-          );
-          
-          allProducts = [...allProducts, ...pageProducts];
-          console.log(`Processada página ${pageIndex + 1} com Claude: ${pageProducts.length} produtos extraídos`);
-          
-        } catch (error) {
-          console.error(`Erro ao processar página ${pageIndex + 1} com Claude:`, error);
-        }
-      }
-    }
-    
-    // 4. Deduplicar produtos com base no código
+    // 3. Deduplicar produtos com base no código e garantir que cada um tenha uma imagem
     const uniqueProducts = deduplicateProducts(allProducts);
     console.log(`Extração concluída: ${uniqueProducts.length} produtos únicos identificados`);
     
@@ -166,7 +217,7 @@ export async function processPdfWithAI(
     
   } catch (error) {
     console.error('Erro no pipeline de processamento de PDF:', error);
-    throw new Error(`Falha no processamento do PDF: ${error.message}`);
+    throw new Error(`Falha no processamento do PDF: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
