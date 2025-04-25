@@ -91,15 +91,17 @@ export default function ProductCard({ product, onAddToQuote }: ProductCardProps)
               <img 
                 src={product.imageUrl.startsWith('data:') 
                   ? product.imageUrl 
-                  : product.imageUrl.startsWith('https://mock-firebase-storage.com/')
-                    ? `/api/images/${product.userId}/${product.catalogId}/${product.code}.jpg`
-                    : product.imageUrl.startsWith('https://') || product.imageUrl.startsWith('http://')
-                      ? product.imageUrl
-                      : product.imageUrl.startsWith('/uploads/') || product.imageUrl.startsWith('/temp/')
+                  : product.id 
+                    ? `/api/product-image/${product.id}` 
+                    : product.imageUrl.startsWith('https://mock-firebase-storage.com/')
+                      ? `/api/images/${product.userId}/${product.catalogId}/${product.code || 'default'}.jpg`
+                      : product.imageUrl.startsWith('https://') || product.imageUrl.startsWith('http://')
                         ? product.imageUrl
-                        : product.imageUrl.startsWith('/')
+                        : product.imageUrl.startsWith('/uploads/') || product.imageUrl.startsWith('/temp/')
                           ? product.imageUrl
-                          : `/${product.imageUrl}`
+                          : product.imageUrl.startsWith('/')
+                            ? product.imageUrl
+                            : `/${product.imageUrl}`
                 }
                 alt={product.name} 
                 className="h-full w-full object-cover"

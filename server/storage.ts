@@ -220,7 +220,14 @@ export class MemStorage implements IStorage {
 
   // Product methods
   async getProduct(id: number): Promise<Product | undefined> {
-    return this.products.get(id);
+    console.log(`Buscando produto com ID: ${id}`);
+    const product = this.products.get(id);
+    if (!product) {
+      console.log(`Produto com ID ${id} não encontrado`);
+    } else {
+      console.log(`Produto encontrado: ${product.name}, imageUrl: ${product.imageUrl}`);
+    }
+    return product;
   }
 
   async getProductsByUserId(userId: number | string, catalogId?: number): Promise<Product[]> {

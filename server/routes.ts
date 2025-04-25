@@ -1840,6 +1840,72 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ message: "Erro ao processar URL mock" });
     }
   });
+  
+  // Rota para servir imagens por ID de produto
+  app.get("/api/product-image/:productId", async (req: Request, res: Response) => {
+    try {
+      const { productId } = req.params;
+      
+      // Buscar produto na base de dados
+      const product = await storage.getProduct(parseInt(productId));
+      
+      if (!product) {
+        return res.status(404).json({ message: "Produto não encontrado" });
+      }
+      
+      // Se o produto não tem URL de imagem
+      if (!product.imageUrl) {
+        // Retornar SVG placeholder
+        const svgContent = `
+        <svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400">
+          <rect width="600" height="400" fill="#f9f9f9" />
+          <text x="300" y="200" font-family="Arial" font-size="16" fill="#666666" text-anchor="middle">
+            Imagem não disponível (${product.code || product.id})
+          </text>
+        </svg>`;
+        
+        res.setHeader('Content-Type', 'image/svg+xml');
+        return res.send(svgContent);
+      }
+      
+      // Se a URL da imagem é uma URL mock, redirecionar para a rota correta
+      if (product.imageUrl.includes('mock-firebase-storage.com')) {
+        const parts = product.imageUrl.split('/');
+        const filename = parts[parts.length - 1];
+        return res.redirect(`/api/images/${product.userId}/${product.catalogId}/${filename}`);
+      }
+      
+      // Se a URL é uma URL absoluta, redirecionar
+      if (product.imageUrl.startsWith('http://') || product.imageUrl.startsWith('https://')) {
+        return res.redirect(product.imageUrl);
+      }
+      
+      // Se é uma URL relativa, servir o arquivo
+      const localPath = path.join(process.cwd(), product.imageUrl.startsWith('/') ? product.imageUrl.substring(1) : product.imageUrl);
+      
+      if (fs.existsSync(localPath)) {
+        const contentType = mime.lookup(localPath) || 'application/octet-stream';
+        res.setHeader('Content-Type', contentType);
+        return res.sendFile(localPath);
+      }
+      
+      // Se não conseguiu encontrar o arquivo, retornar SVG placeholder
+      const svgContent = `
+      <svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400">
+        <rect width="600" height="400" fill="#f9f9f9" />
+        <text x="300" y="200" font-family="Arial" font-size="16" fill="#666666" text-anchor="middle">
+          Imagem não encontrada (${product.code || product.id})
+        </text>
+      </svg>`;
+      
+      res.setHeader('Content-Type', 'image/svg+xml');
+      return res.send(svgContent);
+      
+    } catch (error) {
+      console.error('Erro ao servir imagem de produto:', error);
+      res.status(500).json({ message: "Erro ao servir imagem de produto" });
+    }
+  });
 
   // Rota para servir imagens extraídas
   app.get("/uploads/extracted_images/:filename", (req: Request, res: Response) => {
