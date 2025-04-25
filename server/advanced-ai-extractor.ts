@@ -186,7 +186,33 @@ export async function processFileWithAdvancedAI(filePath: string, fileName: stri
     
     // Processar todos os produtos extraídos para garantir o formato adequado
     console.log(`[processFileWithAdvancedAI] Processando ${extractedProducts.length} produtos extraídos`);
-    const processedProducts = processExtractedProducts(extractedProducts, userId, catalogId);
+    
+    // Para cada produto, garantir que a imagem seja incluída
+    const productsWithImages = [];
+    
+    for (const product of extractedProducts) {
+      // Se o produto não tiver imagem definida, usar uma imagem padrão ou a do catálogo
+      if (!product.imageUrl && !product.image) {
+        console.log(`[processFileWithAdvancedAI] Produto sem imagem: ${product.name || 'sem nome'}`);
+        
+        // Se o arquivo for uma imagem, usar como imagem padrão para todos os produtos
+        if (!isPdf) {
+          try {
+            const originalBuffer = fs.readFileSync(filePath);
+            const base64Original = originalBuffer.toString('base64');
+            product.imageUrl = `/uploads/extracted_images/product_${Date.now()}_${Math.floor(Math.random() * 1000)}.jpg`;
+            product.image = `data:image/jpeg;base64,${base64Original}`;
+            product.originalImage = base64Original;
+            console.log(`[processFileWithAdvancedAI] Adicionada imagem do catálogo ao produto`);
+          } catch (e) {
+            console.error(`[processFileWithAdvancedAI] Erro ao ler imagem do catálogo:`, e);
+          }
+        }
+      }
+      productsWithImages.push(product);
+    }
+    
+    const processedProducts = processExtractedProducts(productsWithImages, userId, catalogId);
     console.log(`[processFileWithAdvancedAI] Processamento concluído com ${processedProducts.length} produtos`);
     return processedProducts;
   } catch (error) {
@@ -410,6 +436,21 @@ function processExtractedProducts(products: any[], userId: number, catalogId: nu
       sizes = dimensions ? [dimensions] : [];
     }
     
+    // Verificar se tem imagem em base64 ou dimensões
+    const hasBase64Image = product.image && product.image.includes('base64');
+    const hasOriginalImage = product.originalImage && typeof product.originalImage === 'string';
+    
+    // Processar imagem para garantir que exista em algum formato
+    let imageUrl = product.imageUrl || '';
+    
+    // Se tiver imagem em base64 mas não tiver URL, criar URL
+    if ((hasBase64Image || hasOriginalImage) && !imageUrl) {
+      // Gerar um nome de arquivo temporário
+      const tempFileName = `product_${Date.now()}_${Math.floor(Math.random() * 1000000)}.jpg`;
+      imageUrl = `/uploads/extracted_images/${tempFileName}`;
+      console.log(`Criada URL temporária para imagem: ${imageUrl}`);
+    }
+    
     // Retornar o produto no formato esperado
     return {
       userId,
@@ -422,8 +463,10 @@ function processExtractedProducts(products: any[], userId: number, catalogId: nu
       colors: Array.isArray(product.colors) ? product.colors : [],
       materials: materials,
       sizes: Array.isArray(sizes) ? sizes : [],
-      imageUrl: product.imageUrl || ""
-    };
+      imageUrl: imageUrl,
+      // Manter os dados da imagem em base64 para exibição/fallback
+      image: hasBase64Image ? product.image : null,
+      originalImage: hasOriginalImage ? product.originalImage : null
   });
 }
 
