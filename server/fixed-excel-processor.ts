@@ -54,6 +54,45 @@ export async function processExcelWithFixedColumns(
   try {
     console.log(`Processando Excel com colunas fixas: ${filePath}`);
     
+    // NOVO MÉTODO: Tentar usar o extrator direto que salva imagens localmente
+    try {
+      console.log(`Tentando usar método direto de extração de imagens para ${filePath}`);
+      const { processExcelDirectly } = require('./direct-excel-extractor');
+      
+      // Processar utilizando o método direto
+      const directProducts = await processExcelDirectly(
+        filePath, 
+        String(userId || 'unknown'), 
+        String(catalogId || 'unknown')
+      );
+      
+      console.log(`Método direto extraiu ${directProducts.length} produtos com imagens locais`);
+      
+      // Adicionar campos necessários
+      const processedProducts = directProducts.map(product => ({
+        nome: product.nome,
+        local: product.local || '',
+        fornecedor: product.fornecedor || '',
+        codigo: product.codigo || '',
+        descricao: product.descricao || '',
+        preco: product.preco || 0,
+        imageUrl: product.imageUrl || undefined,
+        userId,
+        catalogId,
+        isEdited: false,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      }));
+      
+      return processedProducts;
+    } catch (directError) {
+      // Se o método direto falhar, registrar erro e continuar com método antigo
+      console.error('Método direto falhou, usando fallback:', directError);
+    }
+    
+    // MÉTODO ANTIGO: Fallback para o método original
+    console.log('Usando método antigo de extração de imagens...');
+    
     // Criar diretório para imagens extraídas
     const extractedImagesDir = path.join(process.cwd(), 'uploads', 'extracted_images');
     if (!fs.existsSync(extractedImagesDir)) {

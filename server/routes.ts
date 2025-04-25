@@ -2735,16 +2735,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       console.log(`Teste de extração de imagens: Processando arquivo ${fileName} em ${filePath}`);
       
-      // Importar processador de Excel com colunas fixas
-      const { processExcelWithFixedColumns } = await import('./fixed-excel-processor');
+      // Importar nosso novo processador direto que salva imagens localmente
+      const { processExcelDirectly } = require('./direct-excel-extractor');
       
       // Obter timestamp para evitar colisões
       const timestamp = Date.now();
       const testUserId = 'test-user-' + timestamp;
       const testCatalogId = 'test-catalog-' + timestamp;
       
-      // Processar Excel para extrair produtos e imagens
-      const products = await processExcelWithFixedColumns(
+      // Processar Excel diretamente, salvando imagens localmente
+      const products = await processExcelDirectly(
         filePath,
         testUserId,
         testCatalogId
@@ -2758,7 +2758,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         fileName,
         totalProducts: products.length,
         productsWithImages,
-        successRate: Math.round((productsWithImages / products.length) * 100),
+        successRate: Math.round((productsWithImages / products.length) * 100) || 0,
+        testUserId,
+        testCatalogId,
         sampleProducts: products
           .filter(p => p.imageUrl)  // Mostrar apenas produtos com imagens
           .slice(0, 5)              // Limitar a 5 produtos
