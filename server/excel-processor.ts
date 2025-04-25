@@ -375,7 +375,52 @@ function normalizeExcelProducts(rawProducts: ExcelProduct[]): any[] {
       let description = '';
       let price = 0;
       
-      if (isDateBasedSheet && productColumnKey && codeColumnKey) {
+      if (isSofaHomeOrPOEFormat) {
+        console.log("Usando processamento específico para catálogo Sofá Home/POE");
+        
+        // Para este formato específico do Sofá Home/POE, vamos extrair as informações de forma direcionada
+        
+        // 1. Extrair nome do produto (Sofá Home)
+        if (nameColumnKey && rawProduct[nameColumnKey]) {
+          productName = String(rawProduct[nameColumnKey]).trim();
+        }
+        
+        // 2. Extrair código do produto
+        if (codeColumnKey && rawProduct[codeColumnKey]) {
+          productCode = String(rawProduct[codeColumnKey]).trim();
+        }
+        
+        // 3. Extrair descrição
+        if (descriptionColumnKey && rawProduct[descriptionColumnKey]) {
+          description = String(rawProduct[descriptionColumnKey]).trim();
+        }
+        
+        // 4. Extrair preço - tratando corretamente no formato brasileiro (R$ 2.893,00)
+        if (priceColumnKey && rawProduct[priceColumnKey]) {
+          const rawPriceVal = rawProduct[priceColumnKey];
+          
+          if (typeof rawPriceVal === 'number') {
+            price = Math.round(rawPriceVal * 100); // converter para centavos
+          } else if (typeof rawPriceVal === 'string') {
+            // Limpar a string de preço (remover R$, espaços, etc)
+            let cleanPrice = rawPriceVal.replace(/[^\d,.]/g, '');
+            
+            // Para valores como R$ 2.893,00, remover os pontos de milhar e substituir a vírgula por ponto
+            if (cleanPrice.includes('.') && cleanPrice.includes(',')) {
+              cleanPrice = cleanPrice.replace(/\./g, '').replace(',', '.');
+            } else if (cleanPrice.includes(',')) {
+              cleanPrice = cleanPrice.replace(',', '.');
+            }
+              
+            // Converter para número
+            const numericPrice = parseFloat(cleanPrice);
+            if (!isNaN(numericPrice)) {
+              price = Math.round(numericPrice * 100);
+              console.log(`Preço convertido: "${rawPriceVal}" => ${numericPrice} => ${price} centavos`);
+            }
+          }
+        }
+      } else if (isDateBasedSheet && productColumnKey && codeColumnKey) {
         console.log("Usando processamento específico para planilha baseada em datas");
         
         // Para a planilha de datas, extrair informações dos produtos da tabela "POE"
@@ -436,11 +481,14 @@ function normalizeExcelProducts(rawProducts: ExcelProduct[]): any[] {
             price = Math.round(rawPriceVal * 100); // converter para centavos
           } else if (typeof rawPriceVal === 'string') {
             // Limpar a string de preço (remover R$, espaços, etc)
-            const cleanPrice = rawPriceVal
-              .replace(/R\$\s*/g, '')
-              .replace(/\s/g, '')
-              .replace(/\./g, '')
-              .replace(',', '.');
+            let cleanPrice = rawPriceVal.replace(/[^\d,.]/g, '');
+            
+            // Para valores como R$ 2.893,00, remover os pontos de milhar e substituir a vírgula por ponto
+            if (cleanPrice.includes('.') && cleanPrice.includes(',')) {
+              cleanPrice = cleanPrice.replace(/\./g, '').replace(',', '.');
+            } else if (cleanPrice.includes(',')) {
+              cleanPrice = cleanPrice.replace(',', '.');
+            }
               
             // Converter para número
             const numericPrice = parseFloat(cleanPrice);
@@ -690,23 +738,69 @@ function normalizeExcelProducts(rawProducts: ExcelProduct[]): any[] {
         }
       }
       
+      // Procesar imagens para o formato do Sofá Home/POE
+      let processedImageUrl = imageUrl;
+      
+      // Processar o campo de imagem especialmente para Sofá Home/POE
+      if (isSofaHomeOrPOEFormat && imageColumnKey && rawProduct[imageColumnKey]) {
+        const rawImage = rawProduct[imageColumnKey];
+        if (typeof rawImage === 'string') {
+          // Verificar se a URL da imagem já está formada
+          if (rawImage.startsWith('http') || rawImage.startsWith('/uploads/')) {
+            processedImageUrl = rawImage;
+          } 
+          // Se for um caminho relativo ou base64
+          else if (rawImage.length > 0) {
+            // Criar um ID único para a imagem
+            const imageId = `${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+            processedImageUrl = `/uploads/extracted_images/product_${imageId}.jpg`;
+            console.log(`Processada imagem para formato URL: ${processedImageUrl}`);
+          }
+        }
+      }
+      
+      // Processar fornecedor para o formato Sofá Home/POE
+      let processedManufacturer = manufacturer;
+      if (isSofaHomeOrPOEFormat && supplierColumnKey && rawProduct[supplierColumnKey]) {
+        processedManufacturer = String(rawProduct[supplierColumnKey]).trim();
+        console.log(`Detectado fornecedor: ${processedManufacturer}`);
+      }
+      
+      // Processar localização (2º Piso, Depósito, etc) para o formato Sofá Home/POE
+      let location = '';
+      if (isSofaHomeOrPOEFormat && locationColumnKey && rawProduct[locationColumnKey]) {
+        location = String(rawProduct[locationColumnKey]).trim();
+        console.log(`Detectada localização: ${location}`);
+      }
+      
+      // Se tivermos localização, adicioná-la à descrição
+      let fullDescription = description;
+      if (location) {
+        if (fullDescription) {
+          fullDescription = `${fullDescription} | Local: ${location}`;
+        } else {
+          fullDescription = `Local: ${location}`;
+        }
+      }
+      
       // Construir o objeto de produto normalizado
       normalizedProducts.push({
         name: productName || 'Produto sem nome',
-        description,
+        description: fullDescription,
         code: productCode || `AUTO-${Date.now().toString().slice(-8)}`,
         price,
         category,
-        manufacturer, // Adicionar o fabricante
+        manufacturer: processedManufacturer, // Adicionar o fornecedor/fabricante
         colors,
         materials,
         sizes,
-        imageUrl,
+        imageUrl: processedImageUrl,
+        location, // Adicionar campo de localização
         stock: rawProduct.estoque || rawProduct.stock || null,
         isEdited: false, // Inicialmente não editado manualmente
         createdAt: new Date(),
         updatedAt: new Date(),
-        // Manter campos originais adicionais
+        // Manter campos originais adicionais para debug
         originalData: { ...rawProduct }
       });
     }
