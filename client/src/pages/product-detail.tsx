@@ -32,18 +32,37 @@ function ImageWithVerification({ productId, productName, productCode, category }
       return;
     }
 
-    // Verificar a disponibilidade da imagem
+    // Verificar a disponibilidade e exclusividade da imagem
     fetch(`/api/verify-product-image/${productId}`)
-      .then(response => response.json())
+      .then(response => {
+        if (!response.ok) {
+          throw new Error(`Erro ${response.status}: ${response.statusText}`);
+        }
+        return response.json();
+      })
       .then(data => {
-        if (data.hasImage) {
-          // Se a API retornar uma URL direta, usar
-          if (data.directUrl) {
-            setImageUrl(data.imageUrl);
-          } else {
-            // Caso contrário, usar a rota de API que garante fallback
-            setImageUrl(`/api/product-image/${productId}`);
+        if (data.status === 'success' && data.hasImage) {
+          // Se a imagem é compartilhada, criar uma cópia exclusiva 
+          if (data.isShared && data.localPath) {
+            console.log(`Produto ${productId}: Imagem compartilhada detectada, criando exclusiva...`);
+            // Chamar API para criar cópia exclusiva
+            return fetch(`/api/create-unique-image/${productId}`, {
+              method: 'POST'
+            })
+            .then(uniqueResponse => uniqueResponse.json())
+            .then(uniqueData => {
+              if (uniqueData.success) {
+                console.log(`Produto ${productId}: Imagem exclusiva criada com sucesso`);
+                // Usar a URL da imagem exclusiva garantida
+                setImageUrl(`/api/product-image/${productId}?t=${Date.now()}`);
+              } else {
+                throw new Error(`Falha ao criar imagem exclusiva: ${uniqueData.error}`);
+              }
+            });
           }
+          
+          // Se a imagem já é única, usar diretamente
+          setImageUrl(`/api/product-image/${productId}`);
         } else {
           // Se não há imagem, determinar um placeholder baseado na categoria
           let placeholderFile = 'default.svg';
@@ -59,8 +78,9 @@ function ImageWithVerification({ productId, productName, productCode, category }
         setIsLoading(false);
       })
       .catch(error => {
-        console.error("Erro ao verificar imagem:", error);
-        setImageUrl(`/api/product-image/${productId}`); // Usar API diretamente como fallback
+        console.error(`Erro ao verificar imagem para produto ${productId}:`, error);
+        // Tente usar a API diretamente como último recurso
+        setImageUrl(`/api/product-image/${productId}?fallback=true`); 
         setIsLoading(false);
         setHasError(true);
       });

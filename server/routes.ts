@@ -3212,6 +3212,177 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.send(html);
   });
 
+  // Adicionar rotas de imagem diretamente para garantir relação 1:1 entre produtos e imagens
+  // Verificação de imagem de produto
+  app.get("/api/verify-product-image/:productId", async (req: Request, res: Response) => {
+    try {
+      const productId = parseInt(req.params.productId);
+      
+      if (isNaN(productId)) {
+        return res.status(400).json({
+          status: 'error',
+          error: 'ID de produto inválido'
+        });
+      }
+      
+      // Importar função de verify
+      const { verifyProductImage } = await import('./excel-image-analyzer');
+      const result = await verifyProductImage(productId);
+      res.json(result);
+      
+    } catch (error) {
+      console.error('Erro ao verificar imagem de produto:', error);
+      res.status(500).json({
+        status: 'error',
+        error: error.message || 'Erro interno ao verificar imagem'
+      });
+    }
+  });
+
+  // Criação de imagem única para produto
+  app.post("/api/create-unique-image/:productId", async (req: Request, res: Response) => {
+    try {
+      const productId = parseInt(req.params.productId);
+      
+      if (isNaN(productId)) {
+        return res.status(400).json({
+          status: 'error',
+          error: 'ID de produto inválido'
+        });
+      }
+      
+      // Importar funções
+      const { createUniqueImageCopy, findImageFile } = await import('./excel-image-analyzer');
+      
+      // Buscar o produto
+      const product = await storage.getProduct(productId);
+      
+      if (!product || !product.imageUrl) {
+        return res.status(404).json({
+          status: 'error',
+          error: 'Produto não encontrado ou sem URL de imagem'
+        });
+      }
+      
+      // Extrair nome do arquivo da URL
+      const matches = product.imageUrl.match(/\/([^\/]+)$/);
+      if (!matches || !matches[1]) {
+        return res.status(400).json({
+          status: 'error',
+          error: 'URL de imagem inválida'
+        });
+      }
+      
+      const filename = matches[1];
+      
+      // Localizar a imagem no sistema
+      const imagePath = await findImageFile(filename);
+      
+      if (!imagePath) {
+        return res.status(404).json({
+          status: 'error',
+          error: 'Imagem não encontrada no sistema'
+        });
+      }
+      
+      // Criar cópia exclusiva da imagem
+      const result = await createUniqueImageCopy(productId, imagePath);
+      
+      res.json(result);
+      
+    } catch (error) {
+      console.error('Erro ao criar imagem única:', error);
+      res.status(500).json({
+        status: 'error',
+        error: error.message || 'Erro interno ao criar imagem única'
+      });
+    }
+  });
+
+  // Servir imagem específica para produto (sempre única)
+  app.get("/api/product-image/:productId", async (req: Request, res: Response) => {
+    try {
+      const productId = parseInt(req.params.productId);
+      
+      if (isNaN(productId)) {
+        return res.status(400).send('ID de produto inválido');
+      }
+      
+      // Importar funções necessárias
+      const { verifyProductImage, findImageFile, createUniqueImageCopy } = await import('./excel-image-analyzer');
+      
+      // Buscar o produto
+      const product = await storage.getProduct(productId);
+      
+      if (!product || !product.imageUrl) {
+        return res.status(404).send('Produto não encontrado ou sem URL de imagem');
+      }
+      
+      // Verificar se a imagem é única para este produto
+      const imageVerification = await verifyProductImage(productId);
+      
+      // Se a imagem é compartilhada, criar cópia exclusiva
+      if (imageVerification.isShared) {
+        console.log(`Detectada imagem compartilhada para produto ${productId}, criando cópia exclusiva...`);
+        // Criar cópia exclusiva apenas se temos o caminho local da imagem
+        if (imageVerification.localPath) {
+          const uniqueImageResult = await createUniqueImageCopy(productId, imageVerification.localPath);
+          
+          if (uniqueImageResult.success) {
+            console.log(`Criada imagem exclusiva para produto ${productId}: ${uniqueImageResult.path}`);
+            // A URL do produto já foi atualizada na função createUniqueImageCopy
+          } else {
+            console.error(`Falha ao criar imagem exclusiva: ${uniqueImageResult.error}`);
+          }
+        }
+      }
+      
+      // Extrair nome do arquivo da URL (potencialmente atualizada)
+      const updatedProduct = await storage.getProduct(productId);
+      const matches = updatedProduct.imageUrl.match(/\/([^\/]+)$/);
+      
+      if (!matches || !matches[1]) {
+        return res.status(400).send('URL de imagem inválida');
+      }
+      
+      const filename = matches[1];
+      
+      // Localizar a imagem no sistema de arquivos
+      const imagePath = await findImageFile(filename);
+      
+      if (!imagePath) {
+        return res.status(404).send('Imagem não encontrada no sistema');
+      }
+      
+      // Determinar o tipo MIME baseado na extensão
+      const ext = path.extname(imagePath).toLowerCase();
+      let contentType = 'application/octet-stream';
+      
+      if (ext === '.jpg' || ext === '.jpeg') {
+        contentType = 'image/jpeg';
+      } else if (ext === '.png') {
+        contentType = 'image/png';
+      } else if (ext === '.gif') {
+        contentType = 'image/gif';
+      } else if (ext === '.svg') {
+        contentType = 'image/svg+xml';
+      }
+      
+      // Ler o arquivo e enviar como resposta
+      // Garantir que estamos usando a versão promisificada do fs
+      const { readFile } = fs.promises;
+      const imageBuffer = await readFile(imagePath);
+      
+      // Enviar a imagem com o tipo de conteúdo apropriado
+      res.setHeader('Content-Type', contentType);
+      res.send(imageBuffer);
+      
+    } catch (error) {
+      console.error('Erro ao servir imagem de produto:', error);
+      res.status(500).send('Erro interno ao buscar imagem');
+    }
+  });
+
   const httpServer = createServer(app);
   return httpServer;
 }

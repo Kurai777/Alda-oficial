@@ -48,8 +48,6 @@ export async function verifyProductImage(productId: number): Promise<ImageVerifi
       };
     }
     
-    console.log(`Produto encontrado:`, product);
-    
     // Se o produto não tem URL de imagem
     if (!product.imageUrl) {
       return {
@@ -81,8 +79,19 @@ export async function verifyProductImage(productId: number): Promise<ImageVerifi
     const filename = matches[1];
     
     // Verificar se outros produtos usam a mesma URL de imagem
-    const productsWithSameImage = await storage.getProductsByImageUrl(product.imageUrl);
-    const isShared = productsWithSameImage.length > 1;
+    // Proteger de possíveis erros na consulta ao banco
+    let isShared = false;
+    try {
+      const productsWithSameImage = await storage.getProductsByImageUrl(product.imageUrl);
+      isShared = productsWithSameImage.length > 1;
+      
+      if (isShared) {
+        console.log(`Imagem ${filename} é compartilhada por ${productsWithSameImage.length} produtos`);
+      }
+    } catch (dbErr) {
+      console.error('Erro ao verificar produtos com mesma imagem:', dbErr);
+      // Mesmo com erro, podemos continuar, apenas assumimos que não é compartilhada
+    }
     
     // Procurar a imagem localmente
     const localPath = await findImageFile(filename);
@@ -109,11 +118,22 @@ export async function verifyProductImage(productId: number): Promise<ImageVerifi
     };
     
   } catch (error) {
-    console.error('Erro ao verificar imagem:', error.message || JSON.stringify(error));
+    // Capturar erro específico para informação de depuração
+    let errorMessage = 'Erro desconhecido';
+    if (error instanceof Error) {
+      errorMessage = error.message;
+      console.error('Erro ao verificar imagem (detalhado):', {
+        message: error.message,
+        stack: error.stack
+      });
+    } else {
+      console.error('Erro ao verificar imagem (objeto):', JSON.stringify(error));
+    }
+    
     return {
       status: 'error',
       hasImage: false,
-      error: error.message || 'Erro desconhecido ao verificar imagem'
+      error: errorMessage
     };
   }
 }
