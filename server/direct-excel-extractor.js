@@ -40,7 +40,7 @@ async function ensureDirectoriesExist(userId, catalogId) {
 }
 
 /**
- * Extrai imagens do Excel usando JSZip
+ * Extrai imagens do Excel usando JSZip com informações adicionais sobre posição
  */
 async function extractImagesWithJSZip(excelPath, outputDir) {
   try {
@@ -55,6 +55,7 @@ async function extractImagesWithJSZip(excelPath, outputDir) {
     // Mapear relacionamentos de imagens para IDs
     const rels = {};
     const drawingRels = {};
+    const imagePositions = {};
     
     // Buscar arquivos de relacionamentos
     for (const fileName in zip.files) {
@@ -73,19 +74,95 @@ async function extractImagesWithJSZip(excelPath, outputDir) {
     
     console.log('Relacionamentos processados:', drawingRels);
     
-    // Mapear imagens em cada planilha
+    // Mapear imagens em cada planilha e tentar extrair posição de linhas e colunas
     for (const fileName in zip.files) {
       if (fileName.startsWith('xl/worksheets/') && fileName.endsWith('.xml') && !fileName.includes('_rels')) {
         const sheetContent = await zip.files[fileName].async('string');
         const sheetName = fileName.split('/').pop().replace('.xml', '');
         
-        // Encontrar todas as referências de desenhos na planilha
-        const drawingMatches = sheetContent.match(/<drawing r:id="rId(\d+)"\/>/g) || [];
+        // Extrair informações sobre células com desenhos/imagens
+        // Exemplo formato: <twoCellAnchor><from><col>1</col><row>4</row></from>...</twoCellAnchor>
+        const cellPositionMatches = sheetContent.match(/<(oneCellAnchor|twoCellAnchor)>[\s\S]*?<from><col>(\d+)<\/col><row>(\d+)<\/row><\/from>[\s\S]*?<drawing r:id="rId(\d+)"[\s\S]*?<\/(oneCellAnchor|twoCellAnchor)>/g) || [];
         
+        for (const posMatch of cellPositionMatches) {
+          try {
+            const colMatch = posMatch.match(/<from><col>(\d+)<\/col>/);
+            const rowMatch = posMatch.match(/<from><row>(\d+)<\/row>/);
+            const rIdMatch = posMatch.match(/<drawing r:id="rId(\d+)"/);
+            
+            if (colMatch && rowMatch && rIdMatch) {
+              const col = parseInt(colMatch[1]);
+              const row = parseInt(rowMatch[1]);
+              const rId = rIdMatch[1];
+              
+              // A planilha está em XML mas queremos encontrar a conexão:
+              // XML worksheet -> drawing reference (rId) -> drawing file -> drawing relationships -> image
+              const drawingRefKey = `${sheetName}-rId${rId}`;
+              
+              // Adicionar informação de posição (linha/coluna) para cada relação
+              rels[drawingRefKey] = { sheet: sheetName, row, col, rId };
+              
+              console.log(`Encontrada imagem na posição: planilha=${sheetName}, linha=${row}, coluna=${col}, rId=${rId}`);
+            }
+          } catch (posError) {
+            console.error('Erro ao extrair posição de imagem:', posError);
+          }
+        }
+        
+        // Também procurar por referências de desenhos padrão (para garantir compatibilidade)
+        const drawingMatches = sheetContent.match(/<drawing r:id="rId(\d+)"\/>/g) || [];
         drawingMatches.forEach(match => {
           const [, rId] = match.match(/<drawing r:id="rId(\d+)"\/>/);
-          rels[`${sheetName}-rId${rId}`] = true;
+          if (!rels[`${sheetName}-rId${rId}`]) {
+            rels[`${sheetName}-rId${rId}`] = { sheet: sheetName, rId };
+          }
         });
+      }
+    }
+    
+    // Agora vamos analisar os arquivos de desenho (drawings) para mapear as referências completas
+    for (const fileName in zip.files) {
+      if (fileName.startsWith('xl/drawings/') && fileName.endsWith('.xml') && !fileName.includes('_rels')) {
+        const drawingContent = await zip.files[fileName].async('string');
+        const drawingName = fileName.split('/').pop().replace('.xml', '');
+        
+        // Encontrar todas as referências de embedded picture (imagens)
+        const pictRefMatches = drawingContent.match(/<xdr:pic>[\s\S]*?<a:blip r:embed="rId(\d+)"[\s\S]*?<\/xdr:pic>/g) || [];
+        
+        for (const pictMatch of pictRefMatches) {
+          try {
+            const embedMatch = pictMatch.match(/<a:blip r:embed="rId(\d+)"/);
+            if (embedMatch) {
+              const embedId = embedMatch[1];
+              // A relação completa: 
+              // worksheet -> drawing -> blip embed (rId) -> image
+              const drawingRelKey = `${drawingName}-rId${embedId}`;
+              
+              if (drawingRels[drawingRelKey]) {
+                const imageId = drawingRels[drawingRelKey].imageId;
+                const ext = drawingRels[drawingRelKey].ext;
+                
+                // Procurar qual relação de planilha usa este desenho
+                for (const [relKey, relInfo] of Object.entries(rels)) {
+                  if (relKey.endsWith(`-rId${relInfo.rId}`) && relKey.includes(relInfo.sheet)) {
+                    // Isso conecta a imagem à sua posição na planilha!
+                    imagePositions[imageId] = {
+                      ...relInfo,
+                      imageId,
+                      ext,
+                      fileName: `image${imageId}.${ext}`
+                    };
+                    
+                    console.log(`Conectada imagem ${imageId} à posição: planilha=${relInfo.sheet}, linha=${relInfo.row}, coluna=${relInfo.col}`);
+                    break;
+                  }
+                }
+              }
+            }
+          } catch (refError) {
+            console.error('Erro ao processar referência de imagem:', refError);
+          }
+        }
       }
     }
     
@@ -101,13 +178,25 @@ async function extractImagesWithJSZip(excelPath, outputDir) {
         const outputImagePath = path.join(outputDir, `image${imageId}.${extension}`);
         await writeFileAsync(outputImagePath, imageBuffer);
         
-        console.log(`Imagem extraída: ${outputImagePath} (${imageBuffer.length} bytes)`);
-        extractedImages.push({
+        // Criar objeto da imagem com informações extras sobre posição
+        const imageInfo = {
           id: imageId,
           path: outputImagePath,
           fileName: `image${imageId}.${extension}`,
-          size: imageBuffer.length
-        });
+          size: imageBuffer.length,
+          // Adicionar informações de posição se disponíveis
+          ...(imagePositions[imageId] || {})
+        };
+        
+        // Se temos informações de linha, usar o rowIndex para facilitar correspondência depois
+        if (imageInfo.row !== undefined) {
+          imageInfo.rowIndex = imageInfo.row;
+        }
+        
+        console.log(`Imagem extraída: ${outputImagePath} (${imageBuffer.length} bytes)`, 
+          imageInfo.row ? `posição: linha=${imageInfo.row}, coluna=${imageInfo.col}` : '');
+        
+        extractedImages.push(imageInfo);
       }
     }
     
@@ -222,21 +311,49 @@ async function processExcelDirectly(excelPath, userId, catalogId) {
             }
           });
           
-          // Associar imagem do Excel ao produto
+          // Associar imagem do Excel ao produto de forma mais inteligente
           let imageUrl = null;
-          const imageIndex = i - 3; // Ajustar índice considerando que pulamos as linhas de cabeçalho
           
           if (extractedImages.length > 0) {
-            // Tentar usar imagem correspondente à linha atual
-            const matchingImage = extractedImages[imageIndex] || extractedImages[0];
+            // Estratégia 1: Verificar se há uma célula com imagem especificamente nesta linha
+            const exactRowMatch = extractedImages.find(img => img.rowIndex === i);
+            
+            // Estratégia 2: Usar correspondência por código ou nome
+            const codeMatch = codigo ? extractedImages.find(img => 
+              img.fileName.toLowerCase().includes(codigo.toLowerCase())
+            ) : null;
+            
+            const nameMatch = nome ? extractedImages.find(img => 
+              img.fileName.toLowerCase().includes(nome.toLowerCase().replace(/\s+/g, ''))
+            ) : null;
+            
+            // Estratégia 3: Usar a posição relativa (como fallback)
+            const positionIndex = i - 3; // Ajustar índice considerando que pulamos as linhas de cabeçalho
+            const positionMatch = extractedImages[positionIndex];
+            
+            // Priorizar a correspondência mais específica
+            const matchingImage = exactRowMatch || codeMatch || nameMatch || positionMatch || extractedImages[0];
             
             if (matchingImage) {
+              // Marcar a imagem como já utilizada para outros produtos não a reutilizarem
+              matchingImage.used = true;
+              
               // Criar caminho de URL relativo que será servido pela API
-              // Exemplo: /uploads/extracted_images/catalog-123/image1.png
               const relativePath = `/uploads/extracted_images/catalog-${catalogId}/${matchingImage.fileName}`;
               imageUrl = relativePath;
               
-              console.log(`Produto ${nome} (linha ${i+1}): associado à imagem ${matchingImage.fileName}`);
+              // Adicionar também caminho para diretório temporário (mais uma fonte possível)
+              const tempPath = `/uploads/temp-excel-images/excel_${Date.now().toString().substring(0, 10)}/${matchingImage.fileName}`;
+              
+              // Registrar o tipo de correspondência encontrada para debug
+              let matchType = "desconhecido";
+              if (exactRowMatch === matchingImage) matchType = "célula exata";
+              else if (codeMatch === matchingImage) matchType = "por código";
+              else if (nameMatch === matchingImage) matchType = "por nome";
+              else if (positionMatch === matchingImage) matchType = "por posição";
+              else matchType = "fallback";
+              
+              console.log(`Produto ${nome} (linha ${i+1}): associado à imagem ${matchingImage.fileName} (${matchType})`);
             }
           }
           
