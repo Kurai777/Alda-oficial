@@ -809,39 +809,88 @@ export async function registerRoutes(app: Express): Promise<Server> {
               await mkdir(extractedImagesDir, { recursive: true });
             }
             
-            // Extrair dados do Excel usando o processador melhorado com suporte para extração de imagens
-            console.log(`Iniciando processamento do arquivo Excel: ${filePath}`);
-            console.log(`Usuário ID para associação de imagens: ${userId}`);
-            
-            // Passar o userId e catalogId para a função para associar as imagens aos produtos corretamente
-            productsData = await processExcelFile(filePath, userId, firestoreCatalogId);
-            extractionInfo = `Extraídos ${productsData.length} produtos do arquivo Excel.`;
-            
             // Verificar se é um catálogo no formato Sofá Home/POE
             const isSofaHomeFormat = fileName.toLowerCase().includes('sofá') || 
                                      fileName.toLowerCase().includes('sofa home') || 
                                      fileName.toLowerCase().includes('poe');
             
             if (isSofaHomeFormat) {
-              console.log("Detectado formato especial Sofá Home/POE com imagens embutidas.");
+              console.log("Detectado formato especial Sofá Home/POE - usando processador com colunas fixas");
             }
             
-            // Verificar e processar produtos com imagens
-            let productsWithImages = 0;
-            for (const product of productsData) {
-              if (product.imageUrl) {
-                productsWithImages++;
-                console.log(`Produto ${product.code || product.name} tem imagem: ${product.imageUrl}`);
+            // Importar o processador de colunas fixas
+            const { processExcelWithFixedColumns } = await import('./fixed-excel-processor');
+            
+            // Usar o processador com colunas fixas para extrair os dados do Excel
+            console.log(`Iniciando processamento do arquivo Excel com colunas fixas: ${filePath}`);
+            console.log(`Usuário ID: ${userId}, Catálogo ID: ${firestoreCatalogId}`);
+            
+            // Processar o Excel com o novo formato de colunas fixas
+            try {
+              productsData = await processExcelWithFixedColumns(filePath, userId, firestoreCatalogId);
+              extractionInfo = `Extraídos ${productsData.length} produtos do arquivo Excel (colunas fixas).`;
+              
+              // Verificar produtos com imagens
+              let productsWithImages = 0;
+              for (const product of productsData) {
+                if (product.imageUrl) {
+                  productsWithImages++;
+                  console.log(`Produto ${product.codigo || product.nome} tem imagem: ${product.imageUrl}`);
+                }
               }
+              console.log(`${productsWithImages} produtos contêm imagens (${Math.round(productsWithImages/productsData.length*100)}%)`);
+              
+              console.log(`Processamento de produtos e imagens concluído: ${productsData.length} produtos.`);
+            } catch (fixedColumnsError) {
+              console.error("Erro ao processar Excel com colunas fixas:", fixedColumnsError);
+              
+              // Tentar método tradicional como fallback
+              console.log("Tentando método tradicional de processamento Excel...");
+              productsData = await processExcelFile(filePath, userId, firestoreCatalogId);
+              extractionInfo = `Extraídos ${productsData.length} produtos do arquivo Excel (método tradicional).`;
+              
+              // Verificar produtos com imagens
+              let productsWithImages = 0;
+              for (const product of productsData) {
+                if (product.imageUrl) {
+                  productsWithImages++;
+                  console.log(`Produto ${product.code || product.name} tem imagem: ${product.imageUrl}`);
+                }
+              }
+              console.log(`${productsWithImages} produtos contêm imagens (${Math.round(productsWithImages/productsData.length*100)}%)`);
+              
+              console.log(`Processamento de produtos e imagens concluído: ${productsData.length} produtos.`);
             }
-            console.log(`${productsWithImages} produtos contêm referências de imagens (${Math.round(productsWithImages/productsData.length*100)}%)`);
-            
-            console.log(`Processamento de produtos e imagens concluído: ${productsData.length} produtos.`);
             
             // Salvar produtos no Firestore
             try {
+              // Mapear produtos para o formato esperado pelo Firestore
+              const productsForFirestore = productsData.map(p => {
+                // Se for do formato de colunas fixas
+                if ('codigo' in p) {
+                  return {
+                    userId,
+                    catalogId: firestoreCatalogId,
+                    name: p.nome,
+                    description: p.descricao,
+                    code: p.codigo,
+                    price: parseFloat(p.preco.replace('R$', '').replace('.', '').replace(',', '.')) || 0,
+                    imageUrl: p.imageUrl,
+                    location: p.local,
+                    supplier: p.fornecedor,
+                    quantity: p.quantidade || 0,
+                    isEdited: false,
+                    createdAt: new Date(),
+                    updatedAt: new Date()
+                  };
+                } else {
+                  // Formato tradicional
+                  return { ...p, userId, catalogId: firestoreCatalogId };
+                }
+              });
+              
               const productIds = await saveProductsToFirestore(
-                productsData.map(p => ({ ...p, userId, catalogId: firestoreCatalogId })), 
+                productsForFirestore, 
                 userId, 
                 firestoreCatalogId
               );

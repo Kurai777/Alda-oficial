@@ -239,11 +239,74 @@ export async function updateCatalogStatusInFirestore(
   }
 }
 
+// Função para salvar uma imagem no Firebase Storage
+export async function saveImageToFirebaseStorage(
+  base64Data: string,
+  fileName: string,
+  userId: string,
+  catalogId: string
+): Promise<string> {
+  try {
+    // Verificar se o Storage está disponível
+    if (!storage) {
+      console.error('Firebase Storage não inicializado');
+      return '';
+    }
+    
+    // Obter o bucket de armazenamento
+    const bucket = storage.bucket();
+    
+    // Verificar se o bucket está disponível
+    if (!bucket) {
+      console.error('Firebase Storage bucket não disponível');
+      return '';
+    }
+    
+    // Caminho para a imagem no Storage (organizando por usuário e catálogo)
+    const filePath = `products/${userId}/${catalogId}/${fileName}`;
+    
+    // Criar buffer da imagem a partir do base64
+    const imageBuffer = Buffer.from(base64Data, 'base64');
+    
+    // Referência ao arquivo
+    const file = bucket.file(filePath);
+    
+    // Configurações para upload
+    const options = {
+      metadata: {
+        contentType: 'image/png',
+        metadata: {
+          firebaseStorageDownloadTokens: admin.firestore.FieldValue.serverTimestamp()
+        }
+      },
+      public: true
+    };
+    
+    // Fazer upload do arquivo
+    await file.save(imageBuffer, options);
+    
+    // Gerar URL pública (funciona mesmo se o bucket não for público)
+    const config = firebaseApp.options;
+    const bucketName = config.storageBucket || '';
+    
+    // URL no formato do Firebase Storage
+    const imageUrl = `https://firebasestorage.googleapis.com/v0/b/${bucketName}/o/${encodeURIComponent(filePath)}?alt=media`;
+    
+    console.log(`Imagem salva no Firebase Storage: ${imageUrl}`);
+    
+    return imageUrl;
+  } catch (error) {
+    console.error('Erro ao salvar imagem no Firebase Storage:', error);
+    return '';
+  }
+}
+
 export default {
   adminDb,
   auth,
   storage,
   saveCatalogToFirestore,
   saveProductsToFirestore,
-  updateCatalogStatusInFirestore
+  updateCatalogStatusInFirestore,
+  saveImageToFirebaseStorage
 };
