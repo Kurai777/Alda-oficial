@@ -482,6 +482,80 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
   
+  // Rota para remapear imagens de um catálogo específico
+  app.post("/api/catalogs/:id/remap-images", async (req: Request, res: Response) => {
+    try {
+      const catalogId = parseInt(req.params.id);
+      
+      if (isNaN(catalogId)) {
+        return res.status(400).json({ 
+          success: false, 
+          error: "ID de catálogo inválido" 
+        });
+      }
+      
+      // Buscar o catálogo
+      const catalog = await storage.getCatalog(catalogId);
+      
+      if (!catalog) {
+        return res.status(404).json({ 
+          success: false, 
+          error: "Catálogo não encontrado" 
+        });
+      }
+      
+      console.log(`Iniciando remapeamento de imagens para o catálogo ${catalogId}: ${catalog.fileName}`);
+      
+      // Importar o módulo de mapeamento
+      const { extractAndMapImages } = await import('./excel-fixed-image-mapper');
+      
+      // Construir caminho para o arquivo Excel
+      const excelPath = path.join(process.cwd(), 'uploads', 'catalogs', `${catalogId}`, catalog.fileName);
+      
+      // Verificar se o arquivo existe
+      if (!fs.existsSync(excelPath)) {
+        return res.status(404).json({ 
+          success: false, 
+          error: `Arquivo Excel não encontrado: ${catalog.fileName}` 
+        });
+      }
+      
+      // Executar o mapeamento
+      const result = await extractAndMapImages(excelPath, catalogId, catalog.userId);
+      
+      res.json(result);
+    } catch (error) {
+      console.error("Erro ao remapear imagens do catálogo:", error);
+      res.status(500).json({ 
+        success: false, 
+        error: "Erro ao remapear imagens do catálogo",
+        details: error.message 
+      });
+    }
+  });
+  
+  // Rota para remapear imagens de todos os catálogos
+  app.post("/api/catalogs/remap-all-images", async (req: Request, res: Response) => {
+    try {
+      console.log("Iniciando remapeamento de imagens para todos os catálogos");
+      
+      // Importar o módulo de mapeamento
+      const { remapAllCatalogs } = await import('./excel-fixed-image-mapper');
+      
+      // Executar o remapeamento
+      const result = await remapAllCatalogs();
+      
+      res.json(result);
+    } catch (error) {
+      console.error("Erro ao remapear imagens de todos os catálogos:", error);
+      res.status(500).json({ 
+        success: false, 
+        error: "Erro ao remapear imagens de todos os catálogos",
+        details: error.message 
+      });
+    }
+  });
+  
   // Rota para excluir um catálogo
   app.delete("/api/catalogs/:id", async (req: Request, res: Response) => {
     try {
