@@ -1916,19 +1916,48 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // return res.status(403).json({ message: "Acesso não autorizado" });
       }
       
-      // Caminho da imagem no sistema de arquivos
-      const imagePath = path.join(process.cwd(), 'uploads', 'images', userId, catalogId, filename);
-      
-      if (!fs.existsSync(imagePath)) {
-        console.error(`Imagem não encontrada: ${imagePath}`);
-
-        // Tentar servir uma imagem placeholder
-        const placeholderPath = path.join(process.cwd(), 'client', 'public', 'placeholder-image.jpg');
-        if (fs.existsSync(placeholderPath)) {
-          return res.sendFile(placeholderPath);
-        }
+      // Lista de caminhos possíveis para a imagem, em ordem de prioridade
+      const possiblePaths = [
+        // 1. Caminho exato solicitado
+        path.join(process.cwd(), 'uploads', 'images', userId, catalogId, filename),
         
-        return res.status(404).json({ message: "Imagem não encontrada" });
+        // 2. Diretórios de compatibilidade com o mesmo userId
+        ...Array.from({length: 5}, (_, i) => 
+          path.join(process.cwd(), 'uploads', 'images', userId, `local-${i+1}`, filename)),
+        
+        // 3. Diretórios com userId=1 (para compatibilidade com produtos existentes)
+        path.join(process.cwd(), 'uploads', 'images', '1', catalogId, filename),
+        
+        // 4. Diretórios de compatibilidade com userId=1
+        ...Array.from({length: 5}, (_, i) => 
+          path.join(process.cwd(), 'uploads', 'images', '1', `local-${i+1}`, filename)),
+      ];
+      
+      // Procurar a imagem em todos os caminhos possíveis
+      let imagePath = null;
+      for (const path of possiblePaths) {
+        if (fs.existsSync(path)) {
+          imagePath = path;
+          break;
+        }
+      }
+      
+      // Se não encontrou a imagem em nenhum local
+      if (!imagePath) {
+        console.error(`Imagem não encontrada: ${filename} (userId=${userId}, catalogId=${catalogId})`);
+        console.log('Caminhos verificados:', possiblePaths);
+
+        // Gerar um SVG placeholder
+        const svgContent = `
+        <svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400">
+          <rect width="600" height="400" fill="#f9f9f9" />
+          <text x="300" y="200" font-family="Arial" font-size="16" fill="#666666" text-anchor="middle">
+            Imagem não encontrada: ${filename}
+          </text>
+        </svg>`;
+        
+        res.setHeader('Content-Type', 'image/svg+xml');
+        return res.send(svgContent);
       }
       
       // Determinar o tipo MIME com base na extensão do arquivo

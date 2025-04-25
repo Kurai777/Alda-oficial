@@ -345,19 +345,47 @@ async function saveImageLocally(
     const mockUrl = `https://mock-firebase-storage.com/${userId}/${catalogId}/${fileName}`;
     console.log(`Usando URL mock: ${mockUrl}`);
     
-    // Tentativa adicional de salvar a imagem em local-1 para uso imediato
+    // Salvar imagem em todas as localizações importantes para garantir acesso
     try {
-      const compatDir = path.join(process.cwd(), 'uploads', 'images', '1', 'local-1');
-      await fs.promises.mkdir(compatDir, { recursive: true });
+      // 1. Local padrão baseado na URL mock
+      const mockDir = path.join(process.cwd(), 'uploads', 'images', userId, catalogId);
+      await fs.promises.mkdir(mockDir, { recursive: true });
       
-      // Nome de arquivo derivado da URL mock para manter consistência
-      const mockFileName = fileName.replace(/[^a-zA-Z0-9.-]/g, '_');
-      
-      // Salvar a imagem
-      const mockFilePath = path.join(compatDir, mockFileName);
+      const safeFileName = fileName.replace(/[^a-zA-Z0-9.-]/g, '_');
+      const mockFilePath = path.join(mockDir, safeFileName);
       await fs.promises.writeFile(mockFilePath, imageBuffer);
+      console.log(`Imagem salva de acordo com URL mock: ${mockFilePath}`);
       
-      console.log(`Imagem salva em fallback para URL mock: ${mockFilePath}`);
+      // 2. Compatibilidade para URLs que já existem no frontend (local-1 a local-5)
+      for (let i = 1; i <= 5; i++) {
+        const compatDir = path.join(process.cwd(), 'uploads', 'images', userId, `local-${i}`);
+        await fs.promises.mkdir(compatDir, { recursive: true });
+        
+        const compatFilePath = path.join(compatDir, safeFileName);
+        await fs.promises.writeFile(compatFilePath, imageBuffer);
+        console.log(`Imagem salva em diretório de compatibilidade: ${compatFilePath}`);
+      }
+      
+      // 3. Salvar também no diretório com ID de usuário 1 (para produtos existentes)
+      if (userId !== '1') {
+        const userId1Dir = path.join(process.cwd(), 'uploads', 'images', '1', catalogId);
+        await fs.promises.mkdir(userId1Dir, { recursive: true });
+        
+        const userId1FilePath = path.join(userId1Dir, safeFileName);
+        await fs.promises.writeFile(userId1FilePath, imageBuffer);
+        console.log(`Imagem salva em diretório com userId=1: ${userId1FilePath}`);
+        
+        // Salvar em local-1 a local-5 com userId=1 também
+        for (let i = 1; i <= 5; i++) {
+          const userId1CompatDir = path.join(process.cwd(), 'uploads', 'images', '1', `local-${i}`);
+          await fs.promises.mkdir(userId1CompatDir, { recursive: true });
+          
+          const userId1CompatFilePath = path.join(userId1CompatDir, safeFileName);
+          await fs.promises.writeFile(userId1CompatFilePath, imageBuffer);
+          console.log(`Imagem salva em diretório de compatibilidade userId=1: ${userId1CompatFilePath}`);
+        }
+      }
+      
     } catch (fallbackError) {
       console.error('Erro ao salvar imagem em fallback:', fallbackError);
     }
