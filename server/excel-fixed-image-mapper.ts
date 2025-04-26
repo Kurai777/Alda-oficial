@@ -393,10 +393,72 @@ export async function fixProductImages(
 }
 
 /**
+ * Remapear produtos de todos os catálogos de um usuário
+ * @param userId ID do usuário
+ * @returns Resultado da operação
+ */
+export async function remapAllCatalogs(userId: number | string): Promise<{ success: boolean; message: string; updated: number }> {
+  try {
+    console.log(`Remapeando catálogos para usuário ${userId}`);
+    
+    // Buscar todos os catálogos do usuário
+    const catalogs = await storage.getCatalogsByUserId(userId);
+    
+    if (!catalogs || catalogs.length === 0) {
+      return { 
+        success: false, 
+        message: "Nenhum catálogo encontrado para remapear", 
+        updated: 0 
+      };
+    }
+    
+    console.log(`Encontrados ${catalogs.length} catálogos para remapear`);
+    
+    let totalUpdated = 0;
+    
+    // Processar cada catálogo
+    for (const catalog of catalogs) {
+      if (catalog.filePath && fs.existsSync(catalog.filePath)) {
+        console.log(`Processando catálogo ${catalog.id}: ${catalog.fileName}`);
+        
+        // Verificar se é um arquivo Excel
+        if (catalog.filePath.toLowerCase().endsWith('.xlsx') || 
+            catalog.filePath.toLowerCase().endsWith('.xls')) {
+            
+          const result = await extractAndMapImages(catalog.filePath, catalog.id, userId);
+          
+          console.log(`Resultado do remapeamento para catálogo ${catalog.id}:`, result);
+          
+          if (result.success) {
+            totalUpdated += result.updated;
+          }
+        }
+      }
+    }
+    
+    return { 
+      success: true, 
+      message: `${totalUpdated} produtos foram atualizados em ${catalogs.length} catálogos`, 
+      updated: totalUpdated 
+    };
+    
+  } catch (error) {
+    console.error('Erro ao remapear catálogos:', error);
+    return { 
+      success: false, 
+      message: `Erro ao remapear catálogos: ${error.message}`, 
+      updated: 0 
+    };
+  }
+}
+
+/**
  * Exporta as funções principais do módulo
  */
 export default {
   mapImagesToProducts,
   updateProductImageUrls,
-  fixProductImages
+  fixProductImages,
+  extractAndMapImages,
+  remapAllCatalogs
 };

@@ -440,14 +440,29 @@ function normalizeExcelProducts(rawProducts: ExcelProduct[], userId?: string | n
   // Primeiro, verificar se a planilha tem campos específicos que indicam o formato POE/Sofá Home
   const possibleFields = keyList.map(key => key.toLowerCase());
   
+  // Verificar se temos cabeçalhos alfabéticos (A, B, C, ...) que são característicos do formato POE
+  const hasAlphabeticalHeaders = keyList.some(key => /^[A-Z]$/.test(key));
+  
+  // Verificar se o arquivo tem "POE" no nome
+  const isPoeFileName = (typeof rawProducts[0]?.fileName === 'string' && 
+                         rawProducts[0].fileName.toUpperCase().includes('POE'));
+  
+  // Detecção de formato POE - várias estratégias
   if (
-    (possibleFields.includes('forn.') || possibleFields.includes('forn') || possibleFields.includes('fornecedor')) &&
-    (possibleFields.includes('imagem') || possibleFields.includes('image') || possibleFields.includes('img')) &&
-    (possibleFields.includes('descrição') || possibleFields.includes('descricao') || possibleFields.includes('desc')) &&
-    (possibleFields.includes('cod.') || possibleFields.includes('cod') || possibleFields.includes('código'))
+    // Cabeçalhos alfabéticos ou nome do arquivo contém "POE"
+    hasAlphabeticalHeaders || isPoeFileName ||
+    // Ou combinação de campos específicos do formato POE/Sofá Home
+    ((possibleFields.includes('forn.') || possibleFields.includes('forn') || possibleFields.includes('fornecedor')) &&
+     (possibleFields.includes('imagem') || possibleFields.includes('image') || possibleFields.includes('img')) &&
+     (possibleFields.includes('descrição') || possibleFields.includes('descricao') || possibleFields.includes('desc')) &&
+     (possibleFields.includes('cod.') || possibleFields.includes('cod') || possibleFields.includes('código')))
   ) {
     isSofaHomeOrPOEFormat = true;
-    console.log("Detectado formato de catálogo Sofá Home/POE");
+    console.log("Detectado formato de catálogo POE", {
+      hasAlphabeticalHeaders,
+      isPoeFileName,
+      fields: possibleFields.slice(0, 10) // Mostrar apenas os primeiros 10 campos para depuração
+    });
     
     // Identificar as colunas específicas
     for (const key of keyList) {
@@ -1467,6 +1482,8 @@ function normalizeExcelProducts(rawProducts: ExcelProduct[], userId?: string | n
         // Garantir que o catalogId esteja associado ao produto
         catalogId: catalogId || null,
         userId: userId || null,
+        // Armazenar o número da linha do Excel para uso no mapeamento de imagens
+        excelRowNumber: rawProduct._excelRowNum,
         // Manter campos originais adicionais para debug
         originalData: { ...rawProduct }
       });
