@@ -441,6 +441,30 @@ export class MemStorage implements IStorage {
     console.log(`${deletedCount} produtos excluídos do catálogo ${catalogId}`);
     return deletedCount;
   }
+  
+  /**
+   * Obtém produtos filtrados por usuário e opcionalmente por catálogo
+   * @param userId ID do usuário
+   * @param catalogId ID do catálogo (opcional)
+   * @returns Lista de produtos
+   */
+  async getProducts(userId: number, catalogId?: number): Promise<Product[]> {
+    console.log(`Buscando produtos para usuário ${userId}${catalogId ? ` e catálogo ${catalogId}` : ''}`);
+    
+    let filteredProducts = Array.from(this.products.values()).filter(
+      (product) => product.userId === userId
+    );
+    
+    // Filtrar por catálogo se o catalogId for fornecido
+    if (catalogId !== undefined) {
+      filteredProducts = filteredProducts.filter(
+        (product) => product.catalogId === catalogId
+      );
+    }
+    
+    console.log(`Encontrados ${filteredProducts.length} produtos para o usuário ${userId}`);
+    return filteredProducts;
+  }
 
   // Catalog methods
   async getCatalog(id: number): Promise<Catalog | undefined> {
@@ -742,6 +766,14 @@ export class DatabaseStorage implements IStorage {
     }
   }
   
+  /**
+   * Implementação de getProducts para compatibilidade com o que é usado em routes.ts
+   * Esta função é um alias para getProductsByUserId mas com nome mais genérico
+   */
+  async getProducts(userId: number, catalogId?: number): Promise<Product[]> {
+    return this.getProductsByUserId(userId, catalogId);
+  }
+  
   async getProductsByImageUrl(imageUrl: string): Promise<Product[]> {
     try {
       console.log(`DB: Buscando produtos que usam a imagem: ${imageUrl}`);
@@ -889,6 +921,13 @@ export class DatabaseStorage implements IStorage {
     }
   }
   
+  /**
+   * Alias para getQuotesByUserId mantendo compatibilidade com a nomenclatura em routes.ts
+   */
+  async getQuotes(userId: number): Promise<Quote[]> {
+    return this.getQuotesByUserId(userId);
+  }
+  
   async createQuote(insertQuote: InsertQuote): Promise<Quote> {
     try {
       const [quote] = await db.insert(quotes).values(insertQuote).returning();
@@ -940,6 +979,13 @@ export class DatabaseStorage implements IStorage {
       console.error('Error getting moodboards by user ID:', error);
       return [];
     }
+  }
+  
+  /**
+   * Alias para getMoodboardsByUserId mantendo compatibilidade com a nomenclatura em routes.ts
+   */
+  async getMoodboards(userId: number): Promise<Moodboard[]> {
+    return this.getMoodboardsByUserId(userId);
   }
   
   async createMoodboard(insertMoodboard: InsertMoodboard): Promise<Moodboard> {
