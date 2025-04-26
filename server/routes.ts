@@ -48,6 +48,7 @@ import { determineProductCategory, extractMaterialsFromDescription } from "./uti
 // Importar os novos processadores e Firebase
 import { processExcelFile } from './excel-processor';
 import { saveCatalogToFirestore, saveProductsToFirestore, updateCatalogStatusInFirestore } from './firebase-admin';
+import { addFixImageRoutes } from './fix-product-images';
 
 // Verificar chave da API
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || 'sk-mock-key-for-development-only';

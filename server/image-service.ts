@@ -274,18 +274,27 @@ async function searchAllDirectoriesForImage(filename: string): Promise<string[]>
 }
 
 /**
- * Busca por uma imagem com nome similar
+ * Busca por uma imagem com nome similar ou extrai o índice da imagem
  * 
- * Esta função é útil quando o nome exato não é encontrado, mas pode haver
- * uma imagem relacionada com nome similar, como variações no formato ou versão
+ * Esta função é fundamental para garantir mapeamento 1:1 entre produtos e imagens,
+ * buscando pela imagem correspondente exata no sistema de arquivos.
  */
 async function findSimilarImage(filename: string): Promise<string | null> {
   try {
+    console.log(`Buscando imagem similar para: ${filename}`);
+    
+    // Extrair índice da imagem a partir do nome do arquivo
+    // Por exemplo, de "img_2_image370.jpg" extrair o "2"
+    const indexMatch = filename.match(/img_(\d+)_/);
+    const imageIndex = indexMatch ? parseInt(indexMatch[1]) : null;
+    console.log(`Índice extraído: ${imageIndex}`);
+    
     // Extrair parte do nome sem a extensão
     const baseNameMatch = filename.match(/^([^.]+)/);
     if (!baseNameMatch) return null;
     
     const baseName = baseNameMatch[1].toLowerCase();
+    console.log(`Nome base extraído: ${baseName}`);
     
     // Lista de diretórios onde procurar
     const searchDirs = [
@@ -296,15 +305,61 @@ async function findSimilarImage(filename: string): Promise<string | null> {
       BASE_UPLOADS_DIR
     ];
     
-    // Buscar em cada diretório
+    // Se temos um índice, primeiro tentar encontrar a imagem correspondente baseada no índice
+    if (imageIndex !== null) {
+      for (const dir of searchDirs) {
+        if (!await existsAsync(dir)) continue;
+        
+        const files = await readdirAsync(dir);
+        
+        // Buscar primeiro por uma correspondência exata baseada no índice
+        // Por exemplo: img_2.png para o índice 2
+        const exactMatchFile = files.find(file => 
+          file === `img_${imageIndex}.png` || 
+          file === `img_${imageIndex}.jpg` || 
+          file === `img_${imageIndex}.jpeg` || 
+          file === `image_${imageIndex}.png` || 
+          file === `image_${imageIndex}.jpg`
+        );
+        
+        if (exactMatchFile) {
+          console.log(`Correspondência exata encontrada por índice ${imageIndex}: ${exactMatchFile}`);
+          return path.join(dir, exactMatchFile);
+        }
+        
+        // Procurar por qualquer arquivo que contenha o índice
+        for (const file of files) {
+          const fileIndexMatch = file.match(/img_(\d+)/);
+          const fileIndex = fileIndexMatch ? parseInt(fileIndexMatch[1]) : null;
+          
+          if (fileIndex === imageIndex) {
+            console.log(`Correspondência por índice encontrada: ${file}`);
+            return path.join(dir, file);
+          }
+        }
+      }
+    }
+    
+    // Buscar em cada diretório por correspondência de nome
     for (const dir of searchDirs) {
       if (!await existsAsync(dir)) continue;
       
       const files = await readdirAsync(dir);
       
-      // Primeiro, tentar encontrar imagens que contenham o nome base
+      // Primeiro, tentar encontrar imagens que contenham o nome base exato
+      for (const file of files) {
+        if (file.toLowerCase() === baseName.toLowerCase() + '.png' || 
+            file.toLowerCase() === baseName.toLowerCase() + '.jpg' ||
+            file.toLowerCase() === baseName.toLowerCase() + '.jpeg') {
+          console.log(`Correspondência exata de nome encontrada: ${file}`);
+          return path.join(dir, file);
+        }
+      }
+      
+      // Depois, tentar encontrar imagens que contenham o nome base
       for (const file of files) {
         if (file.toLowerCase().includes(baseName)) {
+          console.log(`Correspondência por nome encontrada: ${file}`);
           return path.join(dir, file);
         }
       }
@@ -317,6 +372,7 @@ async function findSimilarImage(filename: string): Promise<string | null> {
           
           for (const file of files) {
             if (file.toLowerCase().includes(part)) {
+              console.log(`Correspondência parcial encontrada: ${file} (parte: ${part})`);
               return path.join(dir, file);
             }
           }
@@ -324,6 +380,7 @@ async function findSimilarImage(filename: string): Promise<string | null> {
       }
     }
     
+    console.log(`Nenhuma correspondência encontrada para ${filename}`);
     return null;
   } catch (error) {
     console.error(`Erro ao buscar imagem similar a ${filename}:`, error);
