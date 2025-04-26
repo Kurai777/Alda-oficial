@@ -11,31 +11,46 @@ import { Loader2, ImageOff, Image as ImageIcon } from 'lucide-react';
 
 interface ProductImageProps {
   productId: number;
+  imageUrl?: string; // URL da imagem se já disponível
   altText?: string;
   className?: string;
   onLoad?: () => void;
   onError?: () => void;
   width?: number | string;
   height?: number | string;
+  disableVerification?: boolean; // Opção para desativar verificação (usar URL diretamente)
 }
 
 export default function ImageWithVerification({
   productId,
+  imageUrl: initialImageUrl,
   altText = "Imagem do produto",
   className = "",
   onLoad,
   onError,
   width,
-  height
+  height,
+  disableVerification = false
 }: ProductImageProps) {
-  const [imageUrl, setImageUrl] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [imageUrl, setImageUrl] = useState<string | null>(initialImageUrl || null);
+  const [loading, setLoading] = useState(!initialImageUrl);
   const [error, setError] = useState(false);
   const [isShared, setIsShared] = useState(false);
   
   // Efeito para verificar a imagem ao montar o componente
   useEffect(() => {
-    if (!productId) return;
+    // Se uma URL foi fornecida e a verificação está desativada, usar diretamente
+    if ((initialImageUrl && disableVerification) || !productId) {
+      setLoading(false);
+      return;
+    }
+    
+    // Se temos uma nova URL inicial, use-a
+    if (initialImageUrl && initialImageUrl !== imageUrl) {
+      setImageUrl(initialImageUrl);
+      setLoading(false);
+      return;
+    }
     
     const controller = new AbortController();
     const signal = controller.signal;
@@ -44,6 +59,13 @@ export default function ImageWithVerification({
       try {
         setLoading(true);
         setError(false);
+        
+        // Se já temos uma URL e não é uma URL relativa, podemos usá-la diretamente
+        if (initialImageUrl && (initialImageUrl.startsWith('http') || initialImageUrl.startsWith('data:'))) {
+          setImageUrl(initialImageUrl);
+          setLoading(false);
+          return;
+        }
         
         // Verificar a disponibilidade da imagem
         const response = await fetch(`/api/verify-product-image/${productId}`, {
@@ -68,33 +90,47 @@ export default function ImageWithVerification({
               if (uniqueResponse.ok) {
                 const uniqueData = await uniqueResponse.json();
                 if (uniqueData.success) {
-                  // Usar a URL única criada
+                  // Usar a URL única criada com cache busting
                   setImageUrl(`/api/product-image/${productId}?t=${Date.now()}`);
                 } else {
                   // Mesmo com erro, usar a URL original
-                  setImageUrl(`/api/product-image/${productId}`);
+                  setImageUrl(initialImageUrl || `/api/product-image/${productId}`);
                 }
               } else {
-                setImageUrl(`/api/product-image/${productId}`);
+                setImageUrl(initialImageUrl || `/api/product-image/${productId}`);
               }
             } else {
               // Imagem não compartilhada, usar diretamente
-              setImageUrl(`/api/product-image/${productId}`);
+              setImageUrl(initialImageUrl || `/api/product-image/${productId}`);
             }
           } else {
-            // Imagem não disponível
+            // Imagem não disponível, verificar se temos uma URL alternativa
+            if (initialImageUrl) {
+              setImageUrl(initialImageUrl);
+            } else {
+              setImageUrl(null);
+              setError(true);
+            }
+          }
+        } else {
+          // Erro na requisição, verificar se temos uma URL alternativa
+          if (initialImageUrl) {
+            setImageUrl(initialImageUrl);
+          } else {
             setImageUrl(null);
             setError(true);
           }
-        } else {
-          // Erro na requisição
-          setImageUrl(null);
-          setError(true);
         }
       } catch (err) {
         console.error(`Erro ao verificar imagem para produto ${productId}:`, err);
-        setImageUrl(null);
-        setError(true);
+        
+        // Em caso de erro, usar a URL inicial se disponível
+        if (initialImageUrl) {
+          setImageUrl(initialImageUrl);
+        } else {
+          setImageUrl(null);
+          setError(true);
+        }
       } finally {
         setLoading(false);
       }
@@ -105,7 +141,7 @@ export default function ImageWithVerification({
     return () => {
       controller.abort();
     };
-  }, [productId]);
+  }, [productId, initialImageUrl, disableVerification]);
   
   // Quando a imagem é carregada com sucesso
   const handleImageLoad = () => {
