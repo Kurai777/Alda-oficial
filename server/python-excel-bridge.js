@@ -1,225 +1,172 @@
 /**
- * Ponte para scripts Python de processamento de Excel
+ * Ponte para Python para extração de imagens do Excel
  * 
- * Este módulo serve como interface para a execução de scripts Python relacionados
- * ao processamento de arquivos Excel, especialmente para a extração de imagens.
+ * Este é um módulo de fallback para extrair imagens do Excel
+ * quando os métodos JavaScript falham. Ele cria um arquivo temporário
+ * de Python e o executa para extrair as imagens.
  */
 
-import { spawn } from 'child_process';
-import fs from 'fs';
-import path from 'path';
-import { promisify } from 'util';
+const fs = require('fs');
+const path = require('path');
+const { execSync } = require('child_process');
 
-const readFile = promisify(fs.readFile);
-const writeFile = promisify(fs.writeFile);
-const mkdir = promisify(fs.mkdir);
-
-/**
- * Executa um script Python com argumentos específicos
- * @param {string} scriptPath Caminho para o script Python
- * @param {string[]} args Argumentos para o script
- * @returns {Promise<object>} Resultado em formato JSON
- */
-export async function runPythonScript(scriptPath, args) {
-  return new Promise((resolve, reject) => {
-    // Verificar se o script existe
-    if (!fs.existsSync(scriptPath)) {
-      return reject(new Error(`Script Python não encontrado: ${scriptPath}`));
+async function extractExcelImages(excelPath, outputDir) {
+  try {
+    console.log(`Tentando extrair imagens de ${excelPath} para ${outputDir} com Python`);
+    
+    // Verificar se o diretório de saída existe
+    if (!fs.existsSync(outputDir)) {
+      fs.mkdirSync(outputDir, { recursive: true });
     }
     
-    console.log(`Executando script Python: ${scriptPath}`);
-    console.log(`Argumentos: ${args.join(' ')}`);
+    // Criar arquivo Python temporário para extração
+    const tempPyFile = path.join(process.cwd(), 'temp_excel_extractor.py');
     
-    // Executar o script Python
-    const pythonProcess = spawn('python3', [scriptPath, ...args]);
-    
-    let stdoutData = '';
-    let stderrData = '';
-    
-    // Capturar saída padrão
-    pythonProcess.stdout.on('data', (data) => {
-      stdoutData += data.toString();
-    });
-    
-    // Capturar erros
-    pythonProcess.stderr.on('data', (data) => {
-      stderrData += data.toString();
-      console.log(`[Python Log] ${data.toString()}`);
-    });
-    
-    // Quando o processo terminar
-    pythonProcess.on('close', (code) => {
-      if (code !== 0) {
-        console.error(`Python script exited with code ${code}`);
-        console.error(`Error output: ${stderrData}`);
+    // Código Python para extrair imagens
+    const pythonCode = `
+import os
+import sys
+import zipfile
+import tempfile
+from pathlib import Path
+
+def extract_excel_images(excel_path, output_dir):
+    """Extrai todas as imagens de um arquivo Excel (que é um arquivo ZIP)"""
+    try:
+        # Verifica se o arquivo existe
+        if not os.path.exists(excel_path):
+            print(f"Erro: Arquivo {excel_path} não encontrado", file=sys.stderr)
+            return False, 0
+            
+        # Extrai todas as imagens da pasta xl/media
+        count = 0
+        with zipfile.ZipFile(excel_path, 'r') as zip_ref:
+            # Lista todos os arquivos no ZIP
+            files = zip_ref.namelist()
+            
+            # Filtra apenas arquivos de imagem na pasta xl/media
+            media_files = [f for f in files if f.startswith('xl/media/') and 
+                          any(f.lower().endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.gif', '.emf'])]
+            
+            # Extrai cada arquivo
+            for file in media_files:
+                # Extrai apenas o nome do arquivo sem o caminho
+                filename = os.path.basename(file)
+                output_path = os.path.join(output_dir, filename)
+                
+                # Extrai o arquivo
+                with open(output_path, 'wb') as f:
+                    f.write(zip_ref.read(file))
+                count += 1
+                
+        # Se não encontrou imagens na pasta xl/media, tenta encontrar em outros lugares
+        if count == 0:
+            # Cria um diretório temporário para extrair todo o conteúdo
+            with tempfile.TemporaryDirectory() as temp_dir:
+                zip_ref.extractall(temp_dir)
+                
+                # Procura por imagens em qualquer lugar
+                for root, _, files in os.walk(temp_dir):
+                    for file in files:
+                        if any(file.lower().endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.gif', '.emf']):
+                            src_path = os.path.join(root, file)
+                            dst_path = os.path.join(output_dir, file)
+                            
+                            # Copia o arquivo para o diretório de saída
+                            with open(src_path, 'rb') as src, open(dst_path, 'wb') as dst:
+                                dst.write(src.read())
+                            count += 1
+                
+        print(f"Extraídas {count} imagens com sucesso!")
+        return True, count
         
-        // Tentar parsear qualquer saída JSON mesmo com erro
+    except Exception as e:
+        print(f"Erro ao extrair imagens: {str(e)}", file=sys.stderr)
+        return False, 0
+
+if __name__ == "__main__":
+    # Argumentos da linha de comando
+    if len(sys.argv) != 3:
+        print("Uso: python extract_excel_images.py <caminho_excel> <diretorio_saida>")
+        sys.exit(1)
+        
+    excel_path = sys.argv[1]
+    output_dir = sys.argv[2]
+    
+    # Extrai imagens
+    success, count = extract_excel_images(excel_path, output_dir)
+    
+    # Saída para o processo Node.js
+    print(f"RESULT:{{\"success\":{str(success).lower()},\"count\":{count}}}")
+    
+    # Retorna código de saída
+    sys.exit(0 if success else 1)
+`;
+    
+    // Escrever o código Python em um arquivo temporário
+    fs.writeFileSync(tempPyFile, pythonCode);
+    
+    try {
+      // Executar o script Python
+      const result = execSync(`python3 ${tempPyFile} "${excelPath}" "${outputDir}"`, {
+        encoding: 'utf8',
+        stdio: 'pipe'
+      });
+      
+      // Remover o arquivo Python temporário
+      try {
+        fs.unlinkSync(tempPyFile);
+      } catch (unlinkError) {
+        console.warn(`Não foi possível remover o arquivo temporário: ${unlinkError.message}`);
+      }
+      
+      // Processar resultado
+      const resultMatch = result.match(/RESULT:(\{.*\})/);
+      if (resultMatch && resultMatch[1]) {
         try {
-          const result = JSON.parse(stdoutData);
-          return resolve(result);
-        } catch (parseError) {
-          return reject(new Error(`Falha no script Python (código ${code}): ${stderrData}`));
+          const resultJson = JSON.parse(resultMatch[1]);
+          return {
+            success: resultJson.success,
+            count: resultJson.count,
+            imageCount: resultJson.count
+          };
+        } catch (jsonError) {
+          console.error('Erro ao processar resultado JSON do Python:', jsonError);
         }
       }
       
-      try {
-        // Parsear resultado JSON
-        const result = JSON.parse(stdoutData);
-        resolve(result);
-      } catch (error) {
-        reject(new Error(`Erro ao parsear resultado do script Python: ${error.message}. Saída: ${stdoutData.substring(0, 200)}...`));
-      }
-    });
-    
-    // Em caso de erro no processo
-    pythonProcess.on('error', (error) => {
-      reject(new Error(`Erro ao executar script Python: ${error.message}`));
-    });
-  });
-}
-
-/**
- * Extrai imagens de um arquivo Excel usando script Python
- * @param {string} excelPath Caminho para o arquivo Excel
- * @returns {Promise<object>} Resultado da extração
- */
-export async function extractExcelImagesWithPython(excelPath) {
-  try {
-    // Criar diretório para saída de imagens
-    const outputDir = path.join(process.cwd(), 'uploads', 'excel_images', `excel_${Date.now()}`);
-    await mkdir(outputDir, { recursive: true });
-    
-    // Caminho para o script Python
-    const scriptPath = path.join(process.cwd(), 'server', 'python-scripts', 'advanced_excel_extractor.py');
-    
-    // Executar script
-    const result = await runPythonScript(scriptPath, [excelPath, outputDir]);
-    
-    // Adicionar caminho de saída ao resultado
-    result.outputDir = outputDir;
-    
-    return result;
-  } catch (error) {
-    console.error(`Erro ao extrair imagens com Python: ${error.message}`);
-    throw error;
-  }
-}
-
-/**
- * Associa imagens extraídas aos produtos no Excel
- * @param {string} excelPath Caminho para o arquivo Excel
- * @param {object} extractionResult Resultado da extração de imagens
- * @returns {Promise<object>} Resultado da associação
- */
-export async function associateImagesWithProducts(excelPath, extractionResult) {
-  try {
-    // Verificar se temos imagens para associar
-    if (!extractionResult.images || extractionResult.images.length === 0) {
-      return { associations: [] };
-    }
-    
-    // Criar um arquivo temporário para armazenar o resultado da extração
-    const tempDir = path.join(process.cwd(), 'uploads', 'temp');
-    await mkdir(tempDir, { recursive: true });
-    
-    const tempFile = path.join(tempDir, `extraction_${Date.now()}.json`);
-    await writeFile(tempFile, JSON.stringify(extractionResult));
-    
-    // Caminho para o script Python
-    const scriptPath = path.join(process.cwd(), 'server', 'python-scripts', 'advanced_excel_extractor.py');
-    
-    // Executar script com parâmetros adicionais para modo de associação
-    const result = await runPythonScript(scriptPath, [
-      excelPath, 
-      extractionResult.outputDir || path.join(process.cwd(), 'uploads', 'excel_images'), 
-      '--associate', 
-      tempFile
-    ]);
-    
-    return result;
-  } catch (error) {
-    console.error(`Erro ao associar imagens: ${error.message}`);
-    return { associations: [], error: error.message };
-  }
-}
-
-/**
- * Extrai imagens com Python e as associa aos produtos em uma única função
- * @param {string} excelPath Caminho para o arquivo Excel  
- * @param {Array} products Lista de produtos para associar imagens
- * @param {string|number} userId ID do usuário para associar ao upload
- * @param {string|number} catalogId ID do catálogo para associar ao upload
- * @returns {Promise<Array>} Lista de produtos atualizada com imagens
- */
-export async function extractImagesWithPythonBridge(excelPath, products, userId, catalogId) {
-  try {
-    // Primeiro extrair as imagens
-    const extractionResult = await extractExcelImagesWithPython(excelPath);
-    
-    if (!extractionResult || !extractionResult.images || extractionResult.images.length === 0) {
-      console.log('Nenhuma imagem encontrada pelo Python');
-      return products;
-    }
-    
-    console.log(`Python extraiu ${extractionResult.images.length} imagens do Excel`);
-    
-    // Associar imagens a produtos
-    const associationResult = await associateImagesWithProducts(excelPath, extractionResult);
-    
-    if (!associationResult || !associationResult.associations || associationResult.associations.length === 0) {
-      console.log('Nenhuma imagem associada a produtos pelo Python');
-      return products;
-    }
-    
-    console.log(`Python associou ${associationResult.associations.length} imagens a produtos`);
-    
-    // Criar uma cópia dos produtos para atualizar
-    const updatedProducts = [...products];
-    
-    // Para cada associação, atualizar o produto correspondente
-    for (const assoc of associationResult.associations) {
-      if (assoc.codigo && assoc.confidence > 0.3) {
-        // Buscar o produto pelo código
-        const productIndex = updatedProducts.findIndex(p => 
-          p.code === assoc.codigo || 
-          p.codigo === assoc.codigo
+      // Se chegou aqui, contar manualmente os arquivos extraídos
+      if (fs.existsSync(outputDir)) {
+        const files = fs.readdirSync(outputDir).filter(file => 
+          /\.(png|jpg|jpeg|gif|emf)$/i.test(file)
         );
         
-        if (productIndex !== -1) {
-          // Caminho da imagem
-          const imagePath = path.join(extractionResult.outputDir, assoc.image);
-          
-          // Se pudéssemos fazer upload no Firebase, usaríamos a URL do Firebase
-          // Por enquanto, usamos diretamente o caminho da imagem
-          updatedProducts[productIndex].imageUrl = `file://${imagePath}`;
-          updatedProducts[productIndex].imageSource = 'python';
-          updatedProducts[productIndex].imageConfidence = assoc.confidence;
-        }
+        return {
+          success: files.length > 0,
+          count: files.length,
+          imageCount: files.length
+        };
       }
+      
+      return { success: false, count: 0, imageCount: 0 };
+    } catch (execError) {
+      console.error('Erro ao executar script Python:', execError);
+      
+      // Remover o arquivo Python temporário em caso de erro
+      try {
+        fs.unlinkSync(tempPyFile);
+      } catch (unlinkError) {
+        console.warn(`Não foi possível remover o arquivo temporário: ${unlinkError.message}`);
+      }
+      
+      return { success: false, count: 0, imageCount: 0 };
     }
-    
-    return updatedProducts;
   } catch (error) {
-    console.error('Erro na extração de imagens com Python:', error);
-    return products;
+    console.error('Erro na ponte Python:', error);
+    return { success: false, count: 0, imageCount: 0 };
   }
 }
 
-// Função para verificar se um Excel contém imagens usando Python
-export async function hasExcelImagesWithPython(excelPath) {
-  try {
-    const result = await extractExcelImagesWithPython(excelPath);
-    return result && result.images && result.images.length > 0;
-  } catch (error) {
-    console.error('Erro ao verificar imagens com Python:', error);
-    return false;
-  }
-}
-
-export default {
-  runPythonScript,
-  extractExcelImagesWithPython,
-  associateImagesWithProducts,
-  extractImagesWithPythonBridge,
-  hasExcelImagesWithPython
+module.exports = {
+  extractExcelImages
 };
