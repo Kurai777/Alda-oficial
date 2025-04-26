@@ -124,6 +124,8 @@ export async function processExcelWithFixedColumns(
         descricao: product.descricao || '',
         preco: product.preco || 0,
         imageUrl: product.imageUrl || undefined,
+        // Capturar número da linha se disponível
+        excelRowNumber: product.row || product.excelRowNumber || undefined,
         userId,
         catalogId,
         isEdited: false,
@@ -157,6 +159,8 @@ export async function processExcelWithFixedColumns(
       ...product,
       userId,
       catalogId,
+      // Preservar o número da linha que vem do script Python (campo 'row')
+      excelRowNumber: product.row || undefined, 
       isEdited: false,
       createdAt: new Date(),
       updatedAt: new Date()
