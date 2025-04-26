@@ -148,93 +148,85 @@ function detectColumnType(columnValues) {
  * @returns {Object} Mapeamento de colunas
  */
 function autoDetectColumns(rows) {
+  // MAPEAMENTO FORÇADO DE COLUNAS CORRETAS PARA GARANTIR CONFIABILIDADE
+  console.log('Usando mapeamento explícito para garantir extração de dados correta');
+  
+  // O mapeamento correto para planilhas comuns é:
+  // - Nome do Produto: Coluna G (Descrição)
+  // - Código do Produto: Coluna H 
+  // - Preço: Coluna M (Valor Total)
+  // - Localização/Categoria: Colunas B ou C
+  const forcedColumnMap = {
+    'G': 'name',      // Descrição do produto SEMPRE vem da coluna G
+    'H': 'code',      // Código do produto SEMPRE vem da coluna H
+    'M': 'price',     // Preço SEMPRE vem da coluna M (Valor Total)
+    'B': 'location',  // Localização geralmente vem da coluna B
+    'C': 'supplier'   // Fornecedor geralmente vem da coluna C
+  };
+  
+  // Verificar se as colunas existem na planilha
   const columnMap = {};
-  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
   
-  console.log(`Analisando ${rows.length} linhas para detecção automática de colunas`);
+  console.log(`Analisando ${rows.length} linhas para verificar quais colunas existem`);
   
-  // Para cada coluna (A-Z)
-  for (let i = 0; i < alphabet.length; i++) {
-    const colLetter = alphabet[i];
+  // Verificar existência de cada coluna forçada
+  for (const [col, type] of Object.entries(forcedColumnMap)) {
+    // Verificar se a coluna tem valores
+    const hasValues = rows.some(row => row[col] && row[col].toString().trim() !== '');
     
-    // Coletar valores da coluna
-    const columnValues = [];
-    for (const row of rows) {
-      if (row[colLetter]) {
-        columnValues.push(row[colLetter]);
-      }
+    if (hasValues) {
+      columnMap[col] = type;
+      console.log(`Coluna ${col} definida como "${type}" (mapeamento explícito)`);
+    } else {
+      console.log(`Coluna ${col} não encontrada na planilha`);
     }
-    
-    // Se a coluna tiver valores, detectar seu tipo
-    if (columnValues.length > 0) {
-      const columnType = detectColumnType(columnValues);
-      
-      // Atribuir o tipo ao mapeamento
-      if (columnType !== 'unknown' && columnType !== 'empty') {
-        // Verificar se já temos esse tipo mapeado
-        const existingCol = Object.entries(columnMap).find(([_, type]) => type === columnType);
-        
-        if (!existingCol) {
-          columnMap[colLetter] = columnType;
-          console.log(`Coluna ${colLetter} detectada como "${columnType}"`);
-        } else if (columnValues.length > rows.length * 0.7) {
-          // Se essa coluna tiver mais valores que a anterior, substituir
-          const [existingColLetter] = existingCol;
-          delete columnMap[existingColLetter];
-          columnMap[colLetter] = columnType;
-          console.log(`Coluna ${colLetter} substitui ${existingColLetter} como "${columnType}"`);
-        }
+  }
+  
+  // Verificar se temos as colunas essenciais
+  const hasName = 'G' in columnMap;
+  const hasCode = 'H' in columnMap;
+  const hasPrice = 'M' in columnMap;
+  
+  // Fallbacks para casos onde as colunas padrão não existem
+  if (!hasName) {
+    // Tentar encontrar uma coluna com descrições longas (mínimo 15 caracteres)
+    for (const col of ['F', 'I', 'J', 'K']) {
+      if (!Object.keys(columnMap).includes(col) && 
+          rows.some(r => r[col] && r[col].toString().length > 15)) {
+        columnMap[col] = 'name';
+        console.log(`Coluna ${col} definida como "name" (fallback)`);
+        break;
       }
     }
   }
   
-  // Verificar se todas as colunas necessárias foram detectadas
-  const hasName = Object.values(columnMap).includes('name');
-  const hasCode = Object.values(columnMap).includes('code');
-  const hasPrice = Object.values(columnMap).includes('price');
-  
-  // Se não detectamos tudo
-  if (!hasName || !hasCode || !hasPrice) {
-    // Verificar se estamos no padrão do exemplo fornecido
-    // Coluna G geralmente tem descrições de produto
-    if (!hasName && rows[0].G) {
-      // Encontrar a primeira coluna que parece conter descrições
-      for (let i = 0; i < alphabet.length; i++) {
-        const col = alphabet[i];
-        if (!columnMap[col] && rows.some(r => r[col] && r[col].toString().length > 20)) {
-          columnMap[col] = 'name';
-          console.log(`Coluna ${col} definida como "name" (fallback)`);
-          break;
-        }
-      }
-    }
-    
-    // Coluna F ou H geralmente tem códigos
-    if (!hasCode && (rows[0].F || rows[0].H)) {
-      if (rows[0].H && !columnMap.H) {
-        columnMap.H = 'code';
-        console.log('Coluna H definida como "code" (fallback)');
-      } else if (rows[0].F && !columnMap.F) {
-        columnMap.F = 'code';
-        console.log('Coluna F definida como "code" (fallback)');
-      }
-    }
-    
-    // Coluna J, L ou M geralmente tem preços
-    if (!hasPrice) {
-      if (rows[0].L && !columnMap.L) {
-        columnMap.L = 'price';
-        console.log('Coluna L definida como "price" (fallback)');
-      } else if (rows[0].M && !columnMap.M) {
-        columnMap.M = 'price';
-        console.log('Coluna M definida como "price" (fallback)');
-      } else if (rows[0].J && !columnMap.J) {
-        columnMap.J = 'price';
-        console.log('Coluna J definida como "price" (fallback)');
+  if (!hasCode) {
+    // Tentar encontrar uma coluna com códigos alfanuméricos curtos
+    for (const col of ['F', 'I', 'J']) {
+      if (!Object.keys(columnMap).includes(col) && 
+          rows.some(r => r[col] && /^[A-Z0-9-]{2,15}$/i.test(r[col].toString()))) {
+        columnMap[col] = 'code';
+        console.log(`Coluna ${col} definida como "code" (fallback)`);
+        break;
       }
     }
   }
   
+  if (!hasPrice) {
+    // Tentar encontrar uma coluna com valores monetários
+    for (const col of ['L', 'N', 'O', 'P']) {
+      if (!Object.keys(columnMap).includes(col) && 
+          rows.some(r => r[col] && (r[col].toString().includes('R$') || 
+                                    /^\d+([.,]\d{1,2})?$/.test(r[col].toString())))) {
+        columnMap[col] = 'price';
+        console.log(`Coluna ${col} definida como "price" (fallback)`);
+        break;
+      }
+    }
+  }
+  
+  // Registrar mapeamento final para depuração
+  console.log('MAPEAMENTO FINAL DE COLUNAS:', columnMap);
   return columnMap;
 }
 
@@ -304,7 +296,9 @@ export async function processUniversalCatalog(filePath, userId, catalogId) {
     for (let i = headerRow + 1; i < rawData.length; i++) {
       const row = rawData[i];
       
-      // Verificar se há dados úteis na linha
+      // ======= VERIFICAÇÕES PARA IGNORAR LINHAS QUE NÃO SÃO PRODUTOS =======
+      
+      // 1. Verificar se há dados úteis na linha
       let hasData = false;
       let hasSignificantData = false;
       
@@ -320,9 +314,12 @@ export async function processUniversalCatalog(filePath, userId, catalogId) {
       }
       
       // Pular linhas vazias ou sem dados significativos
-      if (!hasData || !hasSignificantData) continue;
+      if (!hasData || !hasSignificantData) {
+        console.log(`Ignorando linha ${i+1} - sem dados importantes`);
+        continue;
+      }
       
-      // Verificar por linhas de cabeçalho ou subtítulos
+      // 2. Verificar por linhas de cabeçalho ou subtítulos
       const isHeaderLike = Object.values(row).some(val => {
         if (!val) return false;
         const valStr = val.toString().toLowerCase().trim();
@@ -331,6 +328,35 @@ export async function processUniversalCatalog(filePath, userId, catalogId) {
       
       if (isHeaderLike) {
         console.log(`Linha ${i+1} parece ser um sub-cabeçalho, ignorando`);
+        continue;
+      }
+      
+      // 3. Verificar se a linha contém faixas de preço (20-40k, 50k, etc)
+      const hasPriceRange = Object.values(row).some(val => {
+        if (!val) return false;
+        const valStr = val.toString().toLowerCase().trim();
+        return /^\d+\-\d+k$/i.test(valStr) || /^\d+k$/i.test(valStr);
+      });
+      
+      if (hasPriceRange) {
+        console.log(`Linha ${i+1} contém faixa de preço, ignorando`);
+        continue;
+      }
+      
+      // 4. Verificar se a linha contém observações ou totais
+      const isObservationRow = Object.values(row).some(val => {
+        if (!val) return false;
+        const valStr = val.toString().toLowerCase().trim();
+        return valStr === 'total' || 
+               valStr === 'obs' || 
+               valStr === 'observação' || 
+               valStr === 'observações' ||
+               valStr.includes('piso') ||
+               valStr.includes('andar');
+      });
+      
+      if (isObservationRow) {
+        console.log(`Linha ${i+1} é uma observação ou total, ignorando`);
         continue;
       }
       
@@ -408,11 +434,27 @@ export async function processUniversalCatalog(filePath, userId, catalogId) {
         }
       }
       
-      // Se não tem preço pelo mapeamento, tentar colunas comuns
+      // SEMPRE priorizar a coluna M (Valor Total) para preço, 
+      // mesmo que o mapeamento automático tenha detectado outra coluna
+      if (row.M) {
+        product.price = extractUniversalPrice(row.M);
+        console.log(`Preço extraído prioritariamente da coluna M (Valor Total): ${row.M} -> ${product.price} centavos`);
+      }
+      
+      // Fallbacks apenas se a coluna M não existir ou o preço for zero
       if (product.price === 0) {
-        if (row.L) product.price = extractUniversalPrice(row.L);
-        if (product.price === 0 && row.M) product.price = extractUniversalPrice(row.M);
-        if (product.price === 0 && row.J) product.price = extractUniversalPrice(row.J);
+        if (row.L) {
+          product.price = extractUniversalPrice(row.L);
+          console.log(`Preço extraído da coluna L (fallback): ${row.L} -> ${product.price} centavos`);
+        }
+        if (product.price === 0 && row.N) {
+          product.price = extractUniversalPrice(row.N);
+          console.log(`Preço extraído da coluna N (fallback): ${row.N} -> ${product.price} centavos`);
+        }
+        if (product.price === 0 && row.J) {
+          product.price = extractUniversalPrice(row.J);
+          console.log(`Preço extraído da coluna J (fallback): ${row.J} -> ${product.price} centavos`);
+        }
       }
       
       // Definir localização
@@ -448,30 +490,64 @@ export async function processUniversalCatalog(filePath, userId, catalogId) {
         }
       }
       
-      // Determinar categoria
-      // Lógica baseada no nome, descrição ou outros campos
+      // Determinar categoria baseado em múltiplas fontes (nome, localização, fornecedor)
+      product.category = 'Móveis'; // Categoria padrão
+      
+      // 1. Primeiro tentar inferir do nome do produto
       if (product.name) {
         const itemName = product.name.toLowerCase();
         
-        if (itemName.includes('sofá') || 
-            itemName.includes('sofa') || 
-            itemName.includes('poltrona')) {
+        if (itemName.includes('sofá') || itemName.includes('sofa') || itemName.includes('poltrona')) {
           product.category = 'Sofás';
         } else if (itemName.includes('mesa')) {
           product.category = 'Mesas';
         } else if (itemName.includes('cadeira')) {
           product.category = 'Cadeiras';
-        } else if (itemName.includes('estante') || 
-                  itemName.includes('prateleira')) {
+        } else if (itemName.includes('estante') || itemName.includes('prateleira')) {
           product.category = 'Estantes';
-        } else if (itemName.includes('cama') || 
-                  itemName.includes('colchão')) {
+        } else if (itemName.includes('cama') || itemName.includes('colchão')) {
           product.category = 'Camas';
-        } else {
-          product.category = 'Móveis';
+        } else if (itemName.includes('luminária') || itemName.includes('lustre') || itemName.includes('pendente')) {
+          product.category = 'Iluminação';
+        } else if (itemName.includes('tapete') || itemName.includes('carpete')) {
+          product.category = 'Tapetes';
+        } else if (itemName.includes('armário') || itemName.includes('guarda-roupa')) {
+          product.category = 'Armários';
         }
-      } else {
-        product.category = 'Móveis';
+      }
+      
+      // 2. Tentar inferir do fornecedor
+      if (product.manufacturer) {
+        const manufacturer = product.manufacturer.toLowerCase();
+        
+        if (manufacturer.includes('ilum') || manufacturer.includes('lumin')) {
+          product.category = 'Iluminação';
+        } else if (manufacturer.includes('sofa') || manufacturer.includes('móveis estof')) {
+          product.category = 'Sofás';
+        } else if (manufacturer.includes('madeira') || manufacturer.includes('marcen')) {
+          product.category = 'Móveis de Madeira';
+        } else if (manufacturer.includes('vidro') || manufacturer.includes('cristal')) {
+          product.category = 'Vidros e Cristais';
+        }
+      }
+      
+      // 3. Tentar inferir da localização
+      if (product.location) {
+        const location = product.location.toLowerCase();
+        
+        if (location.includes('cozinha')) {
+          product.category = 'Cozinha';
+        } else if (location.includes('quarto') || location.includes('dormitório')) {
+          product.category = 'Quarto';
+        } else if (location.includes('sala')) {
+          product.category = 'Sala';
+        } else if (location.includes('banho') || location.includes('banheiro')) {
+          product.category = 'Banheiro';
+        } else if (location.includes('escritório')) {
+          product.category = 'Escritório';
+        } else if (location.includes('área externa') || location.includes('varanda') || location.includes('jardim')) {
+          product.category = 'Área Externa';
+        }
       }
       
       // Adicionar produto à lista se tiver dados suficientes
@@ -481,12 +557,18 @@ export async function processUniversalCatalog(filePath, userId, catalogId) {
         product.code && 
         product.code.trim() !== "";
       
-      // Ignorar produtos que são claramente observações
+      // Ignorar produtos que são claramente observações ou valores que não são produtos
       const isObservation = !product.code || 
                            product.code === "LOCAL" || 
                            product.code === "NOME" || 
+                           product.code.toLowerCase().includes("total") ||
+                           product.code.includes('k') || // Ignorar faixas de preço como "20-40k"
                            product.name.toLowerCase().includes("total") ||
-                           product.name.toLowerCase().includes("obs");
+                           product.name.toLowerCase().includes("obs") ||
+                           product.name.toLowerCase().includes("piso") ||
+                           product.name.toLowerCase().includes("andar") ||
+                           /^\d+\-\d+k$/i.test(product.name) || // Ignorar faixas de preço como "20-40k"
+                           /^\d+k$/i.test(product.name);  // Ignorar valores como "50k"
       
       if (isValid && !isObservation) {
         console.log(`Criando produto: ${product.name}, código: ${product.code}, preço: ${product.price}`);
