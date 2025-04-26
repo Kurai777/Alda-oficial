@@ -253,18 +253,54 @@ export async function updateProductImageUrls(
 ): Promise<number> {
   let updatedCount = 0;
   
+  // Criar diretório de destino para imagens
+  const targetDir = path.join(process.cwd(), 'uploads', 'unique-product-images', `catalog-${catalogId}`);
+  
+  try {
+    // Criar diretório recursivamente
+    if (!fs.existsSync(targetDir)) {
+      fs.mkdirSync(targetDir, { recursive: true });
+      console.log(`Criado diretório para imagens únicas: ${targetDir}`);
+    }
+  } catch (dirError) {
+    console.error(`Erro ao criar diretório ${targetDir}:`, dirError);
+    // Continuar mesmo com erro, usando o diretório base
+  }
+  
   for (const mapping of imageMappings) {
     try {
+      // Verificar se o arquivo original existe
+      if (!fs.existsSync(mapping.imagePath)) {
+        console.error(`Arquivo de imagem não encontrado: ${mapping.imagePath}`);
+        continue;
+      }
+      
+      // Criar nome de arquivo único com ID do produto
+      const originalExt = path.extname(mapping.imagePath);
+      const uniqueImageName = `product-${mapping.productId}-${mapping.productCode}${originalExt}`;
+      const targetPath = path.join(targetDir, uniqueImageName);
+      
+      try {
+        // Copiar a imagem para o diretório de destino
+        fs.copyFileSync(mapping.imagePath, targetPath);
+        console.log(`Imagem copiada para ${targetPath}`);
+      } catch (copyError) {
+        console.error(`Erro ao copiar imagem: ${copyError}`);
+        continue;
+      }
+      
       // Construir URL relativa para a imagem
-      const imageName = path.basename(mapping.imagePath);
-      const imageUrl = `/uploads/users/${userId}/catalogs/${catalogId}/images/${imageName}`;
+      const imageUrl = `/uploads/unique-product-images/catalog-${catalogId}/${uniqueImageName}`;
+      
+      // Adicionar um parâmetro de cache-busting para forçar o recarregamento
+      const urlWithCacheBusting = `${imageUrl}?t=${Date.now()}`;
       
       // Atualizar URL da imagem do produto
-      const updatedProduct = await storage.updateProductImageUrl(mapping.productId, imageUrl);
+      const updatedProduct = await storage.updateProductImageUrl(mapping.productId, urlWithCacheBusting);
       
       if (updatedProduct) {
         updatedCount++;
-        console.log(`Atualizada URL de imagem para produto ${mapping.productId}: ${imageUrl}`);
+        console.log(`Atualizada URL de imagem para produto ${mapping.productId}: ${urlWithCacheBusting}`);
       } else {
         console.error(`Falha ao atualizar URL de imagem para produto ${mapping.productId}`);
       }
@@ -287,15 +323,40 @@ export async function fixProductImages(
   try {
     console.log(`Iniciando correção de imagens para catálogo ${catalogId}`);
     
-    // Diretórios de imagens para o catálogo
-    const extractedImagesDir = path.join('uploads', 'users', String(userId), 'catalogs', String(catalogId), 'extracted_images');
+    // Definir possíveis diretórios de imagens para o catálogo
+    const possibleDirs = [
+      // Caminho específico por usuário/catálogo (estrutura ideal)
+      path.join('uploads', 'users', String(userId), 'catalogs', String(catalogId), 'extracted_images'),
+      // Diretório geral de imagens extraídas (usado na maioria dos casos)
+      path.join('uploads', 'extracted_images'),
+      // Diretório específico do catálogo (alternativa)
+      path.join('uploads', 'extracted_images', `catalog-${catalogId}`),
+      // Diretório temporário de imagens Excel (usado ao processar)
+      path.join('uploads', 'temp-excel-images')
+    ];
     
-    // Verificar se o diretório existe
-    if (!fs.existsSync(extractedImagesDir)) {
+    // Encontrar o primeiro diretório válido
+    let extractedImagesDir = null;
+    for (const dir of possibleDirs) {
+      if (fs.existsSync(dir)) {
+        // Verificar se contém arquivos de imagem
+        const files = fs.readdirSync(dir);
+        const hasImages = files.some(file => /\.(png|jpg|jpeg|gif)$/i.test(file));
+        
+        if (hasImages) {
+          extractedImagesDir = dir;
+          console.log(`Encontrado diretório de imagens: ${dir}`);
+          break;
+        }
+      }
+    }
+    
+    // Verificar se encontrou um diretório válido
+    if (!extractedImagesDir) {
       return { 
         success: false, 
         updated: 0, 
-        message: `Diretório de imagens extraídas não encontrado: ${extractedImagesDir}` 
+        message: `Nenhum diretório com imagens extraídas foi encontrado` 
       };
     }
     
