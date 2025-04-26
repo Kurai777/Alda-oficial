@@ -10,7 +10,7 @@ import fs from 'fs';
 import path from 'path';
 
 /**
- * Extrai valor de preço de uma string formatada no padrão POE
+ * Extrai valor de preço de uma string formatada no padrão monetário brasileiro
  * @param {string} priceStr String contendo o preço (ex: "R$ 1.234,56")
  * @returns {number} Valor em centavos (ex: 123456)
  */
@@ -21,22 +21,26 @@ function extractPOEPrice(priceStr) {
     // Converter para string se não for
     const priceString = priceStr.toString().trim();
     
-    // Log para diagnóstico
-    console.log(`Extraindo preço POE de: "${priceString}"`);
+    // Log para diagnóstico detalhado
+    console.log(`Extraindo preço POE (bruto): "${priceString}"`);
     
     // Remover símbolos de moeda (R$, $, etc.)
     let sanitized = priceString.replace(/R\$|\$|\€|\£/g, "").trim();
     
-    // Remover espaços
-    sanitized = sanitized.replace(/\s/g, "");
+    // Remover espaços e caracteres não numéricos (exceto ponto e vírgula)
+    sanitized = sanitized.replace(/\s/g, "").replace(/[^\d.,]/g, "");
+    
+    console.log(`Após limpeza básica: "${sanitized}"`);
     
     // Substituir pontos de milhar, preservando a vírgula decimal
-    // Exemplo: converte "1.234,56" para "1234,56"
+    // Formato brasileiro: 1.234,56 -> 1234.56
     if (sanitized.includes(',')) {
-      sanitized = sanitized.replace(/\./g, "");
-      // Substituir vírgula por ponto para cálculo
-      sanitized = sanitized.replace(',', '.');
+      // Se tem vírgula, assumimos formato brasileiro
+      sanitized = sanitized.replace(/\./g, ""); // Remove pontos de milhar
+      sanitized = sanitized.replace(',', '.'); // Substitui vírgula por ponto para cálculo
     }
+    
+    console.log(`Após tratamento formato: "${sanitized}"`);
     
     // Tentar converter para número
     const value = parseFloat(sanitized);
@@ -247,28 +251,46 @@ export async function processPOECatalog(filePath, userId, catalogId) {
         }
       }
       
-      // Construir nome do produto
-      // Formato: [internalName + model] + [location] + [form]
-      // Exemplo: "Sofá Home Sleep - 2°Piso - Enobli"
+      // Construir nome do produto usando a descrição como base principal
+      // Formato prioritário: [descrição] ou [model] ou [internalName + code]
+      // Exemplo ideal: "Sleep Tecido 262" ou "Sofá Home Sleep - 2°Piso - Enobli" 
       let productName = "";
       
-      if (product.internalName) {
-        productName += product.internalName;
-        if (product.model && !productName.includes(product.model)) {
-          productName += " " + product.model;
+      // Prioridade 1: Usar a primeira linha da descrição como nome principal
+      if (product.model) {
+        productName = product.model;
+      } 
+      // Prioridade 2: Usar o nome interno
+      else if (product.internalName) {
+        productName = product.internalName;
+        
+        // Adicionar código se disponível e não incluso
+        if (product.code && !productName.toLowerCase().includes(product.code.toLowerCase())) {
+          productName += " " + product.code;
         }
-      } else if (product.code) {
+      } 
+      // Prioridade 3: Usar apenas o código
+      else if (product.code) {
         productName = "Produto " + product.code;
-      } else {
+      } 
+      // Fallback
+      else {
         productName = "Item linha " + (i + 1);
       }
       
-      // Adicionar localização e forma se diferentes
-      if (product.location && !productName.includes(product.location)) {
+      // Adicionar localização e forma se relevantes e não inclusos
+      // Apenas se não forem genéricos demais
+      if (product.location && 
+          !productName.toLowerCase().includes(product.location.toLowerCase()) &&
+          product.location.length > 2 && // Evitar adicionar locais muito curtos/genéricos
+          !["ac", "ll"].includes(product.location.toLowerCase())) { // Evitar locais não descritivos
         productName += " - " + product.location;
       }
       
-      if (product.form && !productName.includes(product.form)) {
+      if (product.form && 
+          !productName.toLowerCase().includes(product.form.toLowerCase()) &&
+          !["ac", "ll"].includes(product.form.toLowerCase()) && // Evitar formas não descritivas
+          product.form.length > 2) { // Evitar adicionar formas muito curtas/genéricas
         productName += " - " + product.form;
       }
       

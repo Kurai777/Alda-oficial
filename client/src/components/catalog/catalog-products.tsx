@@ -165,8 +165,23 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
     }
     
     // Filtro por material
-    if (filters.material && product.material) {
-      if (!product.material.toLowerCase().includes(filters.material.toLowerCase())) {
+    if (filters.material) {
+      // Verificar em materials (array) ou material (string)
+      if (Array.isArray(product.materials) && product.materials.length > 0) {
+        // Verificar se pelo menos um material inclui o filtro
+        const hasMaterial = product.materials.some(
+          m => m && m.toString().toLowerCase().includes(filters.material.toLowerCase())
+        );
+        if (!hasMaterial) return false;
+      } 
+      // Verificar em material (string)
+      else if (product.material) {
+        if (!product.material.toString().toLowerCase().includes(filters.material.toLowerCase())) {
+          return false;
+        }
+      }
+      // Se não tem material e há filtro, não deve aparecer
+      else {
         return false;
       }
     }
