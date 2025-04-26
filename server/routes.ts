@@ -1150,10 +1150,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           } catch (processingError) {
             console.error("Erro ao processar Excel com métodos especializados:", processingError);
             
-            // Tentar método simplificado como fallback
-            console.log("Tentando método simplificado de processamento Excel...");
-            const excelProcessor = require('./excel-processor-simplified.js');
-            productsData = await excelProcessor.processExcelFile(filePath, userId, firestoreCatalogId);
+            // Tentar método simplificado como fallback (ESM)
+            console.log("Tentando método ESM de processamento Excel...");
+            const { processExcelFile } = await import('./excel-processor-simplified-esm.js');
+            productsData = await processExcelFile(filePath, userId, firestoreCatalogId);
             extractionInfo = `Extraídos ${productsData.length} produtos do arquivo Excel (método simplificado).`;
             
             // Verificar produtos com imagens
