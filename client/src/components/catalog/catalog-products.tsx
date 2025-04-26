@@ -545,15 +545,36 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
                   {paginatedProducts.map((product: Product) => (
                     <Card key={product.id} className="overflow-hidden">
                       <CardContent className="p-4">
-                        <div className="aspect-square bg-muted rounded-md flex items-center justify-center mb-3 overflow-hidden">
+                        <div className="aspect-square bg-muted rounded-md flex items-center justify-center mb-3 overflow-hidden relative group">
                           {product.id ? (
-                            <ImageWithVerification 
-                              productId={product.id}
-                              altText={product.name}
-                              className="w-full h-full object-cover"
-                              imageUrl={product.imageUrl || undefined}
-                              forceCacheBusting={true}
-                            />
+                            <>
+                              <ImageWithVerification 
+                                productId={product.id}
+                                altText={product.name}
+                                className="w-full h-full object-cover transition-transform group-hover:scale-105"
+                                imageUrl={product.imageUrl || undefined}
+                                forceCacheBusting={true}
+                              />
+                              {product.imageUrl && (
+                                <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                  <Button 
+                                    variant="secondary" 
+                                    size="sm"
+                                    className="absolute bottom-2 right-2"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      // Abrir imagem em nova aba
+                                      if (product.imageUrl) {
+                                        window.open(product.imageUrl, '_blank');
+                                      }
+                                    }}
+                                  >
+                                    <ImageIcon className="h-4 w-4 mr-1" />
+                                    Ver imagem
+                                  </Button>
+                                </div>
+                              )}
+                            </>
                           ) : (
                             <div className="flex flex-col items-center justify-center h-full w-full">
                               <ImageIcon className="h-10 w-10 text-muted-foreground mb-2" />
@@ -803,6 +824,8 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
                   manufacturer: "",
                   minPrice: "",
                   maxPrice: "",
+                  location: "",
+                  material: ""
                 });
               }}
             >

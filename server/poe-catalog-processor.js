@@ -8,7 +8,54 @@
 import XLSX from 'xlsx';
 import fs from 'fs';
 import path from 'path';
-import { extractPrice } from './excel-format-detector.js';
+
+/**
+ * Extrai valor de preço de uma string formatada no padrão POE
+ * @param {string} priceStr String contendo o preço (ex: "R$ 1.234,56")
+ * @returns {number} Valor em centavos (ex: 123456)
+ */
+function extractPOEPrice(priceStr) {
+  if (!priceStr) return 0;
+  
+  try {
+    // Converter para string se não for
+    const priceString = priceStr.toString().trim();
+    
+    // Log para diagnóstico
+    console.log(`Extraindo preço POE de: "${priceString}"`);
+    
+    // Remover símbolos de moeda (R$, $, etc.)
+    let sanitized = priceString.replace(/R\$|\$|\€|\£/g, "").trim();
+    
+    // Remover espaços
+    sanitized = sanitized.replace(/\s/g, "");
+    
+    // Substituir pontos de milhar, preservando a vírgula decimal
+    // Exemplo: converte "1.234,56" para "1234,56"
+    if (sanitized.includes(',')) {
+      sanitized = sanitized.replace(/\./g, "");
+      // Substituir vírgula por ponto para cálculo
+      sanitized = sanitized.replace(',', '.');
+    }
+    
+    // Tentar converter para número
+    const value = parseFloat(sanitized);
+    
+    if (isNaN(value)) {
+      console.log(`Não foi possível extrair um valor numérico de "${priceString}"`);
+      return 0;
+    }
+    
+    // Converter para centavos (multiplicar por 100)
+    const cents = Math.round(value * 100);
+    console.log(`Valor extraído: ${value} -> ${cents} centavos`);
+    
+    return cents;
+  } catch (error) {
+    console.error(`Erro ao processar preço "${priceStr}":`, error);
+    return 0;
+  }
+}
 
 /**
  * Extrai produtos de um arquivo Excel no formato POE
@@ -35,33 +82,46 @@ export async function processPOECatalog(filePath, userId, catalogId) {
     
     console.log(`Extraídos ${rawData.length} registros da planilha POE`);
     
-    // Determinar linha de cabeçalho (normalmente 1 para POE)
-    let headerRow = 1;
+    // Analisar as primeiras linhas para detectar cabeçalho
+    console.log("Primeiras linhas do arquivo:", JSON.stringify(rawData.slice(0, 5)));
+    
+    // Baseado na imagem compartilhada, a estrutura do cabeçalho é diferente
+    // Vamos verificar cada linha para encontrar um padrão de cabeçalho compatível
+    let headerRow = -1;
+    
     for (let i = 0; i < Math.min(10, rawData.length); i++) {
       const row = rawData[i];
-      if (row.C === 'Nome' && row.B === 'Local' && row.F === 'Cód.') {
+      // Verificar se a linha tem "Nome" na coluna B ou "Local" na coluna C ou algum outro indicador de cabeçalho
+      if ((row.B && row.B.toString().includes('Nome')) || 
+          (row.C && row.C.toString().includes('Local')) || 
+          (row.F && row.F.toString().includes('Cód'))) {
         headerRow = i;
-        console.log(`Linha de cabeçalho encontrada na posição ${headerRow + 1}`);
+        console.log(`Linha de cabeçalho detectada na posição ${headerRow + 1}: ${JSON.stringify(row)}`);
         break;
       }
     }
     
-    // Mapeamento de colunas para o formato POE
-    // Este mapeamento é baseado na estrutura mostrada na imagem do Excel
+    // Se não encontrou cabeçalho explícito, usar linha 0 como referência
+    if (headerRow === -1) {
+      headerRow = 0;
+      console.log("Nenhum cabeçalho explícito encontrado, usando primeira linha como referência");
+    }
+    
+    // Baseado na imagem compartilhada, o mapeamento deve ser ajustado
+    // Este mapeamento é atualizado para a estrutura real vista na imagem do Excel POE
     const columnMapping = {
-      A: 'internalName',  // Coluna A: "Sofá Home" 
-      B: 'location',      // Coluna B: "2°Piso", "Depósito/OUTLET", etc
-      C: 'form',          // Coluna C: Forma/tipo como "Enobli", "LL", "AC"
-      D: 'imageRef',      // Coluna D: Referência para imagem
-      E: 'quantity',      // Coluna E: Quantidade
-      F: 'code',          // Coluna F: Código do produto
-      G: 'description',   // Coluna G: Descrição detalhada do produto
-      H: 'date',          // Coluna H: Data
-      I: 'price',         // Coluna I: Preço
-      J: 'totalPrice',    // Coluna J: Preço total
-      K: 'discount',      // Coluna K: Desconto
-      L: 'barcode',       // Coluna L: Código de barras
-      M: 'extraInfo'      // Coluna M: Informação extra
+      B: 'name',          // Coluna B: "Nome" - como "Sofá Home"
+      C: 'location',      // Coluna C: "Local" - como "2°Piso", "Depósito/OUTLET", etc.
+      D: 'form',          // Coluna D: "Form." - como "Enobli", "LL", "AC"
+      E: 'imageRef',      // Coluna E: "Imagem" - referência/imagem embutida
+      F: 'quantity',      // Coluna F: "Qtd" - quantidade
+      G: 'code',          // Coluna G: "Cód." - código do produto como "SLEEP2313"
+      H: 'description',   // Coluna H: "Descrição" - com detalhes técnicos como "Sleep\n3 mod.c/100m..."
+      I: 'date',          // Coluna I: "Data Showroom" - como "maio/24"
+      J: 'price',         // Coluna J: "Valor Total" - preço como "R$ 22.930,00"
+      K: 'discount',      // Coluna K: "Promo" - desconto como "0,00%"
+      L: 'barcode',       // Coluna L: "####..." - código de barras ou similar
+      M: 'extraInfo'      // Coluna M: Informação extra ou observações
     };
     
     // Processar os dados convertendo para formato padrão de produto
@@ -99,26 +159,39 @@ export async function processPOECatalog(filePath, userId, catalogId) {
       };
       
       // Extrair dados baseado no mapeamento de colunas
-      // Nome do produto: combinar colunas A (tipo) + descrição (Sleep, Boheme, etc)
-      if (row.A) product.internalName = row.A.toString().trim();
-      
-      // Localização do produto
-      if (row.B) product.location = row.B.toString().trim();
-      
-      // Forma/material
-      if (row.C) product.form = row.C.toString().trim();
-      
-      // Quantidade
-      if (row.E && !isNaN(parseInt(row.E))) {
-        product.quantity = parseInt(row.E);
+      // Logging para analisar cada linha de produto
+      console.log(`Processando linha ${i+1} do catálogo POE:`, JSON.stringify(row));
+
+      // Nome do produto/tipo (Sofá Home, etc)
+      if (row.B) {
+        product.internalName = row.B.toString().trim();
+        // Usar este campo como base do nome do produto
+        product.name = product.internalName;
       }
       
-      // Código do produto
-      if (row.F) product.code = row.F.toString().trim();
+      // Localização do produto (2°Piso, Depósito/OUTLET, etc)
+      if (row.C) {
+        product.location = row.C.toString().trim();
+      }
+      
+      // Forma/material (Enobli, LL, AC, etc)
+      if (row.D) {
+        product.form = row.D.toString().trim();
+      }
+      
+      // Quantidade
+      if (row.F && !isNaN(parseInt(row.F))) {
+        product.quantity = parseInt(row.F);
+      }
+      
+      // Código do produto (SLEEP2313, etc)
+      if (row.G) {
+        product.code = row.G.toString().trim();
+      }
       
       // Descrição completa
-      if (row.G) {
-        product.description = row.G.toString().trim();
+      if (row.H) {
+        product.description = row.H.toString().trim();
         
         // Extrair mais informações da descrição para detalhamento
         const descLines = product.description.split('\\n').join('\n').split('\n');
@@ -149,24 +222,31 @@ export async function processPOECatalog(filePath, userId, catalogId) {
         }
       }
       
-      // Data
-      if (row.H) product.date = row.H.toString().trim();
-      
-      // Preço
+      // Data do showroom
       if (row.I) {
-        const extractedPrice = extractPrice(row.I);
+        product.date = row.I.toString().trim();
+      }
+      
+      // Preço - Coluna J (Valor Total)
+      if (row.J) {
+        const priceString = row.J.toString().trim();
+        const extractedPrice = extractPOEPrice(priceString);
+        
+        // Fazer log do processo de extração do preço para debugging
+        console.log(`Extraindo preço de "${priceString}": ${extractedPrice}`);
+        
         product.price = !isNaN(extractedPrice) ? extractedPrice : 0;
       }
       
-      // Preço total
-      if (row.J) {
-        const extractedTotal = extractPrice(row.J);
-        product.totalPrice = !isNaN(extractedTotal) ? extractedTotal : 0;
-      }
-      
-      // Desconto
-      if (row.K && !isNaN(parseFloat(row.K))) {
-        product.discount = parseFloat(row.K);
+      // Desconto - Coluna K (Promo)
+      if (row.K) {
+        const discountString = row.K.toString().trim();
+        // Tentar extrair apenas os números, remover "%" se presente
+        const discountValue = parseFloat(discountString.replace('%', '').replace(',', '.'));
+        
+        if (!isNaN(discountValue)) {
+          product.discount = discountValue;
+        }
       }
       
       // Construir nome do produto
