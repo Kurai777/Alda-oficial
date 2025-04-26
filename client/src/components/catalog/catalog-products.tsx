@@ -480,7 +480,8 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
                               productId={product.id}
                               altText={product.name}
                               className="w-full h-full object-cover"
-
+                              imageUrl={product.imageUrl}
+                              forceCacheBusting={true}
                             />
                           ) : (
                             <div className="flex flex-col items-center justify-center h-full w-full">

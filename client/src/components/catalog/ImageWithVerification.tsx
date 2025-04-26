@@ -160,11 +160,8 @@ export default function ImageWithVerification({
     
     return () => {
       isMounted = false;
-      try {
-        controller.abort();
-      } catch (e) {
-        // Ignorar erros ao abortar
-      }
+      // Usar try-catch apenas se absolutamente necessário para o abortar
+    controller.abort();
     };
   }, [productId, initialImageUrl, disableVerification]);
   
