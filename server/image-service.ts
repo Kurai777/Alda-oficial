@@ -178,7 +178,7 @@ export async function getProductImageInfo(productId: number): Promise<ProductIma
     console.error('Erro ao buscar informações de imagem:', error);
     return {
       hasImage: false,
-      error: error.message
+      error: error instanceof Error ? error.message : 'Erro desconhecido'
     };
   }
 }
@@ -232,7 +232,7 @@ export async function createUniqueProductImage(
     console.error('Erro ao criar imagem única para produto:', error);
     return {
       hasImage: false,
-      error: error.message
+      error: error instanceof Error ? error.message : 'Erro desconhecido'
     };
   }
 }
@@ -418,7 +418,7 @@ async function findAlternativeImageForProduct(product: Product): Promise<Product
     console.error(`Erro ao buscar imagem alternativa:`, error);
     return {
       hasImage: false,
-      error: error.message
+      error: error instanceof Error ? error.message : 'Erro desconhecido'
     };
   }
 }
@@ -532,7 +532,7 @@ export async function mapCatalogImagesToProducts(
     console.error('Erro ao mapear imagens para produtos:', error);
     return {
       success: false,
-      message: error.message,
+      message: error instanceof Error ? error.message : 'Erro desconhecido',
       count: 0
     };
   }
