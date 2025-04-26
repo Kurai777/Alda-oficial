@@ -54,26 +54,31 @@ export default function ImageWithVerification({
       return;
     }
     
+    let isMounted = true;
     const controller = new AbortController();
-    const signal = controller.signal;
     
     async function verifyImage() {
       try {
+        if (!isMounted) return;
         setLoading(true);
         setError(false);
         
         // Se já temos uma URL e não é uma URL relativa, podemos usá-la diretamente
         if (initialImageUrl && (initialImageUrl.startsWith('http') || initialImageUrl.startsWith('data:'))) {
-          setImageUrl(initialImageUrl);
-          setLoading(false);
+          if (isMounted) {
+            setImageUrl(initialImageUrl);
+            setLoading(false);
+          }
           return;
         }
         
         // Verificar a disponibilidade da imagem
         const response = await fetch(`/api/verify-product-image/${productId}`, {
           method: 'GET',
-          signal
+          signal: controller.signal
         });
+        
+        if (!isMounted) return;
         
         if (response.ok) {
           const data = await response.json();
@@ -84,22 +89,31 @@ export default function ImageWithVerification({
               setIsShared(true);
               
               // Criar uma cópia única para este produto
-              const uniqueResponse = await fetch(`/api/create-unique-image/${productId}`, {
-                method: 'POST',
-                signal
-              });
-              
-              if (uniqueResponse.ok) {
-                const uniqueData = await uniqueResponse.json();
-                if (uniqueData.success) {
-                  // Usar a URL única criada com cache busting
-                  setImageUrl(`/api/product-image/${productId}?t=${Date.now()}`);
+              try {
+                const uniqueResponse = await fetch(`/api/create-unique-image/${productId}`, {
+                  method: 'POST',
+                  signal: controller.signal
+                });
+                
+                if (!isMounted) return;
+                
+                if (uniqueResponse.ok) {
+                  const uniqueData = await uniqueResponse.json();
+                  if (uniqueData.success) {
+                    // Usar a URL única criada com cache busting
+                    setImageUrl(`/api/product-image/${productId}?t=${Date.now()}`);
+                  } else {
+                    // Mesmo com erro, usar a URL original
+                    setImageUrl(initialImageUrl || `/api/product-image/${productId}`);
+                  }
                 } else {
-                  // Mesmo com erro, usar a URL original
                   setImageUrl(initialImageUrl || `/api/product-image/${productId}`);
                 }
-              } else {
-                setImageUrl(initialImageUrl || `/api/product-image/${productId}`);
+              } catch (err) {
+                console.error(`Erro ao criar imagem única para produto ${productId}:`, err);
+                if (isMounted) {
+                  setImageUrl(initialImageUrl || `/api/product-image/${productId}`);
+                }
               }
             } else {
               // Imagem não compartilhada, usar diretamente
@@ -127,21 +141,30 @@ export default function ImageWithVerification({
         console.error(`Erro ao verificar imagem para produto ${productId}:`, err);
         
         // Em caso de erro, usar a URL inicial se disponível
-        if (initialImageUrl) {
-          setImageUrl(initialImageUrl);
-        } else {
-          setImageUrl(null);
-          setError(true);
+        if (isMounted) {
+          if (initialImageUrl) {
+            setImageUrl(initialImageUrl);
+          } else {
+            setImageUrl(null);
+            setError(true);
+          }
         }
       } finally {
-        setLoading(false);
+        if (isMounted) {
+          setLoading(false);
+        }
       }
     }
     
     verifyImage();
     
     return () => {
-      controller.abort();
+      isMounted = false;
+      try {
+        controller.abort();
+      } catch (e) {
+        // Ignorar erros ao abortar
+      }
     };
   }, [productId, initialImageUrl, disableVerification]);
   
