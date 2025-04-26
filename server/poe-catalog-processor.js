@@ -107,21 +107,21 @@ export async function processPOECatalog(filePath, userId, catalogId) {
       console.log("Nenhum cabeçalho explícito encontrado, usando primeira linha como referência");
     }
     
-    // Baseado na imagem compartilhada, o mapeamento deve ser ajustado
-    // Este mapeamento é atualizado para a estrutura real vista na imagem do Excel POE
+    // Mapeamento exato baseado no arquivo Excel POE real
+    // Este mapeamento é baseado na estrutura mostrada na imagem do Excel POE
     const columnMapping = {
-      B: 'name',          // Coluna B: "Nome" - como "Sofá Home"
-      C: 'location',      // Coluna C: "Local" - como "2°Piso", "Depósito/OUTLET", etc.
-      D: 'form',          // Coluna D: "Form." - como "Enobli", "LL", "AC"
-      E: 'imageRef',      // Coluna E: "Imagem" - referência/imagem embutida
-      F: 'quantity',      // Coluna F: "Qtd" - quantidade
-      G: 'code',          // Coluna G: "Cód." - código do produto como "SLEEP2313"
-      H: 'description',   // Coluna H: "Descrição" - com detalhes técnicos como "Sleep\n3 mod.c/100m..."
-      I: 'date',          // Coluna I: "Data Showroom" - como "maio/24"
-      J: 'price',         // Coluna J: "Valor Total" - preço como "R$ 22.930,00"
-      K: 'discount',      // Coluna K: "Promo" - desconto como "0,00%"
-      L: 'barcode',       // Coluna L: "####..." - código de barras ou similar
-      M: 'extraInfo'      // Coluna M: Informação extra ou observações
+      // COLUNAS DO EXCEL POE
+      A: 'internalName',  // Coluna A: Nome interno como "Sofá Home"
+      B: 'location',      // Coluna B: "Local" - como "2°Piso", "Depósito/OUTLET", etc.
+      C: 'form',          // Coluna C: "Form." - como "Enobli", "LL", "AC"
+      D: 'imageRef',      // Coluna D: "Imagem" - referência/imagem embutida
+      E: 'quantity',      // Coluna E: "Qtd" - quantidade
+      F: 'code',          // Coluna F: "Cód." - código do produto como "SLEEP2313"
+      G: 'description',   // Coluna G: "Descrição" - descrição completa com detalhes técnicos
+      H: 'date',          // Coluna H: "Data Showroom" - como "maio/24"
+      I: 'unitPrice',     // Coluna I: "Valor Unitário" - preço unitário
+      J: 'totalPrice',    // Coluna J: "Valor Total" - preço total (principal)
+      K: 'discount'       // Coluna K: "Promo" - desconto como "0,00%"
     };
     
     // Processar os dados convertendo para formato padrão de produto
@@ -162,36 +162,34 @@ export async function processPOECatalog(filePath, userId, catalogId) {
       // Logging para analisar cada linha de produto
       console.log(`Processando linha ${i+1} do catálogo POE:`, JSON.stringify(row));
 
-      // Nome do produto/tipo (Sofá Home, etc)
+      // Nome interno do produto (Sofá Home, etc) - Coluna A
+      if (row.A) {
+        product.internalName = row.A.toString().trim();
+      }
+      
+      // Localização do produto (2°Piso, Depósito/OUTLET, etc) - Coluna B
       if (row.B) {
-        product.internalName = row.B.toString().trim();
-        // Usar este campo como base do nome do produto
-        product.name = product.internalName;
+        product.location = row.B.toString().trim();
       }
       
-      // Localização do produto (2°Piso, Depósito/OUTLET, etc)
+      // Forma/material (Enobli, LL, AC, etc) - Coluna C
       if (row.C) {
-        product.location = row.C.toString().trim();
+        product.form = row.C.toString().trim();
       }
       
-      // Forma/material (Enobli, LL, AC, etc)
-      if (row.D) {
-        product.form = row.D.toString().trim();
+      // Quantidade - Coluna E
+      if (row.E && !isNaN(parseInt(row.E))) {
+        product.quantity = parseInt(row.E);
       }
       
-      // Quantidade
-      if (row.F && !isNaN(parseInt(row.F))) {
-        product.quantity = parseInt(row.F);
+      // Código do produto (SLEEP2313, etc) - Coluna F
+      if (row.F) {
+        product.code = row.F.toString().trim();
       }
       
-      // Código do produto (SLEEP2313, etc)
+      // Descrição completa - Coluna G
       if (row.G) {
-        product.code = row.G.toString().trim();
-      }
-      
-      // Descrição completa
-      if (row.H) {
-        product.description = row.H.toString().trim();
+        product.description = row.G.toString().trim();
         
         // Extrair mais informações da descrição para detalhamento
         const descLines = product.description.split('\\n').join('\n').split('\n');
