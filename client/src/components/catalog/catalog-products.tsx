@@ -527,6 +527,8 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
                         <TableHead>Nome</TableHead>
                         <TableHead>Código</TableHead>
                         <TableHead>Categoria</TableHead>
+                        <TableHead>Local</TableHead>
+                        <TableHead>Material</TableHead>
                         <TableHead>Preço</TableHead>
                         <TableHead>Ações</TableHead>
                       </TableRow>
@@ -537,6 +539,14 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
                           <TableCell className="font-medium">{product.name}</TableCell>
                           <TableCell>{product.code}</TableCell>
                           <TableCell>{product.category}</TableCell>
+                          <TableCell>
+                            {product.location || "-"}
+                          </TableCell>
+                          <TableCell>
+                            {Array.isArray(product.materials) && product.materials.length > 0 
+                              ? product.materials.join(", ")
+                              : product.material || "-"}
+                          </TableCell>
                           <TableCell>{formatPrice(product.price)}</TableCell>
                           <TableCell>
                             <div className="flex gap-2">
@@ -600,7 +610,36 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
                         <h3 className="font-semibold">{product.name}</h3>
                         <p className="text-sm text-muted-foreground mb-1">Código: {product.code}</p>
                         <p className="text-sm text-muted-foreground mb-1">Categoria: {product.category}</p>
-                        <p className="font-medium mt-2">{formatPrice(product.price)}</p>
+                        
+                        {/* Exibir badges para informações adicionais relevantes */}
+                        <div className="flex flex-wrap gap-1 my-2">
+                          {product.location && (
+                            <Badge variant="outline" className="text-xs">
+                              {product.location}
+                            </Badge>
+                          )}
+                          
+                          {/* Material - verificar tanto materials (array) quanto material (string) */}
+                          {Array.isArray(product.materials) && product.materials.length > 0 && (
+                            <Badge variant="outline" className="text-xs">
+                              {product.materials.join(", ")}
+                            </Badge>
+                          )}
+                          
+                          {!Array.isArray(product.materials) && product.material && (
+                            <Badge variant="outline" className="text-xs">
+                              {product.material}
+                            </Badge>
+                          )}
+                          
+                          {product.form && (
+                            <Badge variant="outline" className="text-xs">
+                              {product.form}
+                            </Badge>
+                          )}
+                        </div>
+                        
+                        <p className="font-medium mt-1">{formatPrice(product.price)}</p>
                         <div className="flex gap-2 mt-3">
                           <Button variant="outline" size="sm" className="flex-1" onClick={() => handleEdit(product)}>
                             <PenIcon className="h-4 w-4 mr-1" />
