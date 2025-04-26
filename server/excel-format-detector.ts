@@ -5,7 +5,7 @@
  * com base na estrutura e nos cabeçalhos.
  */
 
-import * as XLSX from 'xlsx';
+const XLSX = require('xlsx');
 
 /**
  * Resultado da detecção de formato

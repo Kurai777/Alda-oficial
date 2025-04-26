@@ -6,11 +6,11 @@
  * começando com "POE".
  */
 
-import * as XLSX from 'xlsx';
-import * as fs from 'fs';
-import * as path from 'path';
-import { extractExcelImages, associateImagesWithProducts } from './python-excel-bridge.js';
-import { robust_extractImages } from './robust-excel-image-extractor.js';
+const XLSX = require('xlsx');
+const fs = require('fs');
+const path = require('path');
+const { extractExcelImages, associateImagesWithProducts } = require('./python-excel-bridge.js');
+const { robust_extractImages } = require('./robust-excel-image-extractor.js');
 
 // Mapeamento de colunas para o formato POE
 const POE_COLUMNS = {
