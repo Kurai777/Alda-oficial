@@ -33,6 +33,7 @@ export interface IStorage {
   getProductsByImageUrl(imageUrl: string): Promise<Product[]>; // Busca produtos que usam a mesma URL de imagem
   createProduct(product: InsertProduct): Promise<Product>;
   updateProduct(id: number, product: Partial<InsertProduct>): Promise<Product | undefined>;
+  updateProductImageUrl(id: number, imageUrl: string): Promise<Product | undefined>; // Atualiza apenas a URL da imagem
   deleteProduct(id: number): Promise<boolean>;
   deleteProductsByCatalogId(catalogId: number): Promise<number>; // Retorna número de produtos excluídos
 

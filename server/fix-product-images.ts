@@ -3,22 +3,24 @@
  * 
  * Este módulo fornece funcionalidades para detectar e corrigir problemas de
  * compartilhamento de imagens entre produtos. Garante que cada produto tenha
- * sua própria imagem exclusiva.
+ * sua própria imagem exclusiva usando um sistema inteligente de mapeamento.
  */
 
 import { Request, Response } from 'express';
 import path from 'path';
 import fs from 'fs/promises';
-import { existsSync } from 'fs';
+import { existsSync, mkdirSync } from 'fs';
 import { eq } from 'drizzle-orm';
 import { db } from './db';
 import { products } from '@shared/schema';
 import { storage } from './storage';
 import { createUniqueImageCopy, findImageFile } from './excel-image-analyzer';
+import { fixProductImages } from './excel-fixed-image-mapper';
 
 // Diretórios para imagens
 const UPLOADS_DIR = path.join(process.cwd(), 'uploads');
 const IMAGES_DIR = path.join(UPLOADS_DIR, 'images');
+const EXTRACTED_IMAGES_DIR = path.join(UPLOADS_DIR, 'extracted_images');
 const UNIQUE_IMAGES_DIR = path.join(UPLOADS_DIR, 'unique-images');
 
 /**
@@ -26,10 +28,10 @@ const UNIQUE_IMAGES_DIR = path.join(UPLOADS_DIR, 'unique-images');
  */
 async function initializeDirectories() {
   // Garantir que os diretórios existam
-  for (const dir of [UPLOADS_DIR, IMAGES_DIR, UNIQUE_IMAGES_DIR]) {
+  for (const dir of [UPLOADS_DIR, IMAGES_DIR, EXTRACTED_IMAGES_DIR, UNIQUE_IMAGES_DIR]) {
     try {
       if (!existsSync(dir)) {
-        await fs.mkdir(dir, { recursive: true });
+        mkdirSync(dir, { recursive: true });
         console.log(`Diretório criado: ${dir}`);
       }
     } catch (error) {
@@ -56,6 +58,7 @@ function extractFilenameFromUrl(imageUrl: string | null): string | null {
 
 /**
  * Verifica se um produto tem uma imagem compartilhada e cria uma versão única
+ * Abordagem original - mantida para compatibilidade e como fallback
  */
 export async function detectAndFixSharedImage(productId: number) {
   try {
@@ -130,8 +133,9 @@ export async function detectAndFixSharedImage(productId: number) {
 
 /**
  * Corrige todas as imagens compartilhadas em um catálogo
+ * Método original - mantido para compatibilidade
  */
-export async function fixAllSharedImagesInCatalog(catalogId: number) {
+export async function fixAllSharedImagesInCatalogLegacy(catalogId: number) {
   try {
     // Obter todos os produtos do catálogo
     const catalogProducts = await storage.getProductsByCatalogId(catalogId);
@@ -194,6 +198,47 @@ export async function fixAllSharedImagesInCatalog(catalogId: number) {
     }
     
     return results;
+  } catch (error) {
+    console.error(`Erro ao corrigir imagens do catálogo ${catalogId}:`, error);
+    return { 
+      success: false, 
+      message: 'Erro interno ao processar catálogo',
+      total: 0,
+      fixed: 0,
+      failed: 0,
+      products: []
+    };
+  }
+}
+
+/**
+ * NOVA IMPLEMENTAÇÃO: Usa o mapeador inteligente para associar imagens aos produtos
+ * com base em código, posição e outros fatores
+ */
+export async function fixAllSharedImagesInCatalog(catalogId: number) {
+  try {
+    console.log(`Iniciando correção avançada de imagens para o catálogo ${catalogId}...`);
+    
+    // Inicializar diretórios
+    initializeDirectories();
+    
+    // Usar o algoritmo de mapeamento inteligente
+    const result = await fixProductImages(catalogId);
+    
+    console.log(`Processo de correção de imagens concluído: ${result.detected} detectadas, ${result.fixed} corrigidas`);
+    
+    // Formatar o resultado para compatibilidade com a API
+    return {
+      total: result.detected + (result.fixed === 0 ? 0 : 1),
+      fixed: result.fixed,
+      alreadyUnique: result.detected - result.fixed,
+      failed: 0,
+      products: [{
+        id: 0,
+        status: 'summary',
+        message: `Total: ${result.detected}, Corrigidas: ${result.fixed}`
+      }]
+    };
   } catch (error) {
     console.error(`Erro ao corrigir imagens do catálogo ${catalogId}:`, error);
     return { 
