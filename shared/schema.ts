@@ -32,6 +32,7 @@ export const products = pgTable("products", {
   sizes: json("sizes").$type<{width?: number, height?: number, depth?: number, label?: string}[]>().default([]),
   location: text("location"), // Localização do produto (ex: 2º Piso, Depósito, etc)
   stock: integer("stock"), // Quantidade em estoque
+  excelRowNumber: integer("excel_row_number"), // Número da linha original no Excel
   createdAt: timestamp("created_at").defaultNow(),
   firestoreId: text("firestore_id"), // ID do produto no Firestore
   firebaseUserId: text("firebase_user_id"), // ID do usuário no Firebase
@@ -53,6 +54,7 @@ export const insertProductSchema = createInsertSchema(products).pick({
   sizes: true,
   location: true,  // Localização física do produto
   stock: true,     // Quantidade em estoque
+  excelRowNumber: true, // Número da linha original no Excel
   firestoreId: true,
   firebaseUserId: true,
   isEdited: true,
