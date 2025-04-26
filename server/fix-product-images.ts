@@ -21,7 +21,7 @@ import excelFixedImageMapper from './excel-fixed-image-mapper';
 const UPLOADS_DIR = path.join(process.cwd(), 'uploads');
 const IMAGES_DIR = path.join(UPLOADS_DIR, 'images');
 const EXTRACTED_IMAGES_DIR = path.join(UPLOADS_DIR, 'extracted_images');
-const UNIQUE_IMAGES_DIR = path.join(UPLOADS_DIR, 'unique-images');
+const UNIQUE_IMAGES_DIR = path.join(UPLOADS_DIR, 'unique_product_images');
 
 /**
  * Inicializa os diretórios necessários
