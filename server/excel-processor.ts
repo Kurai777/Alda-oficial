@@ -355,6 +355,12 @@ export async function processExcelFile(filePath: string, userId?: string | numbe
 function normalizeExcelProducts(rawProducts: ExcelProduct[], userId?: string | number, catalogId?: string | number): any[] {
   console.log(`Iniciando normalização de ${rawProducts.length} produtos brutos do Excel...`);
   
+  // Mostrar as primeiras 3 linhas para diagnosticar a estrutura
+  console.log("Amostra dos primeiros 3 produtos brutos para diagnóstico:");
+  for (let i = 0; i < Math.min(3, rawProducts.length); i++) {
+    console.log(`Produto bruto ${i+1}:`, JSON.stringify(rawProducts[i]));
+  }
+  
   // Arrays para armazenar os produtos normalizados
   const normalizedProducts: any[] = [];
   
@@ -367,6 +373,7 @@ function normalizeExcelProducts(rawProducts: ExcelProduct[], userId?: string | n
     Object.keys(product).forEach(key => allKeys.add(key));
   });
   const keyList = Array.from(allKeys);
+  console.log(`Colunas encontradas: ${keyList.join(', ')}`);
   
   // Verificar se o arquivo é um catálogo da Sofá Home ou POE (formato especial visto na imagem)
   let isSofaHomeOrPOEFormat = false;

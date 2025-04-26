@@ -1041,91 +1041,110 @@ export async function hasExcelImages(excelPath) {
 function filterNonProductImages(images) {
   if (!images || !Array.isArray(images)) return [];
   
-  return images.filter(image => {
+  console.log(`Total de imagens antes da filtragem: ${images.length}`);
+  
+  // Primeiro, ordenar as imagens por tamanho para priorizar imagens maiores
+  // que geralmente são as imagens de produtos reais
+  const sortedImages = [...images].sort((a, b) => {
+    // Obter tamanho aproximado da imagem a
+    let sizeA = 0;
+    if (a.image_base64) {
+      try {
+        const base64WithoutHeaderA = a.image_base64.split(',').pop();
+        sizeA = Math.floor((base64WithoutHeaderA.length * 3) / 4);
+      } catch (e) {}
+    }
+    
+    // Obter tamanho aproximado da imagem b
+    let sizeB = 0;
+    if (b.image_base64) {
+      try {
+        const base64WithoutHeaderB = b.image_base64.split(',').pop();
+        sizeB = Math.floor((base64WithoutHeaderB.length * 3) / 4);
+      } catch (e) {}
+    }
+    
+    // Ordenar do maior para o menor
+    return sizeB - sizeA;
+  });
+  
+  console.log(`Imagens ordenadas por tamanho para priorizar imagens maiores`);
+  
+  // Filtrar mantendo imagens de produtos e filtrando apenas elementos decorativos óbvios
+  const filteredImages = sortedImages.filter(image => {
     try {
-      // Critério 1: Ignorar imagens muito pequenas
-      // Se temos informações de tamanho da imagem
-      if (image.image && (image.image.width < 50 || image.image.height < 50)) {
-        console.log(`Ignorando imagem pequena demais: ${image.image_filename || 'sem nome'} (${image.image.width}x${image.image.height})`);
+      // Obter nome do arquivo para diagnóstico
+      const filename = image.image_filename || image.original_path || '';
+      
+      // Critério 1: Ignorar imagens extremamente pequenas (provavelmente ícones)
+      // Reduzido o limite para capturar mais imagens
+      if (image.image && (image.image.width < 25 || image.image.height < 25)) {
+        console.log(`Filtragem: Ignorando imagem minúscula: ${filename} (${image.image.width}x${image.image.height})`);
         return false;
       }
       
-      // Verificar tamanho também usando base64
+      // Verificar tamanho também usando base64 - CRITÉRIO REDUZIDO
       if (image.image_base64) {
         try {
-          // Calcular tamanho aproximado da imagem em bytes
           const base64WithoutHeader = image.image_base64.split(',').pop();
           const sizeInBytes = Math.floor((base64WithoutHeader.length * 3) / 4);
           
-          // Uma imagem menor que 5KB provavelmente é um ícone ou elemento gráfico
-          if (sizeInBytes < 5 * 1024) {
-            console.log(`Ignorando imagem muito pequena (${Math.round(sizeInBytes/1024)}KB): ${image.image_filename || 'sem nome'}`);
+          // Reduzido para 2KB - apenas ícones muito pequenos
+          if (sizeInBytes < 2 * 1024) {
+            console.log(`Filtragem: Ignorando ícone muito pequeno (${Math.round(sizeInBytes/1024)}KB): ${filename}`);
             return false;
           }
         } catch (e) {
-          // Se falhar ao calcular o tamanho, continuar com as outras verificações
+          // Continuar com outras verificações
         }
       }
       
-      // Critério 2: Ignorar imagens com nomes sugestivos de elementos gráficos
+      // Critério 2: Lista REDUZIDA de padrões para ignorar
+      // Apenas padrões muito óbvios de elementos não produtos
       const rejectPatterns = [
-        /header/i, /footer/i, /page/i, /background/i, /logo/i, /template/i,
-        /cabeçalho/i, /rodapé/i, /página/i, /fundo/i, /modelo/i, /bg_/i, /template/i
+        /header\d*/i, /footer\d*/i, /logo\d*/i, /bg_/i,
+        /rodapé/i, /cabeçalho/i
       ];
       
-      const filename = image.image_filename || image.original_path || '';
       const matchesPattern = rejectPatterns.some(pattern => pattern.test(filename));
       
       if (matchesPattern) {
-        console.log(`Ignorando imagem com nome sugestivo de elemento gráfico: ${filename}`);
+        console.log(`Filtragem: Ignorando elemento decorativo óbvio: ${filename}`);
         return false;
       }
       
-      // Critério 3: Considerar apenas imagens associadas a células não vazias (se possível)
-      if (image.cell && image.sheet) {
-        // Se temos informação de célula, poderíamos verificar se a célula está vazia
-        // Essa implementação dependeria de ter acesso ao conteúdo das células
-        // o que não está disponível neste contexto
-        console.log(`Imagem associada à célula ${image.cell} na planilha ${image.sheet}`);
-      }
-      
-      // Critério 4: Heurística para determinar se a imagem parece um "produto real" 
-      // ou apenas um elemento decorativo
+      // Critério 3: Proporção extrema (apenas elementos muito alongados)
       if (image.image_base64) {
         try {
-          // Imagens reais de produtos tendem a ter proporções mais próximas de 1:1 ou 4:3
-          // Elementos decorativos como linhas, divisórias, logos são frequentemente muito 
-          // mais largos do que altos ou vice-versa
-          
-          // Se conseguirmos extrair dimensões do base64
-          const imgData = image.image_base64;
-          const dimensions = extractImageDimensionsFromBase64(imgData);
+          const dimensions = extractImageDimensionsFromBase64(image.image_base64);
           
           if (dimensions) {
             const { width, height } = dimensions;
-            
-            // Calcular proporção (aspect ratio)
             const aspectRatio = width / height;
             
-            // Elementos muito alongados (faixas, barras, linhas)
-            if (aspectRatio > 5 || aspectRatio < 0.2) {
-              console.log(`Ignorando imagem com proporção anormal (${aspectRatio.toFixed(2)}): ${image.image_filename || 'sem nome'}`);
+            // Apenas proporções realmente extremas (linhas horizontais/verticais)
+            if (aspectRatio > 10 || aspectRatio < 0.1) {
+              console.log(`Filtragem: Ignorando elemento decorativo (proporção ${aspectRatio.toFixed(2)}): ${filename}`);
               return false;
             }
           }
         } catch (e) {
-          // Ignorar erros nesta verificação
+          // Ignorar erros
         }
       }
       
-      // Se a imagem passou por todos os filtros, considerá-la válida
+      // Se chegou até aqui, considerar uma imagem de produto válida
+      console.log(`Filtragem: Mantendo imagem válida: ${filename}`);
       return true;
     } catch (error) {
-      console.error(`Erro ao filtrar imagem: ${error.message}`);
-      // Em caso de erro na filtragem, manter a imagem por padrão
+      console.error(`Erro na filtragem: ${error.message}`);
+      // Em caso de erro, manter a imagem
       return true;
     }
   });
+  
+  console.log(`Total de imagens após filtragem: ${filteredImages.length} (${filteredImages.length}/${images.length} = ${Math.round(filteredImages.length/images.length*100)}%)`);
+  return filteredImages;
 }
 
 export default {
