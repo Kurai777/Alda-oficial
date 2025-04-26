@@ -30,6 +30,7 @@ export interface IStorage {
   getProductsByUserId(userId: number | string, catalogId?: number): Promise<Product[]>;
   getProductsByCategory(userId: number | string, category: string): Promise<Product[]>;
   getProductsByCatalogId(catalogId: number): Promise<Product[]>; // Busca produtos por catalogId
+  getProductsByImageUrl(imageUrl: string): Promise<Product[]>; // Busca produtos que usam a mesma URL de imagem
   createProduct(product: InsertProduct): Promise<Product>;
   updateProduct(id: number, product: Partial<InsertProduct>): Promise<Product | undefined>;
   deleteProduct(id: number): Promise<boolean>;
@@ -294,6 +295,15 @@ export class MemStorage implements IStorage {
       (product) => product.catalogId === catalogId
     );
     console.log(`Encontrados ${productsFound.length} produtos para o catálogo ${catalogId}`);
+    return productsFound;
+  }
+  
+  async getProductsByImageUrl(imageUrl: string): Promise<Product[]> {
+    console.log(`Buscando produtos que usam a imagem: ${imageUrl}`);
+    const productsFound = Array.from(this.products.values()).filter(
+      (product) => product.imageUrl === imageUrl
+    );
+    console.log(`Encontrados ${productsFound.length} produtos que usam a mesma imagem`);
     return productsFound;
   }
 
@@ -701,6 +711,19 @@ export class DatabaseStorage implements IStorage {
       return result;
     } catch (error) {
       console.error('Error getting products by catalogId:', error);
+      return [];
+    }
+  }
+  
+  async getProductsByImageUrl(imageUrl: string): Promise<Product[]> {
+    try {
+      console.log(`DB: Buscando produtos que usam a imagem: ${imageUrl}`);
+      const result = await db.select().from(products)
+        .where(eq(products.imageUrl, imageUrl));
+      console.log(`DB: Encontrados ${result.length} produtos que usam a mesma imagem: ${imageUrl}`);
+      return result;
+    } catch (error) {
+      console.error('Error getting products by imageUrl:', error);
       return [];
     }
   }
