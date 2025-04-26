@@ -350,27 +350,61 @@ export async function detectExcelFormat(filePath) {
       (row.A.toString().includes('Sofá Home') || row.A.toString().includes('SOFA'))
     );
     
-    console.log("Verificando padrão de Sofá:", sofaHomePattern);
+    // Verificar se temos o cabeçalho específico do exemplo (Nome, Local, Forn., etc)
+    const hasExampleHeader = rawData.some(row => 
+      row.A && row.A.toString().trim() === 'Nome' && 
+      row.B && row.B.toString().trim() === 'Local'
+    );
     
-    // Se é formato POE, definir o mapeamento com base no tipo de dados
-    if (isPOEFormat) {
-      if (sofaHomePattern) {
-        console.log("Detectado formato específico Sofá/POE");
-        // Formato específico do Excel do Sofá
-        columnMappings.A = 'name';       // Nome (Sofá Home)
-        columnMappings.B = 'location';   // Local (2º Piso)
-        columnMappings.C = 'manufacturer'; // Fornecedor (Enobli)
-        columnMappings.F = 'code';       // Código (SLE00...)
-        columnMappings.G = 'description'; // Descrição
-        columnMappings.I = 'price';      // Coluna com valor (R$ 22.000)
-      } else {
-        // Formato POE padrão
-        columnMappings.B = 'code';
-        columnMappings.C = 'name';
-        columnMappings.D = 'category';
-        columnMappings.E = 'manufacturer';
-        columnMappings.F = 'price';
+    console.log("Verificando padrão de Sofá:", sofaHomePattern);
+    console.log("Verificando cabeçalho específico:", hasExampleHeader);
+    
+    // Primeiro tentar encontrar o cabeçalho específico
+    if (hasExampleHeader) {
+      // Encontrar a linha que contém 'Nome', 'Local', etc
+      let headerRowIndex = -1;
+      for (let i = 0; i < Math.min(10, rawData.length); i++) {
+        if (rawData[i].A && rawData[i].A.toString().trim() === 'Nome') {
+          headerRowIndex = i;
+          break;
+        }
       }
+      
+      if (headerRowIndex >= 0) {
+        console.log(`Encontrado cabeçalho específico na linha ${headerRowIndex}`);
+        headerInfo.headerRow = headerRowIndex;
+        formatInfo.startRow = headerRowIndex + 1;
+        
+        // Mapear manualmente baseado no cabeçalho específico exato do exemplo
+        columnMappings.A = 'name';         // Nome (Sofá Home)
+        columnMappings.B = 'location';     // Local (2º Piso)
+        columnMappings.C = 'manufacturer'; // Forn. (Enobli)
+        columnMappings.D = 'imageColumn';  // Imagem
+        columnMappings.E = 'quantity';     // Qtd.
+        columnMappings.F = 'code';         // Cod. (SLE033D)
+        columnMappings.G = 'description';  // Descrição (Sleep, Tecido 3R2...)
+        columnMappings.I = 'price';        // Valor Total (R$ 22.639,00)
+      }
+    }
+    // Se não encontrou o cabeçalho, mas tem padrão de Sofá Home
+    else if (sofaHomePattern) {
+      console.log("Detectado formato específico Sofá/POE");
+      // Formato específico do Excel do Sofá
+      columnMappings.A = 'name';         // Nome (Sofá Home)
+      columnMappings.B = 'location';     // Local (2º Piso)
+      columnMappings.C = 'manufacturer'; // Fornecedor (Enobli)
+      columnMappings.E = 'quantity';     // Qtd.
+      columnMappings.F = 'code';         // Código (SLE00...)
+      columnMappings.G = 'description';  // Descrição
+      columnMappings.I = 'price';        // Coluna com valor (R$ 22.000)
+    }
+    // Formato POE padrão
+    else if (isPOEFormat) {
+      columnMappings.B = 'code';
+      columnMappings.C = 'name';
+      columnMappings.D = 'category';
+      columnMappings.E = 'manufacturer';
+      columnMappings.F = 'price';
     }
     
     // Verificar se tem linha de cabeçalho específica com "Nome"

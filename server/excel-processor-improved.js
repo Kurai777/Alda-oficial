@@ -310,19 +310,50 @@ export async function processExcelFile(filePath, userId, catalogId) {
         }
       }
       
-      // Se o nome for identificado como "Sofá Home" ou semelhante,
-      // e temos um código ou descrição, podemos melhorar o nome
+      // Construir uma descrição mais completa se tivermos detalhes no estilo do exemplo
+      if (product.description) {
+        // Preservar a descrição original antes de qualquer modificação
+        const originalDescription = product.description;
+        
+        // Se a descrição for algo curto como apenas "Sleep"
+        if (product.description.trim().length < 10) {
+          // Procurar outras informações nas linhas para complementar a descrição
+          let additionalDescriptionCells = [];
+          
+          // Verificar se há células abaixo com informações de tecido, medidas ou outras especificações
+          for (let j = 1; j < 5; j++) {
+            const rowIndex = i + j;
+            if (rowIndex < rawData.length) {
+              const nextRow = rawData[rowIndex];
+              
+              // Se na mesma coluna da descrição tiver algum texto
+              if (nextRow.G && nextRow.G.toString().trim()) {
+                additionalDescriptionCells.push(nextRow.G.toString().trim());
+              }
+            }
+          }
+          
+          // Combinar todas as células adicionais
+          if (additionalDescriptionCells.length > 0) {
+            product.description = [originalDescription, ...additionalDescriptionCells].join('\n');
+          }
+        }
+      }
+      
+      // Se o nome for identificado como "Sofá Home" ou semelhante
       if (product.name && 
-          (product.name.includes('Sofá') || product.name.includes('Sofa')) && 
-          (product.description || product.code)) {
+          (product.name.includes('Sofá') || product.name.includes('Sofa'))) {
         
-        // Adicionar o tipo/modelo do sofá no nome
-        const descriptionParts = (product.description || '').split(/\s+/);
-        const firstWord = descriptionParts[0];
-        
-        if (firstWord && firstWord.length > 2) {
-          product.name = `${product.name} ${firstWord}`;
-        } else if (product.code) {
+        // Verificar se já temos um modelo específico como "Sofá Home Sleep" ou apenas "Sofá Home"
+        if (product.description && !product.name.includes(product.description.split('\n')[0])) {
+          // Adicionar o tipo/modelo do sofá no nome (a primeira linha da descrição)
+          const modelo = product.description.split('\n')[0].trim();
+          
+          if (modelo && modelo.length > 1) {
+            product.name = `${product.name} ${modelo}`;
+          }
+        } else if (product.code && !product.name.includes(product.code)) {
+          // Se não temos descrição, usar o código
           product.name = `${product.name} ${product.code}`;
         }
       }
