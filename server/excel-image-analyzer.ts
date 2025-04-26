@@ -277,26 +277,52 @@ export async function createUniqueImageCopy(
       };
     }
     
+    // Verificar se o arquivo de imagem existe
+    if (!await existsAsync(imagePath)) {
+      console.error(`Arquivo de imagem não encontrado: ${imagePath}`);
+      return {
+        success: false,
+        error: `Arquivo de imagem não encontrado: ${imagePath}`
+      };
+    }
+    
     // Criar diretório para armazenar imagens únicas
     const uniqueImagesDir = path.join(process.cwd(), 'uploads', 'unique_product_images');
     if (!await existsAsync(uniqueImagesDir)) {
       await mkdirAsync(uniqueImagesDir, { recursive: true });
     }
     
-    // Gerar nome único para o arquivo
+    // Extrair informações sobre o produto para criar um nome de arquivo verdadeiramente único
+    // Usamos código do produto, id, e um timestamp para garantir unicidade
+    const timestamp = Date.now();
     const uniqueId = generateUniqueImageId(product, imagePath);
     const uniqueImagePath = path.join(uniqueImagesDir, uniqueId);
+    
+    console.log(`Criando cópia exclusiva para o produto ${productId}:`);
+    console.log(`- Origem: ${imagePath}`);
+    console.log(`- Destino: ${uniqueImagePath}`);
     
     // Copiar a imagem
     await copyFileAsync(imagePath, uniqueImagePath);
     
-    // Criar URL para acesso à imagem
+    // Verificar se a cópia foi bem-sucedida
+    if (!await existsAsync(uniqueImagePath)) {
+      return {
+        success: false,
+        error: `Falha ao criar cópia do arquivo: ${uniqueImagePath}`
+      };
+    }
+    
+    // Criar URL para acesso à imagem (usando formato de URL compatível com o frontend)
     const userId = product.userId;
     const catalogId = product.catalogId;
-    const url = `https://mock-firebase-storage.com/${userId}/${catalogId}/${uniqueId}`;
+    // Incluímos um timestamp na URL para evitar problemas de cache
+    const url = `https://mock-firebase-storage.com/${userId}/${catalogId}/${uniqueId}?t=${timestamp}`;
     
     // Atualizar o produto com a nova URL
     await storage.updateProduct(productId, { imageUrl: url });
+    
+    console.log(`Produto ${productId} atualizado com nova URL de imagem: ${url}`);
     
     return {
       success: true,
@@ -308,7 +334,7 @@ export async function createUniqueImageCopy(
     console.error('Erro ao criar cópia exclusiva de imagem:', error);
     return {
       success: false,
-      error: error.message
+      error: error instanceof Error ? error.message : String(error)
     };
   }
 }
