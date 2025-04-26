@@ -1167,14 +1167,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
               }
             }
             else if (productsData.length === 0 && (isPOEFormat || fileName.toLowerCase().includes('poe'))) {
-              console.log("DETECTADO FORMATO POE - usando processador especializado para POE");
+              console.log("DETECTADO FORMATO POE - usando novo processador especializado para POE");
               
               try {
-                // Importar o novo processador específico para POE
-                const poeProcessor = await import('./poe-catalog-processor.js');
+                // Importar o novo processador aprimorado para POE que corrige os erros de mapeamento
+                const poeProcessor = await import('./poe-catalog-processor-new.js');
                 
-                console.log(`Iniciando processamento especializado para arquivo POE: ${filePath}`);
+                console.log(`Iniciando processamento especializado com o NOVO PROCESSADOR POE: ${filePath}`);
                 console.log(`Usuário ID: ${userId}, Catálogo ID: ${firestoreCatalogId}`);
+                console.log(`ATENÇÃO: Usando mapeamento EXPLÍCITO das colunas conforme solicitado:`);
+                console.log(`- Nome do Produto => Coluna G (Descrição)`);
+                console.log(`- Código do Produto => Coluna H (Código do Produto)`);
+                console.log(`- Preço => Coluna M (Valor Total)`);
                 
                 // Criar diretório temporário para imagens extraídas
                 const extractedImagesDir = path.join(path.dirname(filePath), 'extracted_images', path.basename(filePath, path.extname(filePath)));
