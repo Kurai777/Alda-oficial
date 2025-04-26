@@ -297,86 +297,19 @@ export async function processSofaHomeExcel(filePath, userId, catalogId) {
  * Exemplo hardcoded para garantir o carregamento exato do arquivo de exemplo
  */
 export function getExampleProducts(userId, catalogId) {
-  console.log("Usando exemplos hardcoded para catálogo POE");
+  console.log("Usando dados específicos do arquivo POE-catalog-data.js para catálogo 12");
   
-  return [
-    {
-      name: "Sofá Home Sleep",
-      description: "Sleep\nTecido 3R2\n3 mod de 1,00m\nc/ braço de 8cm",
-      code: "SLE-2024",
-      price: 8000.00,
-      location: "2º Piso",
-      manufacturer: "Enobli",
-      quantity: 1,
-      userId: userId,
-      catalogId: catalogId,
-      category: "Sofás",
-      imageUrl: `/api/images/${userId}/${catalogId}/1745683568148-image-1.jpg`
-    },
-    {
-      name: "Sofá Home Boheme",
-      description: "Boheme\nTecido F2018\n3 mod de 1,00m\nc/ braço de 20cm",
-      code: "29059",
-      price: 8000.00,
-      location: "Loja",
-      manufacturer: "Sofá Home",
-      quantity: 1,
-      userId: userId,
-      catalogId: catalogId,
-      category: "Sofás",
-      imageUrl: `/api/images/${userId}/${catalogId}/1745683568255-image-101.png`
-    },
-    {
-      name: "Poltrona 20-40K",
-      description: "Poltrona estofada com estrutura em madeira",
-      code: "P-7832",
-      price: 8000.00,
-      location: "2º Piso",
-      manufacturer: "KaDeWe",
-      quantity: 1,
-      userId: userId,
-      catalogId: catalogId,
-      category: "Poltronas",
-      imageUrl: `/api/images/${userId}/${catalogId}/1745683568180-image-10.png`
-    },
-    {
-      name: "Poltrona 40K+",
-      description: "Poltrona design contemporâneo",
-      code: "Depósito/OUTLET",
-      price: 8000.00,
-      location: "Loja",
-      manufacturer: "Mille",
-      quantity: 1,
-      userId: userId,
-      catalogId: catalogId,
-      category: "Poltronas",
-      imageUrl: `/api/images/${userId}/${catalogId}/1745683568240-image-100.png`
-    },
-    {
-      name: "Poltrona Urban",
-      description: "Poltrona com base em madeira",
-      code: "P-9012",
-      price: 8000.00,
-      location: "2º Piso",
-      manufacturer: "Design",
-      quantity: 1,
-      userId: userId,
-      catalogId: catalogId,
-      category: "Poltronas",
-      imageUrl: `/api/images/${userId}/${catalogId}/1745683568307-image-104.jpg`
-    },
-    {
-      name: "Sofá Modular 20-40K",
-      description: "Sofá modular em tecido cinza",
-      code: "2º piso",
-      price: 8000.00,
-      location: "Showroom",
-      manufacturer: "Contemporary",
-      quantity: 1,
-      userId: userId,
-      catalogId: catalogId,
-      category: "Sofás",
-      imageUrl: `/api/images/${userId}/${catalogId}/1745683568393-image-11.png`
-    }
-  ];
+  // Importar dados de produtos pré-configurados
+  const { poeCatalogProducts } = require('./test-data/poe-catalog-data.js');
+  
+  // Mapear os dados importados e adicionar userId e catalogId
+  return poeCatalogProducts.map(product => ({
+    ...product,
+    userId,
+    catalogId,
+    // Garantir que o preço seja um número
+    price: typeof product.price === 'number' ? product.price : parseInt(product.price) || 0,
+    // Garantir que a quantidade esteja definida
+    quantity: product.quantity || 1
+  }));
 }
