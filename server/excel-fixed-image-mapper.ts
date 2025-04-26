@@ -7,6 +7,8 @@
  * 1. Tentativa por código do produto (correspondência exata)
  * 2. Tentativa por posição da imagem (Y) considerando tolerância de ±1 linha
  * 3. Tentativa por texto alternativo ou nome do arquivo de imagem
+ * 4. Suporte específico para formato POE com cabeçalhos alfabéticos (A, B, C...)
+ *    - Mapeamento direto da coluna F (imagem) para produtos pela linha
  */
 
 import * as fs from 'fs';

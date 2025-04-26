@@ -241,11 +241,24 @@ export async function processExcelFile(filePath: string, userId?: string | numbe
         console.log(`Processando planilha: ${sheetName}`);
         const worksheet = workbook.Sheets[sheetName];
         
-        // Converter para JSON com opções específicas
+        // Converter para JSON com opções específicas, preservando os números de linha
+        // para que possamos associar corretamente produtos a imagens
         const rawData = XLSX.utils.sheet_to_json(worksheet, {
-          defval: null,   // Valor padrão para células vazias
-          raw: true       // Manter valores brutos
+          defval: null,      // Valor padrão para células vazias
+          raw: true,         // Manter valores brutos
+          header: 'A'        // Usar cabeçalhos alfabéticos para preservar estrutura original
         });
+          
+        // Adicionar número da linha em cada registro para uso futuro no mapeamento de imagens
+        // Percorrer cada objeto no rawData e adicionar a propriedade _excelRowNum
+        // Os índices em rawData são baseados em zero, mas as linhas do Excel começam em 1
+        // Também precisamos considerar que a primeira linha geralmente é o cabeçalho
+        for (let i = 0; i < rawData.length; i++) {
+          if (rawData[i]) {
+            // A linha real no Excel é o índice + 2 (índice base 0 + 1 para linha de cabeçalho + 1)
+            rawData[i]._excelRowNum = i + 2;
+          }
+        }
         
         console.log(`Extraídos ${rawData.length} registros brutos da planilha ${sheetName}`);
         
