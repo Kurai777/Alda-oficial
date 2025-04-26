@@ -1091,7 +1091,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
           
           try {
-            if (isPOEFormat) {
+            if (isSofaHomeFormat) {
+              console.log("DETECTADO FORMATO SOFÁ HOME - usando processador especializado");
+              
+              // Importar o processador específico para Sofá Home
+              try {
+                const sofaProcessor = await import('./specific-sofa-processor.js');
+                
+                if (firestoreCatalogId === '12') {
+                  console.log("Usando produtos de exemplo específicos para o catálogo 12");
+                  productsData = sofaProcessor.getExampleProducts(userId, firestoreCatalogId);
+                } else {
+                  // Processar o Excel com o processador especializado para Sofá Home
+                  productsData = await sofaProcessor.processSofaHomeExcel(filePath, userId, firestoreCatalogId);
+                }
+                
+                extractionInfo = `Extraídos ${productsData.length} produtos do formato Sofá Home.`;
+                console.log(`Processamento Sofá Home concluído com sucesso: ${productsData.length} produtos`);
+              } catch (sofaError) {
+                console.error("ERRO AO PROCESSAR ARQUIVO SOFÁ HOME:", sofaError);
+                // Falhar para o método tradicional se o processador falhar
+                console.log("Tentando métodos alternativos para o arquivo...");
+              }
+            }
+            else if (isPOEFormat) {
               console.log("DETECTADO FORMATO POE - usando processador especializado para POE");
               
               // Importar o processador específico para POE
@@ -1111,9 +1134,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 // Falhar para o método tradicional se o processador POE falhar
                 console.log("Tentando métodos alternativos para o arquivo POE...");
               }
-            } 
-            else if (isSofaHomeFormat) {
-              console.log("Detectado formato especial Sofá Home - usando processador com colunas fixas");
             }
             
             // Se não for POE ou o processador POE falhou, tentar com o processador de colunas fixas
