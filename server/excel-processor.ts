@@ -18,6 +18,19 @@ const COLUMN_MAPPINGS = {
   // Mapeamento para planilha Sofá Home/POE
   SOFA_HOME: {
     0: "code", // Primeira coluna como código
+    
+  // Mapeamento especial para planilha POE com cabeçalhos A, B, C, etc.
+  POE_FORMAT: {
+    0: "category",    // Coluna A: Categoria (Sofá Home, Cadeiras, etc)
+    1: "location",    // Coluna B: Localização (2º Piso, Depósito, etc)
+    2: "supplier",    // Coluna C: Fornecedor (BM, HA, etc)
+    5: "image",       // Coluna F: Imagem do produto
+    6: "quantity",    // Coluna G: Quantidade (geralmente "1")
+    7: "code",        // Coluna H: Código do produto
+    8: "description", // Coluna I: Descrição detalhada
+    9: "date",        // Coluna J: Data (formato "maio/24")
+    10: "price",      // Coluna K: Preço (formato "R$12.345,00")
+  },
     1: "name", // Segunda coluna como nome
     2: "location", // Terceira coluna como localização
     3: "supplier", // Quarta coluna como fornecedor
@@ -89,7 +102,24 @@ function detectColumnMapping(rawData: any[], fileName: string): Record<number, s
   // Verificar se o arquivo corresponde a algum formato conhecido pelo nome
   const fileLower = fileName.toLowerCase();
   
-  // Para Sofá Home/POE
+  // Para o formato POE com padrão A, B, C, etc.
+  // Verificar se a primeira linha contém letras maiúsculas isoladas como A, B, C...
+  if (rawData.length > 0) {
+    const firstRow = rawData[0];
+    const keys = Object.keys(firstRow);
+    
+    // Contar quantas colunas têm apenas uma letra maiúscula como cabeçalho
+    const singleLetterHeaders = keys.filter(k => /^[A-Z]$/.test(k));
+    
+    // Se temos várias colunas com cabeçalhos A, B, C, etc., estamos no formato POE alfabético
+    if (singleLetterHeaders.length >= 5) {
+      console.log(`Detectado formato POE com cabeçalhos alfabéticos: ${singleLetterHeaders.join(', ')}`);
+      // Usar o mapeamento específico para o formato POE com cabeçalhos A, B, C, etc.
+      return COLUMN_MAPPINGS.POE_FORMAT;
+    }
+  }
+  
+  // Para Sofá Home/POE tradicional
   if (fileLower.includes('sofa') || fileLower.includes('poe')) {
     return COLUMN_MAPPINGS.SOFA_HOME;
   }
@@ -107,6 +137,15 @@ function detectColumnMapping(rawData: any[], fileName: string): Record<number, s
     
     if (hasSupplierKey && hasCodeKey && hasImageKey) {
       return COLUMN_MAPPINGS.SOFA_HOME;
+    }
+    
+    // Verificação adicional para o formato POE
+    // Se temos cabeçalhos com numeração seguindo um padrão específico do POE
+    const isPOESheet = keys.some(k => k.includes('POE')) || fileName.includes('POE');
+    if (isPOESheet) {
+      console.log("Detectado formato POE pelo nome do arquivo ou cabeçalhos");
+      // Podemos ter valores numéricos nas colunas H e K que são código e preço
+      return COLUMN_MAPPINGS.POE_FORMAT;
     }
   }
   
@@ -662,47 +701,135 @@ function normalizeExcelProducts(rawProducts: ExcelProduct[], userId?: string | n
       let price = 0;
       
       if (isSofaHomeOrPOEFormat) {
-        console.log("Usando processamento específico para catálogo Sofá Home/POE");
+        // Verificar se estamos no formato POE com cabeçalhos A, B, C...
+        const isPOEAlphabeticalFormat = Object.keys(rawProduct).some(k => /^[A-Z]$/.test(k));
         
-        // Para este formato específico do Sofá Home/POE, vamos extrair as informações de forma direcionada
-        
-        // 1. Extrair nome do produto (Sofá Home)
-        if (nameColumnKey && rawProduct[nameColumnKey]) {
-          productName = String(rawProduct[nameColumnKey]).trim();
-        }
-        
-        // 2. Extrair código do produto
-        if (codeColumnKey && rawProduct[codeColumnKey]) {
-          productCode = String(rawProduct[codeColumnKey]).trim();
-        }
-        
-        // 3. Extrair descrição
-        if (descriptionColumnKey && rawProduct[descriptionColumnKey]) {
-          description = String(rawProduct[descriptionColumnKey]).trim();
-        }
-        
-        // 4. Extrair preço - tratando corretamente no formato brasileiro (R$ 2.893,00)
-        if (priceColumnKey && rawProduct[priceColumnKey]) {
-          const rawPriceVal = rawProduct[priceColumnKey];
+        if (isPOEAlphabeticalFormat) {
+          console.log("Usando processamento específico para catálogo POE com cabeçalhos alfabéticos");
           
-          if (typeof rawPriceVal === 'number') {
-            price = Math.round(rawPriceVal * 100); // converter para centavos
-          } else if (typeof rawPriceVal === 'string') {
-            // Limpar a string de preço (remover R$, espaços, etc)
-            let cleanPrice = rawPriceVal.replace(/[^\d,.]/g, '');
+          // Mapear colunas no formato POE:
+          // Coluna A: Categoria (Sofá Home, Cadeiras, etc) - campo 'category'
+          // Coluna B: Localização (2º Piso, Depósito, etc) - campo 'location'
+          // Coluna C: Fornecedor (BM, HA, etc) - campo 'supplier'
+          // Coluna H: Código do produto - campo 'code'
+          // Coluna I: Descrição detalhada - campo 'description'
+          // Coluna K: Preço - campo 'price'
+          
+          // 1. Extrair categoria e fornecedor para campos auxiliares
+          const category = rawProduct['A'] ? String(rawProduct['A']).trim() : '';
+          const location = rawProduct['B'] ? String(rawProduct['B']).trim() : '';
+          const supplier = rawProduct['C'] ? String(rawProduct['C']).trim() : '';
+          
+          // 2. Extrair código do produto (Coluna H)
+          if (rawProduct['H']) {
+            productCode = String(rawProduct['H']).trim();
+          }
+          
+          // 3. Extrair descrição (Coluna I)
+          if (rawProduct['I']) {
+            description = String(rawProduct['I']).trim();
             
-            // Para valores como R$ 2.893,00, remover os pontos de milhar e substituir a vírgula por ponto
-            if (cleanPrice.includes('.') && cleanPrice.includes(',')) {
-              cleanPrice = cleanPrice.replace(/\./g, '').replace(',', '.');
-            } else if (cleanPrice.includes(',')) {
-              cleanPrice = cleanPrice.replace(',', '.');
+            // 4. Extrair nome do produto da descrição, se tiver
+            // Verificar se a descrição tem termos como "Sofá", "Poltrona", "Mesa", etc.
+            const productTerms = ['Sofá', 'Sofa', 'Poltrona', 'Mesa', 'Cadeira', 'Aparador', 'Rack', 'Banco', 'Puff'];
+            let extractedName = '';
+            
+            // Verificar se a descrição começa com algum termo de produto
+            for (const term of productTerms) {
+              if (description.startsWith(term)) {
+                // Extrair a primeira linha ou até 50 caracteres como nome
+                const endOfName = Math.min(description.indexOf('\n') > 0 ? description.indexOf('\n') : 50, description.length);
+                extractedName = description.substring(0, endOfName).trim();
+                break;
+              }
             }
+            
+            // Se não encontrou um nome pelo início da descrição, tentar extrair o primeiro termo
+            if (!extractedName && description.length > 0) {
+              // Extrair as primeiras palavras como nome (até 8 palavras)
+              const words = description.split(/\s+/);
+              extractedName = words.slice(0, Math.min(8, words.length)).join(' ');
+            }
+            
+            // Usado o nome extraído
+            if (extractedName) {
+              productName = extractedName;
+            }
+            // Fallback: usar combinação de categoria e fornecedor
+            else if (category || supplier) {
+              productName = [category, supplier].filter(Boolean).join(' - ');
+            }
+          }
+          
+          // 5. Extrair preço (Coluna K) - tratando corretamente no formato brasileiro (R$ 2.893,00)
+          if (rawProduct['K']) {
+            const rawPriceVal = rawProduct['K'];
+            
+            if (typeof rawPriceVal === 'number') {
+              price = Math.round(rawPriceVal * 100); // converter para centavos
+            } else if (typeof rawPriceVal === 'string') {
+              // Limpar a string de preço (remover R$, espaços, etc)
+              let cleanPrice = rawPriceVal.replace(/[^\d,.]/g, '');
               
-            // Converter para número
-            const numericPrice = parseFloat(cleanPrice);
-            if (!isNaN(numericPrice)) {
-              price = Math.round(numericPrice * 100);
-              console.log(`Preço convertido: "${rawPriceVal}" => ${numericPrice} => ${price} centavos`);
+              // Para valores como R$ 2.893,00, remover os pontos de milhar e substituir a vírgula por ponto
+              if (cleanPrice.includes('.') && cleanPrice.includes(',')) {
+                cleanPrice = cleanPrice.replace(/\./g, '').replace(',', '.');
+              } else if (cleanPrice.includes(',')) {
+                cleanPrice = cleanPrice.replace(',', '.');
+              }
+                
+              // Converter para número
+              const numericPrice = parseFloat(cleanPrice);
+              if (!isNaN(numericPrice)) {
+                price = Math.round(numericPrice * 100);
+                console.log(`Preço convertido: "${rawPriceVal}" => ${numericPrice} => ${price} centavos`);
+              }
+            }
+          }
+        }
+        else {
+          console.log("Usando processamento específico para catálogo Sofá Home/POE tradicional");
+          
+          // Para este formato específico do Sofá Home/POE tradicional
+          
+          // 1. Extrair nome do produto (Sofá Home)
+          if (nameColumnKey && rawProduct[nameColumnKey]) {
+            productName = String(rawProduct[nameColumnKey]).trim();
+          }
+          
+          // 2. Extrair código do produto
+          if (codeColumnKey && rawProduct[codeColumnKey]) {
+            productCode = String(rawProduct[codeColumnKey]).trim();
+          }
+          
+          // 3. Extrair descrição
+          if (descriptionColumnKey && rawProduct[descriptionColumnKey]) {
+            description = String(rawProduct[descriptionColumnKey]).trim();
+          }
+          
+          // 4. Extrair preço - tratando corretamente no formato brasileiro (R$ 2.893,00)
+          if (priceColumnKey && rawProduct[priceColumnKey]) {
+            const rawPriceVal = rawProduct[priceColumnKey];
+            
+            if (typeof rawPriceVal === 'number') {
+              price = Math.round(rawPriceVal * 100); // converter para centavos
+            } else if (typeof rawPriceVal === 'string') {
+              // Limpar a string de preço (remover R$, espaços, etc)
+              let cleanPrice = rawPriceVal.replace(/[^\d,.]/g, '');
+              
+              // Para valores como R$ 2.893,00, remover os pontos de milhar e substituir a vírgula por ponto
+              if (cleanPrice.includes('.') && cleanPrice.includes(',')) {
+                cleanPrice = cleanPrice.replace(/\./g, '').replace(',', '.');
+              } else if (cleanPrice.includes(',')) {
+                cleanPrice = cleanPrice.replace(',', '.');
+              }
+                
+              // Converter para número
+              const numericPrice = parseFloat(cleanPrice);
+              if (!isNaN(numericPrice)) {
+                price = Math.round(numericPrice * 100);
+                console.log(`Preço convertido: "${rawPriceVal}" => ${numericPrice} => ${price} centavos`);
+              }
             }
           }
         }
