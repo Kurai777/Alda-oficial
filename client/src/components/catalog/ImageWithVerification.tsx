@@ -199,12 +199,25 @@ export default function ImageWithVerification({
   // Renderização da imagem
   // Adicionar cache busting à URL da imagem se necessário
   let finalImageUrl = imageUrl;
-  if (forceCacheBusting && imageUrl) {
-    // Adicionar ou atualizar parâmetro de timestamp para evitar cache do navegador
-    finalImageUrl = imageUrl.includes('?') 
-      ? `${imageUrl}&t=${Date.now()}` 
-      : `${imageUrl}?t=${Date.now()}`;
+  
+  // Verifica se a URL é relativa e não tem protocolo (http://, https://)
+  if (imageUrl && !imageUrl.startsWith('http') && !imageUrl.startsWith('data:')) {
+    // Garante que a URL começa com / para caminhos absolutos no servidor
+    finalImageUrl = imageUrl.startsWith('/') ? imageUrl : `/${imageUrl}`;
+    
+    // Remova possíveis duplas barras, como //uploads
+    finalImageUrl = finalImageUrl.replace('//', '/');
   }
+  
+  // Adiciona cache busting
+  if (forceCacheBusting && finalImageUrl) {
+    // Adicionar ou atualizar parâmetro de timestamp para evitar cache do navegador
+    finalImageUrl = finalImageUrl.includes('?') 
+      ? `${finalImageUrl}&t=${Date.now()}` 
+      : `${finalImageUrl}?t=${Date.now()}`;
+  }
+  
+  console.log(`Carregando imagem para produto ${productId}: ${finalImageUrl}`);
   
   return (
     <div className={`relative ${className}`}>
