@@ -24,29 +24,49 @@ function extractPOEPrice(priceStr) {
     // Log para diagnóstico detalhado
     console.log(`Extraindo preço POE (bruto): "${priceString}"`);
     
-    // Remover símbolos de moeda (R$, $, etc.)
+    // Se a string contém apenas 0, 0.00, ou algo similar, retornar 0 imediatamente
+    if (/^0([.,]0{1,2})?$/.test(priceString) || 
+        priceString === "" || 
+        priceString === "-" ||
+        priceString.toLowerCase() === "r$0,00" ||
+        priceString.toLowerCase() === "r$0.00") {
+      console.log("Preço zero detectado diretamente, retornando 0");
+      return 0;
+    }
+    
+    // Remover símbolos de moeda (R$, $, etc.) e espaços
     let sanitized = priceString.replace(/R\$|\$|\€|\£/g, "").trim();
     
-    // Remover espaços e caracteres não numéricos (exceto ponto e vírgula)
+    // Remover caracteres não numéricos (exceto ponto e vírgula)
     sanitized = sanitized.replace(/\s/g, "").replace(/[^\d.,]/g, "");
     
     console.log(`Após limpeza básica: "${sanitized}"`);
     
-    // Substituir pontos de milhar, preservando a vírgula decimal
-    // Formato brasileiro: 1.234,56 -> 1234.56
-    if (sanitized.includes(',')) {
-      // Se tem vírgula, assumimos formato brasileiro
-      sanitized = sanitized.replace(/\./g, ""); // Remove pontos de milhar
-      sanitized = sanitized.replace(',', '.'); // Substitui vírgula por ponto para cálculo
+    // Detectar o formato brasileiro (1.234,56) vs internacional (1,234.56)
+    const isBrazilianFormat = sanitized.includes(',') && 
+                            (sanitized.indexOf(',') > sanitized.indexOf('.') || !sanitized.includes('.'));
+    
+    if (isBrazilianFormat) {
+      // Formato brasileiro: remover pontos de milhar, substituir vírgula por ponto
+      sanitized = sanitized.replace(/\./g, "");
+      sanitized = sanitized.replace(',', '.');
+    } else if (sanitized.includes(',') && !sanitized.includes('.')) {
+      // Caso especial: número apenas com vírgula (ex: "1,5")
+      sanitized = sanitized.replace(',', '.');
     }
     
-    console.log(`Após tratamento formato: "${sanitized}"`);
+    console.log(`Após normalização de formato: "${sanitized}"`);
     
     // Tentar converter para número
     const value = parseFloat(sanitized);
     
     if (isNaN(value)) {
       console.log(`Não foi possível extrair um valor numérico de "${priceString}"`);
+      return 0;
+    }
+    
+    // Se o valor é zero, retornar zero diretamente
+    if (value === 0) {
       return 0;
     }
     
@@ -111,21 +131,20 @@ export async function processPOECatalog(filePath, userId, catalogId) {
       console.log("Nenhum cabeçalho explícito encontrado, usando primeira linha como referência");
     }
     
-    // Mapeamento exato baseado no arquivo Excel POE real
-    // Este mapeamento é baseado na estrutura mostrada na imagem do Excel POE
+    // Mapeamento atualizado baseado no formato real do arquivo Excel
+    // Este mapeamento foi ajustado conforme solicitação do cliente
     const columnMapping = {
-      // COLUNAS DO EXCEL POE
-      A: 'internalName',  // Coluna A: Nome interno como "Sofá Home"
+      // COLUNAS ATUALIZADAS DO EXCEL POE
+      A: 'itemCode',      // Coluna A: Número do item (ex: "20-40k", "1-5k")
       B: 'location',      // Coluna B: "Local" - como "2°Piso", "Depósito/OUTLET", etc.
-      C: 'form',          // Coluna C: "Form." - como "Enobli", "LL", "AC"
+      C: 'manufacturer',  // Coluna C: Fabricante ou modelo (ex: "Boheme", "OXY")
       D: 'imageRef',      // Coluna D: "Imagem" - referência/imagem embutida
       E: 'quantity',      // Coluna E: "Qtd" - quantidade
-      F: 'code',          // Coluna F: "Cód." - código do produto como "SLEEP2313"
-      G: 'description',   // Coluna G: "Descrição" - descrição completa com detalhes técnicos
-      H: 'date',          // Coluna H: "Data Showroom" - como "maio/24"
-      I: 'unitPrice',     // Coluna I: "Valor Unitário" - preço unitário
-      J: 'totalPrice',    // Coluna J: "Valor Total" - preço total (principal)
-      K: 'discount'       // Coluna K: "Promo" - desconto como "0,00%"
+      F: 'internalName',  // Coluna F: Nome interno (será usado como code)
+      G: 'description',   // Coluna G: Descrição completa (será usada como nome do produto)
+      H: 'code',          // Coluna H: Código do produto
+      L: 'totalPrice',    // Coluna L: Valor Total (preço final)
+      M: 'totalPrice2'    // Coluna M: Valor Total alternativo (caso L esteja vazio)
     };
     
     // Processar os dados convertendo para formato padrão de produto
@@ -147,8 +166,32 @@ export async function processPOECatalog(filePath, userId, catalogId) {
       // Pular linhas completamente vazias
       if (!hasData) continue;
       
-      // Verificar se é uma linha de produto (deve ter código ou nome)
-      if (!row.F && !row.A) continue;
+      // Verificar se é uma linha válida de produto - pular linhas de cabeçalho, título, etc
+      // Condições para uma linha válida:
+      // 1. Ter uma descrição significativa (G)
+      // 2. Ter um código de produto (H ou F)
+      // 3. Não conter textos que indicam cabeçalho como "DESCRIÇÃO", "LOCAL", "TOTAL", etc.
+      
+      // Verificar por textos que indicam cabeçalho
+      const possibleHeaderTexts = ["descrição", "local", "valor total", "forn", "código", "qtd"];
+      const isHeaderRow = Object.values(row).some(val => {
+        if (!val) return false;
+        const valText = val.toString().toLowerCase().trim();
+        return possibleHeaderTexts.some(header => valText === header || valText.includes(header));
+      });
+      
+      if (isHeaderRow) {
+        console.log(`Linha ${i+1} parece ser um cabeçalho - ignorando`);
+        continue;
+      }
+      
+      // Verificar se a linha tem dados significativos (código ou descrição)
+      if ((!row.G || row.G.toString().trim().length < 2) && 
+          (!row.H || row.H.toString().trim().length < 2) && 
+          (!row.F || row.F.toString().trim().length < 2)) {
+        console.log(`Linha ${i+1} sem dados significativos - ignorando`);
+        continue;
+      }
       
       // Inicializar produto
       const product = {
@@ -159,26 +202,52 @@ export async function processPOECatalog(filePath, userId, catalogId) {
         
         // Valores padrão
         price: 0,
-        quantity: 1
+        quantity: 1,
+        materials: []
       };
       
-      // Extrair dados baseado no mapeamento de colunas
-      // Logging para analisar cada linha de produto
+      // Extrair dados baseado no mapeamento de colunas atualizado
       console.log(`Processando linha ${i+1} do catálogo POE:`, JSON.stringify(row));
 
-      // Nome interno do produto (Sofá Home, etc) - Coluna A
+      // Código do item (geralmente um código numérico) - Coluna A
       if (row.A) {
-        product.internalName = row.A.toString().trim();
+        const itemCodeText = row.A.toString().trim();
+        // Este é o identificador numérico do item
+        product.itemCode = itemCodeText;
+        
+        // Definir uma categoria com base no itemCode se possível
+        if (itemCodeText.toLowerCase().includes('sofa') || 
+            itemCodeText.toLowerCase().includes('sofá')) {
+          product.category = 'Sofás';
+        } else if (itemCodeText.toLowerCase().includes('mesa')) {
+          product.category = 'Mesas';
+        } else if (itemCodeText.toLowerCase().includes('poltrona')) {
+          product.category = 'Poltronas';
+        } else if (itemCodeText.toLowerCase().includes('cadeira')) {
+          product.category = 'Cadeiras';
+        }
       }
       
-      // Localização do produto (2°Piso, Depósito/OUTLET, etc) - Coluna B
+      // Localização do produto - Coluna B
       if (row.B) {
         product.location = row.B.toString().trim();
       }
       
-      // Forma/material (Enobli, LL, AC, etc) - Coluna C
+      // Fabricante/Modelo - Coluna C
       if (row.C) {
-        product.form = row.C.toString().trim();
+        product.manufacturer = row.C.toString().trim();
+        
+        // Se não temos categoria ainda, tentar extrair do fabricante
+        if (!product.category) {
+          const mfrText = product.manufacturer.toLowerCase();
+          if (mfrText === 'boheme' || mfrText === 'oxy' || mfrText === 'dalio') {
+            product.category = 'Sofás';
+          } else if (mfrText.includes('chair') || mfrText.includes('cadeira')) {
+            product.category = 'Cadeiras';
+          } else if (mfrText.includes('mesa') || mfrText.includes('table')) {
+            product.category = 'Mesas';
+          }
+        }
       }
       
       // Quantidade - Coluna E
@@ -186,83 +255,127 @@ export async function processPOECatalog(filePath, userId, catalogId) {
         product.quantity = parseInt(row.E);
       }
       
-      // Código do produto (SLEEP2313, etc) - Coluna F
+      // Nome interno - Coluna F - será usado como prefixo para o nome
+      let internalName = '';
       if (row.F) {
-        product.code = row.F.toString().trim();
+        internalName = row.F.toString().trim();
+        product.internalName = internalName;
       }
       
-      // Descrição completa - Coluna G
+      // Descrição - Coluna G - será usado como NOME DO PRODUTO
       if (row.G) {
-        product.description = row.G.toString().trim();
+        const descriptionText = row.G.toString().trim();
+        product.description = descriptionText;
         
-        // Extrair mais informações da descrição para detalhamento
-        const descLines = product.description.split('\\n').join('\n').split('\n');
-        
-        if (descLines.length > 0) {
-          // O primeiro item da descrição geralmente é o modelo/tipo específico
-          product.model = descLines[0].trim();
+        // Extrair dimensões e materiais da descrição se possível
+        if (descriptionText) {
+          const descLines = descriptionText.split('\\n').join('\n').split('\n');
           
-          // Verificar profundidade em uma das linhas
-          const depthLine = descLines.find(line => 
-            line.toLowerCase().includes('profundidade') || 
-            line.toLowerCase().includes('aberto')
+          // Extrair dimensões
+          const dimensionLine = descLines.find(line => 
+            line.toLowerCase().includes('cm') || 
+            line.toLowerCase().includes('larg') || 
+            line.toLowerCase().includes('alt') || 
+            line.toLowerCase().includes('prof')
           );
           
-          if (depthLine) {
-            product.dimensions = depthLine.trim();
+          if (dimensionLine) {
+            // Tentar extrair dimensões específicas
+            const dimensions = [];
+            let width, height, depth;
+            
+            // Buscar por padrões como "L 80 x A 90 x P 70"
+            const dimensionMatch = dimensionLine.match(/L\s*(\d+).*?A\s*(\d+).*?P\s*(\d+)/i);
+            if (dimensionMatch) {
+              width = parseInt(dimensionMatch[1]);
+              height = parseInt(dimensionMatch[2]);
+              depth = parseInt(dimensionMatch[3]);
+            } else {
+              // Tentar extrair números individuais
+              const numbers = dimensionLine.match(/\d+/g);
+              if (numbers && numbers.length >= 3) {
+                width = parseInt(numbers[0]);
+                height = parseInt(numbers[1]);
+                depth = parseInt(numbers[2]);
+              }
+            }
+            
+            if (width && height && depth) {
+              product.sizes = [{
+                width: width,
+                height: height,
+                depth: depth,
+                label: "Dimensões (cm)"
+              }];
+            }
           }
           
-          // Verificar material/tecido em uma das linhas
-          const materialLine = descLines.find(line => 
-            line.toLowerCase().includes('tecido') || 
-            line.toLowerCase().includes('couro')
-          );
+          // Extrair materiais
+          const materials = [];
           
-          if (materialLine) {
-            // Extrair materiais e adicionar como array
-            const materials = [];
-            const materialText = materialLine.trim();
-            
-            // Adicionar o material bruto como primeiro item
-            materials.push(materialText);
-            
-            // Tentar extrair materiais específicos
-            if (materialText.toLowerCase().includes('tecido')) {
-              materials.push('Tecido');
-            }
-            if (materialText.toLowerCase().includes('couro')) {
-              materials.push('Couro');
-            }
-            if (materialText.toLowerCase().includes('veludo')) {
-              materials.push('Veludo');
-            }
-            if (materialText.toLowerCase().includes('linho')) {
-              materials.push('Linho');
-            }
-            if (materialText.toLowerCase().includes('algodão')) {
-              materials.push('Algodão');
-            }
-            
-            // Remover duplicatas e adicionar ao produto
-            product.materials = [...new Set(materials)];
+          // Verificar cada linha por materiais comuns
+          descLines.forEach(line => {
+            const lineText = line.toLowerCase();
+            if (lineText.includes('tecido')) materials.push('Tecido');
+            if (lineText.includes('couro')) materials.push('Couro');
+            if (lineText.includes('veludo')) materials.push('Veludo');
+            if (lineText.includes('algodão') || lineText.includes('algodao')) materials.push('Algodão');
+            if (lineText.includes('linho')) materials.push('Linho');
+            if (lineText.includes('madeira')) materials.push('Madeira');
+            if (lineText.includes('metal')) materials.push('Metal');
+            if (lineText.includes('vidro')) materials.push('Vidro');
+            if (lineText.includes('mármore') || lineText.includes('marmore')) materials.push('Mármore');
+          });
+          
+          if (materials.length > 0) {
+            product.materials = [...new Set(materials)]; // Remover duplicatas
           }
         }
       }
       
-      // Data do showroom
-      if (row.I) {
-        product.date = row.I.toString().trim();
+      // CÓDIGO DO PRODUTO - Coluna H - ESTE É O CÓDIGO PRINCIPAL
+      if (row.H) {
+        product.code = row.H.toString().trim();
+      } else if (row.F) {
+        // Se não tem na coluna H, usar F como fallback
+        product.code = row.F.toString().trim();
+      } else if (row.A) {
+        // Último recurso: usar coluna A
+        product.code = row.A.toString().trim();
+      } else {
+        // Gerar código único
+        product.code = `ITEM-${i}-${Date.now()}`;
       }
       
-      // Preço - Coluna J (Valor Total)
-      if (row.J) {
+      // Verificar preço na coluna L (principal) ou M (alternativa)
+      // Primeiro tentar L
+      if (row.L) {
+        const priceString = row.L.toString().trim();
+        if (priceString) {
+          const extractedPrice = extractPOEPrice(priceString);
+          console.log(`Extraindo preço de L: "${priceString}": ${extractedPrice}`);
+          product.price = !isNaN(extractedPrice) ? extractedPrice : 0;
+        }
+      }
+      
+      // Se preço ainda for 0, tentar coluna M
+      if (product.price === 0 && row.M) {
+        const priceString = row.M.toString().trim();
+        if (priceString) {
+          const extractedPrice = extractPOEPrice(priceString);
+          console.log(`Extraindo preço de M: "${priceString}": ${extractedPrice}`);
+          product.price = !isNaN(extractedPrice) ? extractedPrice : 0;
+        }
+      }
+      
+      // Verificar se temos um valor em J como último recurso
+      if (product.price === 0 && row.J) {
         const priceString = row.J.toString().trim();
-        const extractedPrice = extractPOEPrice(priceString);
-        
-        // Fazer log do processo de extração do preço para debugging
-        console.log(`Extraindo preço de "${priceString}": ${extractedPrice}`);
-        
-        product.price = !isNaN(extractedPrice) ? extractedPrice : 0;
+        if (priceString) {
+          const extractedPrice = extractPOEPrice(priceString);
+          console.log(`Extraindo preço de J: "${priceString}": ${extractedPrice}`);
+          product.price = !isNaN(extractedPrice) ? extractedPrice : 0;
+        }
       }
       
       // Desconto - Coluna K (Promo)
@@ -277,46 +390,54 @@ export async function processPOECatalog(filePath, userId, catalogId) {
       }
       
       // Construir nome do produto usando a descrição como base principal
-      // Formato prioritário: [descrição] ou [model] ou [internalName + code]
-      // Exemplo ideal: "Sleep Tecido 262" ou "Sofá Home Sleep - 2°Piso - Enobli" 
+      // A coluna G (description) deve ser a fonte principal do nome
       let productName = "";
       
-      // Prioridade 1: Usar a primeira linha da descrição como nome principal
-      if (product.model) {
-        productName = product.model;
-      } 
-      // Prioridade 2: Usar o nome interno
-      else if (product.internalName) {
-        productName = product.internalName;
-        
-        // Adicionar código se disponível e não incluso
-        if (product.code && !productName.toLowerCase().includes(product.code.toLowerCase())) {
-          productName += " " + product.code;
+      // PRIORIDADE 1: Usar a descrição como nome principal se estiver disponível
+      if (product.description) {
+        // Extrair a primeira linha da descrição como nome
+        const firstLine = product.description.split('\n')[0].trim();
+        if (firstLine.length > 3) {
+          productName = firstLine;
         }
-      } 
-      // Prioridade 3: Usar apenas o código
+      }
+      // PRIORIDADE 2: Usar código do item + local + fabricante
+      else if (product.itemCode) {
+        productName = product.itemCode;
+        
+        // Adicionar localização se disponível
+        if (product.location) {
+          productName += " - " + product.location;
+        }
+        
+        // Adicionar fabricante se disponível
+        if (product.manufacturer && 
+            !productName.toLowerCase().includes(product.manufacturer.toLowerCase())) {
+          productName += " - " + product.manufacturer;
+        }
+      }
+      // PRIORIDADE 3: Usar o código "normal" do produto
       else if (product.code) {
-        productName = "Produto " + product.code;
-      } 
-      // Fallback
+        productName = product.code;
+      }
+      // FALLBACK: Usar um nome genérico
       else {
-        productName = "Item linha " + (i + 1);
+        productName = "Item " + (i + 1);
       }
       
-      // Adicionar localização e forma se relevantes e não inclusos
-      // Apenas se não forem genéricos demais
-      if (product.location && 
-          !productName.toLowerCase().includes(product.location.toLowerCase()) &&
-          product.location.length > 2 && // Evitar adicionar locais muito curtos/genéricos
-          !["ac", "ll"].includes(product.location.toLowerCase())) { // Evitar locais não descritivos
+      // Garantir que o nome não seja muito curto
+      if (productName.length < 5 && product.location) {
         productName += " - " + product.location;
       }
       
-      if (product.form && 
-          !productName.toLowerCase().includes(product.form.toLowerCase()) &&
-          !["ac", "ll"].includes(product.form.toLowerCase()) && // Evitar formas não descritivas
-          product.form.length > 2) { // Evitar adicionar formas muito curtas/genéricas
-        productName += " - " + product.form;
+      // Caso tenhamos um código de produto e ele não esteja no nome
+      if (product.code && 
+          !productName.toLowerCase().includes(product.code.toLowerCase()) &&
+          product.code.length > 2) {
+        // Adicionar código ao final, se não for muito genérico
+        if (!['local', 'nome', 'depósito', 'deposito', 'piso'].includes(product.code.toLowerCase())) {
+          productName += " (Cód: " + product.code + ")";
+        }
       }
       
       product.name = productName.trim();
@@ -343,8 +464,31 @@ export async function processPOECatalog(filePath, userId, catalogId) {
       products.push(product);
     }
     
-    console.log(`Extraídos ${products.length} produtos do catálogo POE`);
-    return products;
+    // Filtrar produtos inválidos antes de retornar
+    console.log(`Produtos extraídos antes da filtragem: ${products.length}`);
+    
+    // Remover produtos com preço zero se a flag estiver ativa
+    const filteredProducts = products.filter(product => {
+      // Se tem preço zero e não é uma observação especial, ignorar
+      if (product.price === 0) {
+        // Verificar se parece ser uma linha de observação ou separador
+        const isObservation = !product.code || 
+                             product.code === "LOCAL" || 
+                             product.code === "NOME" || 
+                             product.name.toLowerCase().includes("total") ||
+                             product.name.toLowerCase().includes("obs");
+                             
+        if (!isObservation) {
+          console.log(`Ignorando produto com preço zero: ${product.name}`);
+          return false;
+        }
+      }
+      
+      return true;
+    });
+    
+    console.log(`Produtos finais após filtragem: ${filteredProducts.length}`);
+    return filteredProducts;
   } catch (error) {
     console.error('Erro no processador de catálogo POE:', error);
     throw error;
