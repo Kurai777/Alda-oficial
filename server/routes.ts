@@ -1098,14 +1098,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
           
           try {
-            // PRIMEIRO TENTAR SEMPRE COM O NOVO PROCESSADOR UNIVERSAL DE COLUNAS FIXAS
-            console.log("USANDO NOVO PROCESSADOR UNIVERSAL (COLUNAS FIXAS) para qualquer tipo de catálogo");
-            console.log("Mapeamento EXPLÍCITO: G=Nome, H=Código, M=Preço, C=Fornecedor, B=Local");
+            // PRIMEIRO TENTAR SEMPRE COM O ANALISADOR DE EXCEL BASEADO EM IA
+            console.log("USANDO ANALISADOR DE ESTRUTURA COM IA para qualquer tipo de catálogo");
+            console.log("A IA detectará automaticamente o mapeamento de colunas mais adequado");
             
             try {
-              // Importar o novo processador universal com colunas fixas
-              const universalProcessor = await import('./universal-catalog-processor-new.js');
-              
               // Criar diretório temporário para imagens extraídas 
               const extractedImagesDir = path.join(path.dirname(filePath), 'extracted_images', path.basename(filePath, path.extname(filePath)));
               
@@ -1118,14 +1115,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
               const { processExcelFile } = await import('./excel-processor-improved.js');
               const dummyProducts = await processExcelFile(filePath, userId, firestoreCatalogId);
               
-              // Processar o Excel com o novo processador universal
-              console.log(`Iniciando processamento com mapeamento FIXO de colunas!`);
-              let universalProducts = await universalProcessor.processExcelUniversal(filePath, userId, firestoreCatalogId);
+              // Analisar a estrutura do Excel usando IA
+              console.log(`Analisando estrutura do Excel com IA para determinar mapeamento ideal...`);
+              const aiAnalyzer = await import('./ai-excel-analyzer.js');
               
-              console.log(`Produtos detectados pelo NOVO processador universal: ${universalProducts.length}`);
+              // Determinar o mapeamento de colunas usando IA
+              const columnMapping = await aiAnalyzer.analyzeExcelStructure(filePath);
+              console.log("IA DETERMINOU O SEGUINTE MAPEAMENTO:");
+              console.log(JSON.stringify(columnMapping, null, 2));
+              
+              // Processar o Excel com o mapeamento determinado pela IA
+              console.log(`Iniciando processamento com mapeamento DINÂMICO determinado pela IA!`);
+              let universalProducts = await aiAnalyzer.processExcelWithAIMapping(
+                filePath, columnMapping, userId, firestoreCatalogId
+              );
+              
+              console.log(`Produtos detectados pelo processador baseado em IA: ${universalProducts.length}`);
+              
+              // Se a análise baseada em IA falhar, usar o processador universal
+              if (universalProducts.length === 0) {
+                console.log("Análise com IA não produziu resultados. Tentando processador universal como fallback...");
+                
+                // Importar o processador universal com colunas fixas
+                const universalProcessor = await import('./universal-catalog-processor-new.js');
+                universalProducts = await universalProcessor.processExcelUniversal(filePath, userId, firestoreCatalogId);
+                console.log(`Produtos detectados pelo NOVO processador universal (fallback): ${universalProducts.length}`);
+              }
               
               // Associar imagens aos produtos
               if (universalProducts.length > 0) {
+                // Usar o associador de imagens do processador universal
+                const universalProcessor = await import('./universal-catalog-processor-new.js');
                 universalProducts = await universalProcessor.associateProductsWithImages(
                   universalProducts, filePath, extractedImagesDir, userId, firestoreCatalogId
                 );
