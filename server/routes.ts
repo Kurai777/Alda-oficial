@@ -708,44 +708,51 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "ID inválido" });
       }
       
+      console.log(`Iniciando exclusão do catálogo ${id}`);
+      
       // Obter o catálogo para verificar o userId
       const catalog = await storage.getCatalog(id);
       
       if (!catalog) {
+        console.log(`Catálogo ${id} não encontrado`);
         return res.status(404).json({ message: "Catálogo não encontrado" });
       }
       
-      // Obter produtos para excluir
-      const products = await storage.getProducts(catalog.userId, id);
+      console.log(`Catálogo ${id} encontrado, pertence ao usuário ${catalog.userId}`);
       
-      // Excluir produtos
-      for (const product of products) {
-        await storage.deleteProduct(product.id);
-      }
+      // Primeiro, excluir todos os produtos associados a este catálogo
+      // usando a função dedicada para isso no storage
+      const deletedProductsCount = await storage.deleteProductsByCatalogId(id);
+      console.log(`${deletedProductsCount} produtos excluídos do catálogo ${id}`);
       
-      // Excluir catálogo no Firestore
+      // Tentar excluir do Firestore se aplicável
       try {
-        const { deleteCatalogFromFirestore } = await import('./firestore-service');
-        await deleteCatalogFromFirestore(catalog.userId.toString(), id.toString());
+        if (catalog.firestoreCatalogId) {
+          const { deleteCatalogFromFirestore } = await import('./firestore-service');
+          await deleteCatalogFromFirestore(catalog.userId.toString(), id.toString());
+          console.log(`Catálogo ${id} excluído do Firestore`);
+        }
       } catch (firestoreError) {
         console.error("Erro ao excluir catálogo do Firestore:", firestoreError);
         // Continuar mesmo se não conseguir excluir do Firestore
       }
       
-      // Excluir catálogo
+      // Por fim, excluir o catálogo
       const success = await storage.deleteCatalog(id);
       
       if (!success) {
+        console.error(`Falha ao excluir catálogo ${id} da base de dados`);
         return res.status(500).json({ message: "Erro ao excluir catálogo" });
       }
       
+      console.log(`Catálogo ${id} excluído com sucesso`);
       return res.status(200).json({ 
         message: "Catálogo excluído com sucesso",
-        productsDeleted: products.length
+        productsDeleted: deletedProductsCount
       });
     } catch (error) {
       console.error("Erro ao excluir catálogo:", error);
-      return res.status(500).json({ message: "Erro ao excluir catálogo" });
+      return res.status(500).json({ message: "Erro ao excluir catálogo", error: String(error) });
     }
   });
   
