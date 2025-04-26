@@ -253,8 +253,8 @@ export async function updateProductImageUrls(
 ): Promise<number> {
   let updatedCount = 0;
   
-  // Criar diretório de destino para imagens
-  const targetDir = path.join(process.cwd(), 'uploads', 'unique-product-images', `catalog-${catalogId}`);
+  // Criar diretório de destino para imagens - usando o mesmo formato em todo o sistema
+  const targetDir = path.join(process.cwd(), 'uploads', 'unique_product_images');
   
   try {
     // Criar diretório recursivamente
@@ -275,9 +275,10 @@ export async function updateProductImageUrls(
         continue;
       }
       
-      // Criar nome de arquivo único com ID do produto
+      // Criar nome de arquivo único com ID do produto no padrão do sistema
       const originalExt = path.extname(mapping.imagePath);
-      const uniqueImageName = `product-${mapping.productId}-${mapping.productCode}${originalExt}`;
+      const uniqueId = Math.random().toString(36).substring(2, 10);
+      const uniqueImageName = `product_${mapping.productId}_${uniqueId}${originalExt}`;
       const targetPath = path.join(targetDir, uniqueImageName);
       
       try {
@@ -289,8 +290,8 @@ export async function updateProductImageUrls(
         continue;
       }
       
-      // Construir URL relativa para a imagem
-      const imageUrl = `/uploads/unique-product-images/catalog-${catalogId}/${uniqueImageName}`;
+      // Construir URL relativa para a imagem no formato padrão do sistema
+      const imageUrl = `/uploads/unique_product_images/${uniqueImageName}`;
       
       // Adicionar um parâmetro de cache-busting para forçar o recarregamento
       const urlWithCacheBusting = `${imageUrl}?t=${Date.now()}`;
