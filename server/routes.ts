@@ -1098,7 +1098,52 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
           
           try {
-            if (isSofaHomeFormat) {
+            // PRIMEIRO TENTAR SEMPRE COM PROCESSADOR UNIVERSAL
+            console.log("USANDO PROCESSADOR UNIVERSAL para detecção automática de qualquer catálogo");
+            
+            try {
+              // Importar o processador universal
+              const universalProcessor = await import('./universal-catalog-processor.js');
+              
+              // Criar diretório temporário para imagens extraídas 
+              const extractedImagesDir = path.join(path.dirname(filePath), 'extracted_images', path.basename(filePath, path.extname(filePath)));
+              
+              if (!fs.existsSync(extractedImagesDir)) {
+                fs.mkdirSync(extractedImagesDir, { recursive: true });
+              }
+              
+              // Extrair imagens primeiro
+              console.log(`Extraindo imagens para ${extractedImagesDir}`);
+              const { processExcelFile } = await import('./excel-processor-improved.js');
+              const dummyProducts = await processExcelFile(filePath, userId, firestoreCatalogId);
+              
+              // Processar o Excel com o processador universal
+              let universalProducts = await universalProcessor.processUniversalCatalog(filePath, userId, firestoreCatalogId);
+              
+              console.log(`Produtos detectados pelo processador universal: ${universalProducts.length}`);
+              
+              // Associar imagens aos produtos
+              if (universalProducts.length > 0) {
+                universalProducts = await universalProcessor.associateUniversalProductsWithImages(
+                  universalProducts, filePath, extractedImagesDir, userId, firestoreCatalogId
+                );
+                
+                productsData = universalProducts;
+                extractionInfo = `Extraídos ${productsData.length} produtos (processador universal).`;
+                console.log(`Processamento universal concluído com sucesso: ${productsData.length} produtos`);
+                
+                // Se o processador universal conseguiu extrair produtos, não continue com os outros processadores
+                if (productsData.length > 0) {
+                  console.log("Processador universal extraiu produtos com sucesso. Pulando outros processadores.");
+                }
+              }
+            } catch (universalError) {
+              console.error("ERRO AO PROCESSAR COM DETECTOR UNIVERSAL:", universalError);
+              console.log("Tentando processadores específicos como fallback...");
+            }
+            
+            // Se o processador universal não extraiu produtos, tentar com os processadores específicos
+            if (productsData.length === 0 && isSofaHomeFormat) {
               console.log("DETECTADO FORMATO SOFÁ HOME - usando processador especializado");
               
               // Importar o processador específico para Sofá Home
@@ -1121,7 +1166,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 console.log("Tentando métodos alternativos para o arquivo...");
               }
             }
-            else if (isPOEFormat || fileName.toLowerCase().includes('poe')) {
+            else if (productsData.length === 0 && (isPOEFormat || fileName.toLowerCase().includes('poe'))) {
               console.log("DETECTADO FORMATO POE - usando processador especializado para POE");
               
               try {
