@@ -2633,6 +2633,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Adicionar rota para correção de imagens de produtos
+  addFixImageRoutes(app);
+  
   // Adicionar rotas de teste
   addTestRoutes(app);
   

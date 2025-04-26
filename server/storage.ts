@@ -29,6 +29,7 @@ export interface IStorage {
   getProduct(id: number): Promise<Product | undefined>;
   getProductsByUserId(userId: number | string, catalogId?: number): Promise<Product[]>;
   getProductsByCategory(userId: number | string, category: string): Promise<Product[]>;
+  getProductsByCatalogId(catalogId: number): Promise<Product[]>; // Busca produtos por catalogId
   createProduct(product: InsertProduct): Promise<Product>;
   updateProduct(id: number, product: Partial<InsertProduct>): Promise<Product | undefined>;
   deleteProduct(id: number): Promise<boolean>;
@@ -285,6 +286,15 @@ export class MemStorage implements IStorage {
         return userMatch && product.category === category;
       }
     );
+  }
+  
+  async getProductsByCatalogId(catalogId: number): Promise<Product[]> {
+    console.log(`Buscando produtos para o catálogo ${catalogId}...`);
+    const productsFound = Array.from(this.products.values()).filter(
+      (product) => product.catalogId === catalogId
+    );
+    console.log(`Encontrados ${productsFound.length} produtos para o catálogo ${catalogId}`);
+    return productsFound;
   }
 
   async createProduct(insertProduct: InsertProduct): Promise<Product> {
@@ -679,6 +689,19 @@ export class DatabaseStorage implements IStorage {
     } catch (error) {
       console.error('Error deleting product:', error);
       return false;
+    }
+  }
+  
+  async getProductsByCatalogId(catalogId: number): Promise<Product[]> {
+    try {
+      console.log(`DB: Buscando produtos para o catálogo ${catalogId}...`);
+      const result = await db.select().from(products)
+        .where(eq(products.catalogId, catalogId));
+      console.log(`DB: Encontrados ${result.length} produtos para o catálogo ${catalogId}`);
+      return result;
+    } catch (error) {
+      console.error('Error getting products by catalogId:', error);
+      return [];
     }
   }
   

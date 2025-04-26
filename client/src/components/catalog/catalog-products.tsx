@@ -23,11 +23,13 @@ import {
   ImageIcon,
   FilterIcon,
   XIcon,
-  EuroIcon
+  EuroIcon,
+  RefreshCw
 } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
 import { Product } from "@shared/schema";
+import { FixProductImagesButton } from "./FixProductImagesButton";
 
 interface CatalogProductsProps {
   catalogId: number;
@@ -291,6 +293,17 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
             <FilterIcon className="h-4 w-4 mr-1" />
             Filtrar
           </Button>
+          
+          <FixProductImagesButton 
+            catalogId={catalogId} 
+            onComplete={() => {
+              refetch();
+              toast({
+                title: "Imagens corrigidas",
+                description: "As imagens dos produtos foram corrigidas com sucesso."
+              });
+            }}
+          />
           
           {(filters.category || filters.manufacturer || filters.minPrice || filters.maxPrice) && (
             <Button 
