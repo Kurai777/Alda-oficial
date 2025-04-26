@@ -79,9 +79,24 @@ export default function FixProductImagesButton({
 
   const handleCloseResults = () => {
     setShowResults(false);
+    
+    // Forçar o recarregamento dos dados para atualizar as imagens
+    // Isso fará com que a interface seja atualizada com as novas imagens
     if (onComplete) {
       onComplete();
     }
+    
+    // Avisar o usuário que a página será recarregada para mostrar as imagens corretas
+    toast({
+      title: "Atualizando exibição",
+      description: "A página será atualizada para mostrar as imagens corrigidas.",
+      duration: 3000,
+    });
+    
+    // Recarregar a página após um curto atraso
+    setTimeout(() => {
+      window.location.reload();
+    }, 1500);
   };
 
   return (

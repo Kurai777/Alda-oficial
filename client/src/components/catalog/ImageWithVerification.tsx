@@ -19,6 +19,7 @@ interface ProductImageProps {
   width?: number | string;
   height?: number | string;
   disableVerification?: boolean; // Opção para desativar verificação (usar URL diretamente)
+  forceCacheBusting?: boolean; // Opção para forçar cache busting (evitar cache do navegador)
 }
 
 export default function ImageWithVerification({
@@ -30,7 +31,8 @@ export default function ImageWithVerification({
   onError,
   width,
   height,
-  disableVerification = false
+  disableVerification = false,
+  forceCacheBusting = false
 }: ProductImageProps) {
   const [imageUrl, setImageUrl] = useState<string | null>(initialImageUrl || null);
   const [loading, setLoading] = useState(!initialImageUrl);
@@ -175,6 +177,15 @@ export default function ImageWithVerification({
   }
   
   // Renderização da imagem
+  // Adicionar cache busting à URL da imagem se necessário
+  let finalImageUrl = imageUrl;
+  if (forceCacheBusting && imageUrl) {
+    // Adicionar ou atualizar parâmetro de timestamp para evitar cache do navegador
+    finalImageUrl = imageUrl.includes('?') 
+      ? `${imageUrl}&t=${Date.now()}` 
+      : `${imageUrl}?t=${Date.now()}`;
+  }
+  
   return (
     <div className={`relative ${className}`}>
       {isShared && (
@@ -183,7 +194,7 @@ export default function ImageWithVerification({
         </div>
       )}
       <img
-        src={imageUrl}
+        src={finalImageUrl}
         alt={altText}
         className={className}
         onLoad={handleImageLoad}
