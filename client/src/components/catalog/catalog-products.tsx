@@ -30,7 +30,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
 import ImageWithVerification from "@/components/catalog/ImageWithVerification";
 import { Product } from "@shared/schema";
-import { FixProductImagesButton } from "./FixProductImagesButton";
+import FixProductImagesButton from "./FixProductImagesButton";
 
 interface CatalogProductsProps {
   catalogId: number;
