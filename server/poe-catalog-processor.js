@@ -219,7 +219,32 @@ export async function processPOECatalog(filePath, userId, catalogId) {
           );
           
           if (materialLine) {
-            product.material = materialLine.trim();
+            // Extrair materiais e adicionar como array
+            const materials = [];
+            const materialText = materialLine.trim();
+            
+            // Adicionar o material bruto como primeiro item
+            materials.push(materialText);
+            
+            // Tentar extrair materiais específicos
+            if (materialText.toLowerCase().includes('tecido')) {
+              materials.push('Tecido');
+            }
+            if (materialText.toLowerCase().includes('couro')) {
+              materials.push('Couro');
+            }
+            if (materialText.toLowerCase().includes('veludo')) {
+              materials.push('Veludo');
+            }
+            if (materialText.toLowerCase().includes('linho')) {
+              materials.push('Linho');
+            }
+            if (materialText.toLowerCase().includes('algodão')) {
+              materials.push('Algodão');
+            }
+            
+            // Remover duplicatas e adicionar ao produto
+            product.materials = [...new Set(materials)];
           }
         }
       }

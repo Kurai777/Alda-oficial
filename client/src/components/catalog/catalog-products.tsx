@@ -173,12 +173,6 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
           m => m && m.toString().toLowerCase().includes(filters.material.toLowerCase())
         );
         if (!hasMaterial) return false;
-      } 
-      // Verificar em material (string)
-      else if (product.material) {
-        if (!product.material.toString().toLowerCase().includes(filters.material.toLowerCase())) {
-          return false;
-        }
       }
       // Se não tem material e há filtro, não deve aparecer
       else {
@@ -545,7 +539,7 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
                           <TableCell>
                             {Array.isArray(product.materials) && product.materials.length > 0 
                               ? product.materials.join(", ")
-                              : product.material || "-"}
+                              : "-"}
                           </TableCell>
                           <TableCell>{formatPrice(product.price)}</TableCell>
                           <TableCell>
@@ -626,15 +620,10 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
                             </Badge>
                           )}
                           
-                          {!Array.isArray(product.materials) && product.material && (
+                          {/* Forma/Tipo de produto */}
+                          {typeof product.category === 'string' && product.category.includes('/') && (
                             <Badge variant="outline" className="text-xs">
-                              {product.material}
-                            </Badge>
-                          )}
-                          
-                          {product.form && (
-                            <Badge variant="outline" className="text-xs">
-                              {product.form}
+                              {product.category.split('/')[1].trim()}
                             </Badge>
                           )}
                         </div>
@@ -866,6 +855,26 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
                 onChange={(e) => setFilters({...filters, maxPrice: e.target.value})}
                 className="col-span-3"
                 placeholder="Ex: 5000"
+              />
+            </div>
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="filter-location" className="text-right">Localização</Label>
+              <Input
+                id="filter-location"
+                value={filters.location}
+                onChange={(e) => setFilters({...filters, location: e.target.value})}
+                className="col-span-3"
+                placeholder="Ex: 2º Piso, Depósito, etc."
+              />
+            </div>
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="filter-material" className="text-right">Material</Label>
+              <Input
+                id="filter-material"
+                value={filters.material}
+                onChange={(e) => setFilters({...filters, material: e.target.value})}
+                className="col-span-3"
+                placeholder="Ex: Madeira, Vidro, Metal, etc."
               />
             </div>
           </div>
