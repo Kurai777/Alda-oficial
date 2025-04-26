@@ -3,6 +3,7 @@ import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 import session from "express-session";
 import testRoutes from "./test-routes";
+import { reprocessRouter } from "./routes-reprocessor.js";
 
 // Importar módulos de banco de dados e storage
 import { migrate } from "./db";
@@ -14,6 +15,9 @@ app.use(express.urlencoded({ extended: false, limit: '100mb' }));
 
 // Registrar rotas de teste
 app.use('/api/test', testRoutes);
+
+// Registrar rotas de reprocessamento
+app.use('/api/admin', reprocessRouter);
 
 // Configuração da sessão
 const SESSION_SECRET = process.env.SESSION_SECRET || 'alda-session-secret';
