@@ -11,6 +11,73 @@ import path from 'path';
 import { promisify } from 'util';
 import JSZip from 'jszip';
 import { spawn } from 'child_process';
+
+/**
+ * Extrai as dimensões de uma imagem a partir do formato base64
+ * @param {string} base64String String base64 da imagem (com ou sem prefixo data:image)
+ * @returns {Object|null} Objeto com width e height, ou null se não for possível extrair
+ */
+function extractImageDimensionsFromBase64(base64String) {
+  try {
+    // Se a string começar com data:image, remover o prefixo para processamento
+    let data = base64String;
+    if (data.startsWith('data:image')) {
+      data = data.split(',')[1];
+    }
+    
+    // Converter base64 para buffer
+    const buffer = Buffer.from(data, 'base64');
+    
+    // Verificar assinatura de arquivo para determinar o tipo
+    // PNG: Primeiros 8 bytes são sempre: 89 50 4E 47 0D 0A 1A 0A
+    if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4E && buffer[3] === 0x47) {
+      // Para PNG: largura em bytes 16-19, altura em bytes 20-23
+      const width = buffer.readUInt32BE(16);
+      const height = buffer.readUInt32BE(20);
+      return { width, height };
+    }
+    
+    // JPEG: Começa com FF D8 e termina com FF D9
+    if (buffer[0] === 0xFF && buffer[1] === 0xD8) {
+      // JPEG é mais complicado, precisamos procurar pelo segmento SOF (Start of Frame)
+      let i = 2;
+      
+      while (i < buffer.length) {
+        // Se encontrarmos FF, pode ser o início de um segmento
+        if (buffer[i] === 0xFF && buffer[i + 1] !== 0) {
+          // Verificar se é um SOFn segmento (0xC0-0xCF, exceto 0xC4, 0xC8, 0xCC)
+          const marker = buffer[i + 1];
+          if (
+            marker >= 0xC0 && 
+            marker <= 0xCF && 
+            marker !== 0xC4 && 
+            marker !== 0xC8 && 
+            marker !== 0xCC
+          ) {
+            // Altura em bytes i+5 e i+6, largura em bytes i+7 e i+8
+            const height = buffer.readUInt16BE(i + 5);
+            const width = buffer.readUInt16BE(i + 7);
+            return { width, height };
+          }
+          
+          // Se não for um SOF, pular para o próximo segmento
+          // O tamanho do segmento está em bytes i+2 e i+3 (incluindo esses 2 bytes)
+          const segmentLength = buffer.readUInt16BE(i + 2);
+          i += 2 + segmentLength;
+        } else {
+          // Se não é FF, avançar um byte
+          i++;
+        }
+      }
+    }
+    
+    // Se chegou aqui, não conseguiu extrair dimensões
+    return null;
+  } catch (error) {
+    console.error(`Erro ao extrair dimensões da imagem: ${error.message}`);
+    return null;
+  }
+}
 // Função para simular o upload para o Firebase durante testes
 async function mockSaveImageToFirebaseStorage(imageBuffer, fileName, userId = 'test', catalogId = 'test') {
   // Apenas para teste - não faz upload real
@@ -1020,6 +1087,35 @@ function filterNonProductImages(images) {
         // Essa implementação dependeria de ter acesso ao conteúdo das células
         // o que não está disponível neste contexto
         console.log(`Imagem associada à célula ${image.cell} na planilha ${image.sheet}`);
+      }
+      
+      // Critério 4: Heurística para determinar se a imagem parece um "produto real" 
+      // ou apenas um elemento decorativo
+      if (image.image_base64) {
+        try {
+          // Imagens reais de produtos tendem a ter proporções mais próximas de 1:1 ou 4:3
+          // Elementos decorativos como linhas, divisórias, logos são frequentemente muito 
+          // mais largos do que altos ou vice-versa
+          
+          // Se conseguirmos extrair dimensões do base64
+          const imgData = image.image_base64;
+          const dimensions = extractImageDimensionsFromBase64(imgData);
+          
+          if (dimensions) {
+            const { width, height } = dimensions;
+            
+            // Calcular proporção (aspect ratio)
+            const aspectRatio = width / height;
+            
+            // Elementos muito alongados (faixas, barras, linhas)
+            if (aspectRatio > 5 || aspectRatio < 0.2) {
+              console.log(`Ignorando imagem com proporção anormal (${aspectRatio.toFixed(2)}): ${image.image_filename || 'sem nome'}`);
+              return false;
+            }
+          }
+        } catch (e) {
+          // Ignorar erros nesta verificação
+        }
       }
       
       // Se a imagem passou por todos os filtros, considerá-la válida
