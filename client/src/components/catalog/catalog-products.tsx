@@ -31,6 +31,7 @@ import { useAuth } from "@/lib/auth";
 import ImageWithVerification from "@/components/catalog/ImageWithVerification";
 import { Product } from "@shared/schema";
 import FixProductImagesButton from "./FixProductImagesButton";
+import ProcessFullCatalogButton from "./ProcessFullCatalogButton";
 
 interface CatalogProductsProps {
   catalogId: number;
@@ -302,6 +303,17 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
               toast({
                 title: "Imagens corrigidas",
                 description: "As imagens dos produtos foram corrigidas com sucesso."
+              });
+            }}
+          />
+          
+          <ProcessFullCatalogButton
+            catalogId={catalogId}
+            onComplete={() => {
+              refetch();
+              toast({
+                title: "Catálogo processado",
+                description: "O catálogo completo foi processado com sucesso."
               });
             }}
           />

@@ -250,7 +250,8 @@ async function importFullCatalog(filePath, userId, catalogId) {
       return { success: false, error: 'Nenhum produto encontrado no Excel' };
     }
     
-    // Limpar produtos existentes
+    // Limpar produtos existentes do catálogo atual
+    console.log(`Removendo produtos antigos do catálogo ${catalogId}`);
     await db.delete(products).where(eq(products.catalogId, catalogId));
     
     // Inserir no banco de dados em lotes para evitar problemas com catálogos muito grandes
