@@ -207,6 +207,172 @@ function extractMaterials(productName) {
 }
 
 /**
+ * Detecta automaticamente o mapeamento de colunas baseado no conteúdo
+ * @param {Array} rawData Dados brutos do Excel
+ * @returns {Object} Mapeamento de colunas detectado
+ */
+function detectColumnMapping(rawData) {
+  console.log("\n=== DETECTANDO MAPEAMENTO DE COLUNAS ===");
+  
+  // Estrutura para armazenar pontuação de cada coluna
+  const columnScores = {};
+  
+  // Padrões para identificar tipos de conteúdo
+  const patterns = {
+    name: {
+      keywords: ['nome', 'descrição', 'produto', 'item'],
+      patterns: [
+        // Padrões comuns de nomes de produtos
+        /sofá|sofa|poltrona|cadeira|mesa|estante|cama/i,
+        // Nomes com medidas
+        /\d+(\.\d+)?(cm|m)\s*(x|×)\s*\d+(\.\d+)?(cm|m)/i
+      ]
+    },
+    code: {
+      keywords: ['código', 'cod', 'referência', 'ref'],
+      patterns: [
+        // Códigos alfanuméricos
+        /^[A-Z0-9]{4,10}$/i,
+        // Códigos com traço
+        /^[A-Z0-9]+-[A-Z0-9]+$/i,
+        // Códigos POE
+        /^POE-?\d+$/i
+      ]
+    },
+    price: {
+      keywords: ['preço', 'valor', 'total', 'r$'],
+      patterns: [
+        // Valores monetários
+        /R?\$?\s*\d+[\.,]\d{2}/i,
+        // Números com 2 casas decimais
+        /^\d+[\.,]\d{2}$/
+      ]
+    },
+    description: {
+      keywords: ['descrição', 'desc', 'detalhes', 'especificação'],
+      patterns: [
+        // Textos longos com medidas
+        /\d+(\.\d+)?(cm|m)\s*(x|×)\s*\d+(\.\d+)?(cm|m)/i,
+        // Descrições com materiais
+        /(madeira|tecido|couro|metal|vidro|mármore)/i
+      ]
+    }
+  };
+
+  // Analisar as primeiras linhas para identificar cabeçalhos
+  const headerRow = {};
+  for (let i = 0; i < Math.min(5, rawData.length); i++) {
+    const row = rawData[i];
+    for (const [col, value] of Object.entries(row)) {
+      if (!value) continue;
+      const valueStr = value.toString().toLowerCase().trim();
+      
+      // Verificar se parece um cabeçalho
+      for (const [field, fieldPatterns] of Object.entries(patterns)) {
+        if (fieldPatterns.keywords.some(keyword => valueStr.includes(keyword))) {
+          headerRow[col] = field;
+          console.log(`Cabeçalho detectado: Coluna ${col} = ${field} ("${valueStr}")`);
+        }
+      }
+    }
+  }
+
+  // Analisar o conteúdo das colunas
+  const startRow = Math.min(5, rawData.length); // Pular possíveis cabeçalhos
+  for (let i = startRow; i < rawData.length; i++) {
+    const row = rawData[i];
+    for (const [col, value] of Object.entries(row)) {
+      if (!value) continue;
+      const valueStr = value.toString().trim();
+      
+      if (!columnScores[col]) {
+        columnScores[col] = {
+          name: 0,
+          code: 0,
+          price: 0,
+          description: 0
+        };
+      }
+
+      // Pontuar cada coluna baseado no conteúdo
+      for (const [field, fieldPatterns] of Object.entries(patterns)) {
+        // Verificar padrões
+        fieldPatterns.patterns.forEach(pattern => {
+          if (pattern.test(valueStr)) {
+            columnScores[col][field] += 2;
+          }
+        });
+        
+        // Análise adicional baseada no tipo de campo
+        switch (field) {
+          case 'name':
+            // Nomes geralmente têm palavras com inicial maiúscula
+            if (/^[A-Z][a-z]+(\s+[A-Z][a-z]+)+/.test(valueStr)) {
+              columnScores[col].name += 1;
+            }
+            break;
+            
+          case 'code':
+            // Códigos geralmente são mais curtos e consistentes
+            if (valueStr.length <= 15 && !/\s/.test(valueStr)) {
+              columnScores[col].code += 1;
+            }
+            break;
+            
+          case 'price':
+            // Preços são números
+            if (/^\d+([.,]\d{2})?$/.test(valueStr.replace(/[R$\s]/g, ''))) {
+              columnScores[col].price += 3;
+            }
+            break;
+            
+          case 'description':
+            // Descrições são geralmente mais longas
+            if (valueStr.length > 30) {
+              columnScores[col].description += 1;
+            }
+            break;
+        }
+      }
+    }
+  }
+
+  // Determinar a melhor coluna para cada campo
+  const mapping = {};
+  const usedColumns = new Set();
+
+  // Primeiro, usar cabeçalhos detectados
+  for (const [col, field] of Object.entries(headerRow)) {
+    mapping[field] = col;
+    usedColumns.add(col);
+  }
+
+  // Depois, usar pontuações para colunas restantes
+  ['name', 'code', 'price', 'description'].forEach(field => {
+    if (mapping[field]) return; // Já definido por cabeçalho
+    
+    let bestScore = -1;
+    let bestColumn = null;
+    
+    for (const [col, scores] of Object.entries(columnScores)) {
+      if (usedColumns.has(col)) continue;
+      if (scores[field] > bestScore) {
+        bestScore = scores[field];
+        bestColumn = col;
+      }
+    }
+    
+    if (bestColumn && bestScore > 0) {
+      mapping[field] = bestColumn;
+      usedColumns.add(bestColumn);
+      console.log(`Coluna detectada para ${field}: ${bestColumn} (pontuação: ${bestScore})`);
+    }
+  });
+
+  return mapping;
+}
+
+/**
  * Processa um arquivo Excel com colunas fixas para extração universal
  * @param {string} filePath Caminho do arquivo Excel
  * @param {any} userId ID do usuário
@@ -217,7 +383,6 @@ export async function processExcelUniversal(filePath, userId, catalogId) {
   try {
     console.log(`\n=== INICIANDO PROCESSAMENTO UNIVERSAL (NOVA VERSÃO) ===`);
     console.log(`Arquivo: ${filePath}`);
-    console.log(`Mapeamento FIXO: [G=Nome, H=Código, M=Preço, C=Fornecedor, B=Local]`);
     
     // Ler arquivo Excel
     const workbook = XLSX.readFile(filePath, { cellFormula: false, cellHTML: false });
@@ -233,93 +398,73 @@ export async function processExcelUniversal(filePath, userId, catalogId) {
     
     console.log(`Extraídos ${rawData.length} registros da planilha`);
     
-    // Ignorar linhas que parecem ser cabeçalho
-    let startRow = 0;
-    for (let i = 0; i < Math.min(10, rawData.length); i++) {
-      const row = rawData[i];
-      if (isIgnorableLine(row)) {
-        startRow = i + 1;
-        console.log(`Detectado cabeçalho na linha ${i+1}, começando a partir da linha ${startRow+1}`);
-      }
-    }
+    // Detectar mapeamento de colunas
+    const columnMapping = detectColumnMapping(rawData);
+    console.log("\nMapeamento de colunas detectado:", columnMapping);
     
     // Lista para armazenar produtos processados
     const products = [];
     
     // Processar cada linha
-    for (let i = startRow; i < rawData.length; i++) {
+    for (let i = 0; i < rawData.length; i++) {
       const row = rawData[i];
       const rowNum = i + 1;
       
-      // Verificar se a linha é válida (não é cabeçalho, faixa de preço, etc)
+      // Verificar se a linha é válida
       if (isIgnorableLine(row)) {
         continue;
       }
       
-      // ETAPA 1: NOME DO PRODUTO - DEVE VIR DA COLUNA G (DESCRIÇÃO)
-      if (!row.G) {
-        console.log(`Linha ${rowNum} sem nome de produto (coluna G vazia). IGNORANDO`);
+      // ETAPA 1: NOME DO PRODUTO
+      const nameColumn = columnMapping.name;
+      if (!nameColumn || !row[nameColumn]) {
+        console.log(`Linha ${rowNum} sem nome de produto. IGNORANDO`);
         continue;
       }
       
-      const productName = row.G.toString().trim();
+      const productName = row[nameColumn].toString().trim();
       if (productName.length < 3) {
         console.log(`Linha ${rowNum} com nome muito curto: "${productName}". IGNORANDO`);
         continue;
       }
       
-      console.log(`Nome do produto (G): "${productName}"`);
+      console.log(`Nome do produto: "${productName}"`);
       
-      // ETAPA 2: CÓDIGO DO PRODUTO - DEVE VIR DA COLUNA H
+      // ETAPA 2: CÓDIGO DO PRODUTO
       let productCode = "";
-      if (row.H) {
-        productCode = row.H.toString().trim();
-        console.log(`Código do produto (H): "${productCode}"`);
-        
-        // Verificar se o código parece ser uma localização ou faixa de preço
-        if (productCode.toLowerCase().includes('piso') || 
-            /^\d+º/i.test(productCode) || 
-            /^\d+-\d+k$/i.test(productCode)) {
-          console.log(`Código inválido (parece ser localização): "${productCode}". Gerando código alternativo.`);
-          // Gerar código alternativo se o código parece inválido
-          productCode = `PROD-${rowNum}`;
-        }
+      const codeColumn = columnMapping.code;
+      if (codeColumn && row[codeColumn]) {
+        productCode = row[codeColumn].toString().trim();
+        console.log(`Código do produto: "${productCode}"`);
       } else {
-        // Se não existe código explícito, criar um baseado no nome
-        productCode = `PROD-${rowNum}`;
-        console.log(`Sem código de produto (H vazio). Gerando código: "${productCode}"`);
+        productCode = `PROD-${rowNum}-${Date.now()}`;
+        console.log(`Código gerado: "${productCode}"`);
       }
       
-      // ETAPA 3: PREÇO DO PRODUTO - DEVE VIR DA COLUNA M (VALOR TOTAL)
+      // ETAPA 3: PREÇO DO PRODUTO
       let productPrice = 0;
+      const priceColumn = columnMapping.price;
+      if (priceColumn && row[priceColumn]) {
+        productPrice = extractPrice(row[priceColumn]);
+        console.log(`Preço do produto: ${productPrice} centavos`);
+      }
       
-      if (row.M) {
-        productPrice = extractPrice(row.M);
-        console.log(`Preço do produto (M): ${productPrice} centavos`);
+      // ETAPA 4: DESCRIÇÃO
+      let description = '';
+      const descColumn = columnMapping.description;
+      if (descColumn && row[descColumn]) {
+        description = row[descColumn].toString().trim();
+        console.log(`Descrição: "${description}"`);
       } else {
-        console.log(`Preço não encontrado na coluna M. Definindo como zero.`);
+        description = productName;
       }
       
-      // ETAPA 4: FORNECEDOR - COLUNA C
-      let manufacturer = '';
-      if (row.C) {
-        manufacturer = row.C.toString().trim();
-        console.log(`Fornecedor (C): "${manufacturer}"`);
-      }
-      
-      // ETAPA 5: LOCALIZAÇÃO - COLUNA B
-      let location = '';
-      if (row.B) {
-        location = row.B.toString().trim();
-        console.log(`Localização (B): "${location}"`);
-      }
-      
-      // ETAPA 6: INFERIR CATEGORIA
-      const category = inferCategory(productName, manufacturer);
+      // ETAPA 5: INFERIR CATEGORIA
+      const category = inferCategory(productName, description);
       console.log(`Categoria inferida: "${category}"`);
       
-      // ETAPA 7: EXTRAIR MATERIAIS DO NOME
-      const materials = extractMaterials(productName);
+      // ETAPA 6: EXTRAIR MATERIAIS
+      const materials = extractMaterials(description || productName);
       if (materials.length > 0) {
         console.log(`Materiais detectados: ${materials.join(', ')}`);
       }
@@ -328,31 +473,29 @@ export async function processExcelUniversal(filePath, userId, catalogId) {
       const product = {
         userId: userId,
         catalogId: parseInt(catalogId),
-        name: productName,           // Coluna G (Descrição)
-        code: productCode,           // Coluna H (Código) ou gerado
-        description: productName,    // Usar o mesmo que o nome
-        price: productPrice,         // Coluna M (Valor Total)
-        category: category,          // Inferido
-        manufacturer: manufacturer,  // Coluna C
-        materials: materials,        // Inferido do nome
-        colors: [],                  // Nenhum por padrão
-        location: location,          // Coluna B
+        name: productName,
+        code: productCode,
+        description: description,
+        price: productPrice,
+        category: category,
+        materials: materials,
+        colors: [],
         excelRowNumber: rowNum,
         isEdited: false
       };
       
       // Adicionar produto à lista
       products.push(product);
-      console.log(`✅ Produto extraído com sucesso da linha ${rowNum}: ${product.name} (${product.code}) - R$ ${(product.price/100).toFixed(2)}`);
+      console.log(`✅ Produto extraído com sucesso da linha ${rowNum}: ${product.name} (${product.code}) - R$ ${(product.price/100).toFixed(2)}\n`);
     }
     
-    console.log(`\n=== PROCESSAMENTO UNIVERSAL CONCLUÍDO ===`);
+    console.log(`\n=== PROCESSAMENTO CONCLUÍDO ===`);
     console.log(`Total de produtos extraídos: ${products.length}`);
     
     return products;
     
   } catch (error) {
-    console.error("Erro ao processar catálogo universalmente:", error);
+    console.error('Erro ao processar arquivo Excel:', error);
     throw error;
   }
 }

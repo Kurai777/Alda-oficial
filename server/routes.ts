@@ -1130,6 +1130,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
                   universalProducts, filePath, extractedImagesDir, userId, firestoreCatalogId
                 );
                 
+                // Adicionar camada de IA para aprimorar os dados
+                console.log("Aprimorando dados dos produtos com IA...");
+                try {
+                  const { enhanceCatalogWithAI } = await import('./ai-catalog-enhancer.js');
+                  const enhancedProducts = await enhanceCatalogWithAI(universalProducts);
+                  
+                  if (enhancedProducts && enhancedProducts.length > 0) {
+                    universalProducts = enhancedProducts;
+                    console.log(`Dados aprimorados com sucesso pela IA para ${universalProducts.length} produtos`);
+                  } else {
+                    console.log("A IA não conseguiu aprimorar os dados, mantendo dados originais");
+                  }
+                } catch (aiError) {
+                  console.error("Erro ao aprimorar dados com IA:", aiError);
+                  console.log("Continuando com os dados originais sem aprimoramento de IA");
+                }
+                
                 productsData = universalProducts;
                 extractionInfo = `Extraídos ${productsData.length} produtos (processador universal).`;
                 console.log(`Processamento universal concluído com sucesso: ${productsData.length} produtos`);
@@ -1202,6 +1219,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
                   poeProducts = await poeProcessor.associatePOEProductsWithImages(
                     poeProducts, filePath, extractedImagesDir, userId, firestoreCatalogId
                   );
+                  
+                  // Adicionar camada de IA para aprimorar os dados POE
+                  console.log("Aprimorando dados dos produtos POE com IA...");
+                  try {
+                    const { enhanceCatalogWithAI } = await import('./ai-catalog-enhancer.js');
+                    const enhancedProducts = await enhanceCatalogWithAI(poeProducts);
+                    
+                    if (enhancedProducts && enhancedProducts.length > 0) {
+                      poeProducts = enhancedProducts;
+                      console.log(`Dados POE aprimorados com sucesso pela IA para ${poeProducts.length} produtos`);
+                    } else {
+                      console.log("A IA não conseguiu aprimorar os dados POE, mantendo dados originais");
+                    }
+                  } catch (aiError) {
+                    console.error("Erro ao aprimorar dados POE com IA:", aiError);
+                    console.log("Continuando com os dados POE originais sem aprimoramento de IA");
+                  }
                 }
                 
                 productsData = poeProducts;
@@ -1227,6 +1261,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
               // Processar o Excel com o formato de colunas fixas
               try {
                 productsData = await processExcelWithFixedColumns(filePath, userId, firestoreCatalogId);
+                
+                // Adicionar camada de IA para aprimorar os dados do processador de colunas fixas
+                if (productsData.length > 0) {
+                  console.log("Aprimorando dados dos produtos de colunas fixas com IA...");
+                  try {
+                    const { enhanceCatalogWithAI } = await import('./ai-catalog-enhancer.js');
+                    const enhancedProducts = await enhanceCatalogWithAI(productsData);
+                    
+                    if (enhancedProducts && enhancedProducts.length > 0) {
+                      productsData = enhancedProducts;
+                      console.log(`Dados de colunas fixas aprimorados com sucesso pela IA para ${productsData.length} produtos`);
+                    } else {
+                      console.log("A IA não conseguiu aprimorar os dados de colunas fixas, mantendo dados originais");
+                    }
+                  } catch (aiError) {
+                    console.error("Erro ao aprimorar dados de colunas fixas com IA:", aiError);
+                    console.log("Continuando com os dados originais de colunas fixas sem aprimoramento de IA");
+                  }
+                }
+                
                 extractionInfo = `Extraídos ${productsData.length} produtos do arquivo Excel (colunas fixas).`;
               } catch (fixedError) {
                 console.error("Erro no processador de colunas fixas:", fixedError);
@@ -1256,6 +1310,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
               // Primeiro tentar com o processador melhorado
               const { processExcelFile } = await import('./excel-processor-improved.js');
               productsData = await processExcelFile(filePath, userId, firestoreCatalogId);
+              
+              // Adicionar camada de IA para aprimorar os produtos do fallback
+              if (productsData.length > 0) {
+                console.log("Aprimorando dados dos produtos do detector inteligente com IA...");
+                try {
+                  const { enhanceCatalogWithAI } = await import('./ai-catalog-enhancer.js');
+                  const enhancedProducts = await enhanceCatalogWithAI(productsData);
+                  
+                  if (enhancedProducts && enhancedProducts.length > 0) {
+                    productsData = enhancedProducts;
+                    console.log(`Dados do detector inteligente aprimorados com sucesso pela IA para ${productsData.length} produtos`);
+                  } else {
+                    console.log("A IA não conseguiu aprimorar os dados do detector inteligente, mantendo dados originais");
+                  }
+                } catch (aiError) {
+                  console.error("Erro ao aprimorar dados do detector inteligente com IA:", aiError);
+                  console.log("Continuando com os dados originais sem aprimoramento de IA");
+                }
+              }
+              
               extractionInfo = `Extraídos ${productsData.length} produtos do arquivo Excel (detector inteligente).`;
             } catch (improvedError) {
               console.error("Erro no processador melhorado:", improvedError);

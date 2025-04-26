@@ -1,233 +1,221 @@
 /**
- * Serviço de enriquecimento de catálogos com IA
+ * Serviço de Aprimoramento de Catálogos via OpenAI
  * 
- * Este serviço utiliza modelos de IA para melhorar os dados de produtos extraídos
- * de catálogos, incluindo:
- * - Correção de nomes incompletos
- * - Enriquecimento de descrições
- * - Categorização automática
- * - Inferência de dimensões, materiais e preços quando ausentes
+ * Este serviço recebe dados brutos de produtos após o mapeamento inicial
+ * e usa a OpenAI para corrigir, complementar e estruturar melhor os dados.
  */
 
-import { config } from 'dotenv';
-import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
 
-config(); // Carrega variáveis de ambiente
-
-// Inicializar clientes de IA
-// Importante: o modelo mais recente da Anthropic é "claude-3-7-sonnet-20250219" que foi lançado em 24 de fevereiro de 2025
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-});
-
-// Importante: o modelo mais recente da OpenAI é "gpt-4o" que foi lançado em 13 de maio de 2024
+// Inicializar cliente OpenAI
+// o modelo mais recente do OpenAI é "gpt-4o" que foi lançado em 13 de maio de 2024. não altere isso a menos que seja explicitamente solicitado pelo usuário
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
 /**
- * Verifica se um produto tem dados inconsistentes ou incompletos
- * @param {Object} product - Objeto do produto
- * @returns {Object} - Resultado da análise com campos inconsistentes
+ * Prompt base para o assistente de catalogação
  */
-function analyzeProductConsistency(product) {
-  const issues = {
-    hasIssues: false,
-    incompleteFields: [],
-    fieldsToEnrich: []
-  };
+const CATALOG_ASSISTANT_PROMPT = `Você é um Assistente de Catalogação de Produtos de Alto Padrão.
 
-  // Verificar nome
-  if (!product.name || product.name.length < 5 || /^(item|produto|imagem)\s*\d+$/i.test(product.name)) {
-    issues.hasIssues = true;
-    issues.incompleteFields.push('name');
+Receberá um input contendo dados extraídos de um Excel ou PDF de catálogo. Esses dados podem estar incompletos, bagunçados ou parcialmente corrompidos.
+
+Sua missão é:
+1. Identificar Nome, Código, Preço, Categoria, Descrição, Materiais, Dimensões.
+2. Corrigir nomes genéricos (ex: "Item 1", "Imagem 2") para um nome descritivo baseado no texto.
+3. Corrigir descrições curtas.
+4. Inferir categoria correta (Sofá, Mesa, Cadeira, Armário, etc.).
+5. Inferir materiais do produto (Madeira, Couro, Tecido, Metal, etc.).
+6. Corrigir preços (formato R$ X.XXX,XX).
+7. Se faltar dados, preencher como "Sob Consulta".
+
+Formato de saída esperado (sempre JSON):
+
+[
+  {
+    "nome": "",
+    "codigo": "",
+    "descricao": "",
+    "preco": "",
+    "categoria": "",
+    "dimensoes": "",
+    "material": "",
+    "imagem": "",
+    "local": "",
+    "fornecedor": ""
   }
-
-  // Verificar código
-  if (!product.code) {
-    issues.hasIssues = true;
-    issues.incompleteFields.push('code');
-  }
-
-  // Verificar descrição
-  if (!product.description || product.description.length < 20) {
-    issues.hasIssues = true;
-    issues.fieldsToEnrich.push('description');
-  }
-
-  // Verificar categoria
-  if (!product.category || product.category === 'Outros' || product.category.length < 3) {
-    issues.hasIssues = true;
-    issues.fieldsToEnrich.push('category');
-  }
-
-  // Verificar preço
-  if (!product.price || product.price <= 0) {
-    issues.hasIssues = true;
-    issues.incompleteFields.push('price');
-  }
-
-  // Verificar dimensões
-  if (!product.sizes || product.sizes.length === 0) {
-    issues.hasIssues = true;
-    issues.fieldsToEnrich.push('dimensions');
-  }
-
-  // Verificar materiais
-  if (!product.materials || product.materials.length === 0) {
-    issues.hasIssues = true;
-    issues.fieldsToEnrich.push('materials');
-  }
-
-  return issues;
-}
+]`;
 
 /**
- * Solicita à IA o enriquecimento de um produto com dados inconsistentes
- * @param {Object} product - Objeto do produto
- * @param {Object} issues - Problemas detectados no produto
- * @returns {Promise<Object>} - Produto enriquecido
+ * Aprimora um conjunto de produtos com a IA
+ * 
+ * @param {Array} products Lista de produtos extraídos do processador universal
+ * @returns {Promise<Array>} Lista de produtos aprimorados pela IA
  */
-async function enrichProductWithAI(product, issues) {
+export async function enhanceCatalogWithAI(products) {
+  if (!products || products.length === 0) {
+    console.log("Nenhum produto para aprimorar com IA");
+    return products;
+  }
+  
   try {
-    // Preparar prompt para a IA
-    const systemPrompt = `
-Você é um especialista em mobiliário e decoração.
-Sua tarefa é enriquecer dados de produtos de um catálogo de móveis que estão incompletos ou inconsistentes.
-Forneça informações precisas, técnicas e comerciais, sem exageros ou imprecisões.
-`;
-
-    const productData = JSON.stringify(product, null, 2);
-    const issuesData = JSON.stringify(issues, null, 2);
-
-    const userPrompt = `
-Enriqueça os dados deste produto de um catálogo de móveis com base nas informações disponíveis.
-Dados atuais do produto:
-${productData}
-
-Campos que precisam de atenção:
-${issuesData}
-
-Retorne um JSON completo com todos os campos originais mais os campos melhorados.
-Se for necessário inferir alguma informação (como dimensões, material ou preço), faça isso de forma razoável com base no tipo de produto, mas indique claramente que é uma inferência.
-Para dimensões, use o formato "LxAxP" (Largura x Altura x Profundidade) em centímetros.
-Para o preço, se não houver valor, use a string "Sob Consulta".
-`;
-
-    // Determinar qual modelo de IA usar (baseado em disponibilidade de chaves API)
-    let enhancedProduct;
-
-    if (process.env.ANTHROPIC_API_KEY) {
-      // Usar Claude da Anthropic
-      const response = await anthropic.messages.create({
-        model: "claude-3-7-sonnet-20250219",
-        max_tokens: 1000,
-        system: systemPrompt,
-        messages: [{ role: 'user', content: userPrompt }],
-      });
-
-      // Extrair o JSON da resposta
-      const content = response.content[0].text;
-      const jsonMatch = content.match(/```json\n([\s\S]*?)\n```/);
-      enhancedProduct = jsonMatch 
-        ? JSON.parse(jsonMatch[1]) 
-        : JSON.parse(content);
-    } 
-    else if (process.env.OPENAI_API_KEY) {
-      // Usar GPT-4o da OpenAI
-      const response = await openai.chat.completions.create({
-        model: "gpt-4o",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt }
-        ],
-        response_format: { type: "json_object" }
-      });
-
-      enhancedProduct = JSON.parse(response.choices[0].message.content);
-    } 
-    else {
-      // Fallback sem IA - apenas estruturar melhor o produto sem modificações
-      console.warn("Nenhuma chave de API para IA configurada. Usando fallback sem enriquecimento.");
-      
-      enhancedProduct = {
-        ...product,
-        description: product.description || `${product.name || 'Produto'} de alta qualidade.`,
-        category: product.category || "Móveis",
-        materials: product.materials || ["Material não especificado"],
-        sizes: product.sizes || []
-      };
-    }
-
-    // Garantir que campos essenciais estejam presentes
-    enhancedProduct.name = enhancedProduct.name || product.name;
-    enhancedProduct.code = enhancedProduct.code || product.code;
-    enhancedProduct.price = enhancedProduct.price || product.price;
-    enhancedProduct.catalogId = product.catalogId;
-    enhancedProduct.userId = product.userId;
-    enhancedProduct.imageUrl = product.imageUrl;
-    enhancedProduct.isAIEnhanced = true; // Marcar produto como enriquecido por IA
-
-    return enhancedProduct;
-  } catch (error) {
-    console.error('Erro ao enriquecer produto com IA:', error);
-    // Retornar produto original se houver erro
-    return { ...product, isAIEnhanced: false };
-  }
-}
-
-/**
- * Processa um lote de produtos e enriquece aqueles com dados inconsistentes
- * @param {Array} products - Lista de produtos a processar
- * @returns {Promise<Array>} - Lista de produtos processados
- */
-async function processProductBatch(products) {
-  const processedProducts = [];
-  
-  for (const product of products) {
-    // Analisar consistência
-    const issues = analyzeProductConsistency(product);
+    console.log(`\n=== INICIANDO APRIMORAMENTO COM IA PARA ${products.length} PRODUTOS ===`);
     
-    if (issues.hasIssues) {
-      // Produto precisa de enriquecimento
-      console.log(`Enriquecendo produto "${product.name || product.code}" com IA`);
-      const enhancedProduct = await enrichProductWithAI(product, issues);
-      processedProducts.push(enhancedProduct);
-    } else {
-      // Produto já está ok
-      processedProducts.push(product);
+    // Limitar o número de produtos para evitar tokens excessivos na API
+    const BATCH_SIZE = 50;
+    const enhancedProducts = [];
+    
+    // Processar em lotes para evitar exceder o limite de tokens
+    for (let i = 0; i < products.length; i += BATCH_SIZE) {
+      const batch = products.slice(i, i + BATCH_SIZE);
+      console.log(`Processando lote ${Math.floor(i/BATCH_SIZE) + 1}/${Math.ceil(products.length/BATCH_SIZE)} (${batch.length} produtos)`);
+      
+      // Converter produtos para o formato esperado pela IA
+      const productsForAI = batch.map(p => ({
+        nome: p.name || "",
+        codigo: p.code || "",
+        descricao: p.description || p.name || "",
+        preco: p.price ? `R$ ${(p.price/100).toFixed(2)}` : "",
+        categoria: p.category || "",
+        dimensoes: p.dimensions || "",
+        material: Array.isArray(p.materials) ? p.materials.join(", ") : p.materials || "",
+        imagem: p.imageUrl || "",
+        local: p.location || "",
+        fornecedor: p.manufacturer || ""
+      }));
+      
+      // Enviar para OpenAI
+      const response = await processWithOpenAI(productsForAI);
+      
+      // Processar resposta e converter de volta para o formato da aplicação
+      if (response && Array.isArray(response)) {
+        const processedBatch = response.map((enhancedProduct, index) => {
+          const originalProduct = batch[index];
+          
+          // Calcular preço em centavos a partir do preço formatado
+          let priceInCents = originalProduct.price || 0;
+          if (enhancedProduct.preco && enhancedProduct.preco !== "Sob Consulta") {
+            const priceStr = enhancedProduct.preco.replace("R$", "").trim();
+            const normalizedPrice = priceStr.replace(".", "").replace(",", ".");
+            const price = parseFloat(normalizedPrice);
+            if (!isNaN(price)) {
+              priceInCents = Math.round(price * 100);
+            }
+          }
+          
+          // Converter materiais de string para array
+          let materials = originalProduct.materials || [];
+          if (enhancedProduct.material && typeof enhancedProduct.material === 'string') {
+            materials = enhancedProduct.material
+              .split(",")
+              .map(m => m.trim())
+              .filter(m => m && m !== "Sob Consulta");
+          }
+          
+          return {
+            ...originalProduct,
+            name: enhancedProduct.nome || originalProduct.name,
+            code: enhancedProduct.codigo || originalProduct.code,
+            description: enhancedProduct.descricao || originalProduct.description,
+            category: enhancedProduct.categoria || originalProduct.category,
+            price: priceInCents,
+            materials: materials,
+            dimensions: enhancedProduct.dimensoes || originalProduct.dimensions,
+            manufacturer: enhancedProduct.fornecedor || originalProduct.manufacturer,
+            location: enhancedProduct.local || originalProduct.location,
+          };
+        });
+        
+        enhancedProducts.push(...processedBatch);
+        console.log(`Lote ${Math.floor(i/BATCH_SIZE) + 1} processado com sucesso`);
+      } else {
+        // Se houver erro no processamento do lote, manter os produtos originais
+        console.log(`Erro no processamento do lote ${Math.floor(i/BATCH_SIZE) + 1}, mantendo produtos originais`);
+        enhancedProducts.push(...batch);
+      }
+      
+      // Aguardar um momento para evitar rate limiting
+      if (i + BATCH_SIZE < products.length) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
     }
+    
+    console.log(`=== APRIMORAMENTO COM IA CONCLUÍDO ===`);
+    console.log(`${enhancedProducts.length} produtos processados pela IA`);
+    
+    return enhancedProducts;
+    
+  } catch (error) {
+    console.error("Erro ao aprimorar catálogo com IA:", error);
+    // Em caso de erro, retornar os produtos originais
+    return products;
   }
-  
-  return processedProducts;
 }
 
 /**
- * Enriquece um catálogo completo usando IA
- * @param {Array} products - Lista de produtos do catálogo
- * @returns {Promise<Array>} - Lista de produtos enriquecidos
+ * Processa um lote de produtos com a OpenAI
+ * 
+ * @param {Array} productsData Dados dos produtos a serem processados
+ * @returns {Promise<Array>} Produtos aprimorados
  */
-async function enhanceCatalogWithAI(products) {
-  console.log(`Iniciando enriquecimento de ${products.length} produtos com IA`);
-  
-  // Processar em lotes para evitar muitas requisições simultâneas
-  const batchSize = 5;
-  const enhancedProducts = [];
-  
-  for (let i = 0; i < products.length; i += batchSize) {
-    const batch = products.slice(i, i + batchSize);
-    const processedBatch = await processProductBatch(batch);
-    enhancedProducts.push(...processedBatch);
-    console.log(`Processado lote ${Math.floor(i/batchSize) + 1} de ${Math.ceil(products.length/batchSize)}`);
+async function processWithOpenAI(productsData) {
+  try {
+    console.log(`Enviando ${productsData.length} produtos para OpenAI...`);
+    
+    // Preparar mensagens para a API
+    const messages = [
+      { 
+        role: "system", 
+        content: CATALOG_ASSISTANT_PROMPT 
+      },
+      { 
+        role: "user", 
+        content: JSON.stringify(productsData, null, 2) 
+      }
+    ];
+    
+    // Chamar a API da OpenAI
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o",  // modelo mais recente
+      messages: messages,
+      temperature: 0.2,  // baixa temperatura para resultados mais consistentes
+      max_tokens: 4096,  // limite generoso para acomodar muitos produtos
+      response_format: { type: "json_object" }  // forçar resposta em JSON
+    });
+    
+    // Extrair e processar a resposta
+    const result = response.choices[0].message.content;
+    
+    // Verificar se a resposta é um JSON válido
+    try {
+      // Parse da resposta JSON
+      const parsedResult = JSON.parse(result);
+      
+      // Verificar se a resposta contém um array de produtos
+      if (Array.isArray(parsedResult)) {
+        return parsedResult;
+      } else if (parsedResult && Array.isArray(parsedResult.products)) {
+        return parsedResult.products;
+      } else if (parsedResult && typeof parsedResult === 'object') {
+        // Procurar qualquer array na resposta
+        for (const key in parsedResult) {
+          if (Array.isArray(parsedResult[key])) {
+            return parsedResult[key];
+          }
+        }
+      }
+      
+      console.log("Resposta da IA não contém um array de produtos:", parsedResult);
+      return productsData;
+      
+    } catch (parseError) {
+      console.error("Erro ao fazer parse da resposta da IA:", parseError);
+      console.log("Resposta bruta da IA:", result);
+      return productsData;
+    }
+    
+  } catch (error) {
+    console.error("Erro na chamada da API OpenAI:", error);
+    return productsData;
   }
-  
-  console.log(`Enriquecimento concluído. ${enhancedProducts.length} produtos processados.`);
-  return enhancedProducts;
 }
-
-export { 
-  analyzeProductConsistency, 
-  enrichProductWithAI, 
-  enhanceCatalogWithAI 
-};
