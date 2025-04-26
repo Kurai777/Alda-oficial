@@ -306,6 +306,23 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
             }}
           />
           
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              // Refresh para forçar o recarregamento de todas as imagens
+              refetch();
+              toast({
+                title: "Atualizando imagens",
+                description: "Recarregando imagens dos produtos...",
+                duration: 3000,
+              });
+            }}
+          >
+            <RefreshCw className="h-4 w-4 mr-2" />
+            Atualizar imagens
+          </Button>
+          
           {(filters.category || filters.manufacturer || filters.minPrice || filters.maxPrice) && (
             <Button 
               variant="ghost"
@@ -480,7 +497,7 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
                               productId={product.id}
                               altText={product.name}
                               className="w-full h-full object-cover"
-                              imageUrl={product.imageUrl}
+                              imageUrl={product.imageUrl || undefined}
                               forceCacheBusting={true}
                             />
                           ) : (
