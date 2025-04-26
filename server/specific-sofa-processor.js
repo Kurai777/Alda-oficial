@@ -303,46 +303,80 @@ export function getExampleProducts(userId, catalogId) {
     {
       name: "Sofá Home Sleep",
       description: "Sleep\nTecido 3R2\n3 mod de 1,00m\nc/ braço de 8cm",
-      code: "SLE1533D",
-      price: 22639.00,
+      code: "SLE-2024",
+      price: 8000.00,
       location: "2º Piso",
       manufacturer: "Enobli",
       quantity: 1,
       userId: userId,
-      catalogId: catalogId
+      catalogId: catalogId,
+      category: "Sofás",
+      imageUrl: `/api/images/${userId}/${catalogId}/1745683568148-image-1.jpg`
     },
     {
       name: "Sofá Home Boheme",
-      description: "Boheme\n3,40x1,18x0,88\nProfundidade aberto 1,68\nTecido F2018\n3 mod de 1,00m\nc/ braço de 20cm",
+      description: "Boheme\nTecido F2018\n3 mod de 1,00m\nc/ braço de 20cm",
       code: "29059",
-      price: 32190.00,
-      location: "Depósito/OUTLET",
-      manufacturer: "LL",
+      price: 8000.00,
+      location: "Loja",
+      manufacturer: "Sofá Home",
       quantity: 1,
       userId: userId,
-      catalogId: catalogId
+      catalogId: catalogId,
+      category: "Sofás",
+      imageUrl: `/api/images/${userId}/${catalogId}/1745683568255-image-101.png`
     },
     {
-      name: "Sofá Home Ony",
-      description: "Ony\n2,75x1,05x1,00 alt\ncouro CL2\nCor cinza tauper\nprofundidade aberto 1,62\nEssenze grigy\nTauner\nassinado por Estúdio Ono",
-      code: "34729/34529334",
-      price: 48731.95,
+      name: "Poltrona 20-40K",
+      description: "Poltrona estofada com estrutura em madeira",
+      code: "P-7832",
+      price: 8000.00,
       location: "2º Piso",
-      manufacturer: "AC",
+      manufacturer: "KaDeWe",
       quantity: 1,
       userId: userId,
-      catalogId: catalogId
+      catalogId: catalogId,
+      category: "Poltronas",
+      imageUrl: `/api/images/${userId}/${catalogId}/1745683568180-image-10.png`
     },
     {
-      name: "Sofá Home Mediterrâneo",
-      description: "Mediterrâneo\nmedida total 2,70x1,20x1,75h\n2,70m\n2 módulos de 1,35",
-      code: "29074 29075",
-      price: 26242.02,
-      location: "Depósito",
-      manufacturer: "AC",
+      name: "Poltrona 40K+",
+      description: "Poltrona design contemporâneo",
+      code: "Depósito/OUTLET",
+      price: 8000.00,
+      location: "Loja",
+      manufacturer: "Mille",
       quantity: 1,
       userId: userId,
-      catalogId: catalogId
+      catalogId: catalogId,
+      category: "Poltronas",
+      imageUrl: `/api/images/${userId}/${catalogId}/1745683568240-image-100.png`
+    },
+    {
+      name: "Poltrona Urban",
+      description: "Poltrona com base em madeira",
+      code: "P-9012",
+      price: 8000.00,
+      location: "2º Piso",
+      manufacturer: "Design",
+      quantity: 1,
+      userId: userId,
+      catalogId: catalogId,
+      category: "Poltronas",
+      imageUrl: `/api/images/${userId}/${catalogId}/1745683568307-image-104.jpg`
+    },
+    {
+      name: "Sofá Modular 20-40K",
+      description: "Sofá modular em tecido cinza",
+      code: "2º piso",
+      price: 8000.00,
+      location: "Showroom",
+      manufacturer: "Contemporary",
+      quantity: 1,
+      userId: userId,
+      catalogId: catalogId,
+      category: "Sofás",
+      imageUrl: `/api/images/${userId}/${catalogId}/1745683568393-image-11.png`
     }
   ];
 }
