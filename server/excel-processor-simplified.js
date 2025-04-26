@@ -40,12 +40,12 @@ const COLUMN_MAPPINGS = {
 
 /**
  * Extrai produtos de um arquivo Excel
- * @param filePath Caminho para o arquivo Excel
- * @param userId ID do usuário
- * @param catalogId ID do catálogo
- * @returns Lista de produtos processados
+ * @param {string} filePath Caminho para o arquivo Excel
+ * @param {any} userId ID do usuário
+ * @param {any} catalogId ID do catálogo
+ * @returns {Promise<Array>} Lista de produtos processados
  */
-async function processExcelFile(filePath: string, userId: any, catalogId: any): Promise<any[]> {
+async function processExcelFile(filePath, userId, catalogId) {
   try {
     console.log(`Processador simplificado: processando ${filePath}`);
     
@@ -247,5 +247,5 @@ async function processExcelFile(filePath: string, userId: any, catalogId: any): 
   }
 }
 
-// Exportar para ser compatível com CommonJS e ES Modules
+// Exportar para ser compatível com CommonJS
 module.exports = { processExcelFile };
