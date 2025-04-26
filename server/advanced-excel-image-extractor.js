@@ -798,14 +798,19 @@ export async function extractImagesFromExcel(excelPath, products, userId, catalo
       return products;
     }
     
-    console.log(`Encontradas ${result.images.length} imagens no Excel`);
+    console.log(`Encontradas ${result.images.length} imagens no Excel (antes da filtragem)`);
+    
+    // Filtrar imagens que não são de produtos
+    const filteredImages = filterNonProductImages(result.images);
+    
+    console.log(`Após filtragem: ${filteredImages.length} imagens válidas de produtos`);
     
     // Objeto para armazenar URLs de imagens por código
     const imageUrlMap = {};
     
     // Processar cada imagem
-    for (let i = 0; i < result.images.length; i++) {
-      const image = result.images[i];
+    for (let i = 0; i < filteredImages.length; i++) {
+      const image = filteredImages[i];
       
       try {
         // Verificar se temos os campos necessários
@@ -959,6 +964,72 @@ export async function hasExcelImages(excelPath) {
     // Em caso de erro, assume que não tem imagens
     return false;
   }
+}
+
+/**
+ * Filtra imagens que não são produtos
+ * @param {Array} images Lista de imagens extraídas
+ * @returns {Array} Lista filtrada de imagens de produtos
+ */
+function filterNonProductImages(images) {
+  if (!images || !Array.isArray(images)) return [];
+  
+  return images.filter(image => {
+    try {
+      // Critério 1: Ignorar imagens muito pequenas
+      // Se temos informações de tamanho da imagem
+      if (image.image && (image.image.width < 50 || image.image.height < 50)) {
+        console.log(`Ignorando imagem pequena demais: ${image.image_filename || 'sem nome'} (${image.image.width}x${image.image.height})`);
+        return false;
+      }
+      
+      // Verificar tamanho também usando base64
+      if (image.image_base64) {
+        try {
+          // Calcular tamanho aproximado da imagem em bytes
+          const base64WithoutHeader = image.image_base64.split(',').pop();
+          const sizeInBytes = Math.floor((base64WithoutHeader.length * 3) / 4);
+          
+          // Uma imagem menor que 5KB provavelmente é um ícone ou elemento gráfico
+          if (sizeInBytes < 5 * 1024) {
+            console.log(`Ignorando imagem muito pequena (${Math.round(sizeInBytes/1024)}KB): ${image.image_filename || 'sem nome'}`);
+            return false;
+          }
+        } catch (e) {
+          // Se falhar ao calcular o tamanho, continuar com as outras verificações
+        }
+      }
+      
+      // Critério 2: Ignorar imagens com nomes sugestivos de elementos gráficos
+      const rejectPatterns = [
+        /header/i, /footer/i, /page/i, /background/i, /logo/i, /template/i,
+        /cabeçalho/i, /rodapé/i, /página/i, /fundo/i, /modelo/i, /bg_/i, /template/i
+      ];
+      
+      const filename = image.image_filename || image.original_path || '';
+      const matchesPattern = rejectPatterns.some(pattern => pattern.test(filename));
+      
+      if (matchesPattern) {
+        console.log(`Ignorando imagem com nome sugestivo de elemento gráfico: ${filename}`);
+        return false;
+      }
+      
+      // Critério 3: Considerar apenas imagens associadas a células não vazias (se possível)
+      if (image.cell && image.sheet) {
+        // Se temos informação de célula, poderíamos verificar se a célula está vazia
+        // Essa implementação dependeria de ter acesso ao conteúdo das células
+        // o que não está disponível neste contexto
+        console.log(`Imagem associada à célula ${image.cell} na planilha ${image.sheet}`);
+      }
+      
+      // Se a imagem passou por todos os filtros, considerá-la válida
+      return true;
+    } catch (error) {
+      console.error(`Erro ao filtrar imagem: ${error.message}`);
+      // Em caso de erro na filtragem, manter a imagem por padrão
+      return true;
+    }
+  });
 }
 
 export default {
