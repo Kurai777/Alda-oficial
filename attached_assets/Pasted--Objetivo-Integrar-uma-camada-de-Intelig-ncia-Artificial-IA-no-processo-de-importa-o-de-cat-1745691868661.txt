@@ -1,0 +1,63 @@
+⚙️ Objetivo:
+
+Integrar uma camada de Inteligência Artificial (IA) no processo de importação de catálogos do app para:
+
+- Corrigir dados incompletos ou errados
+- Enriquecer descrições pobres
+- Categorizar produtos automaticamente
+- Inferir dimensões, materiais e preços quando ausentes
+- Organizar produtos bagunçados de planilhas ou PDFs
+- Estruturar catálogos em JSON padronizado para o banco de dados do app
+
+A IA será utilizada como uma camada "inteligente" entre a extração bruta e o cadastro final.
+
+---
+
+🛠️ Funcionalidades que devem ser implementadas:
+
+1. **Upload de Arquivo**
+- O usuário envia um Excel, CSV ou PDF de catálogo.
+- O app extrai as informações brutas:
+  - Nome
+  - Código
+  - Descrição
+  - Preço
+  - Imagem (se disponível)
+
+2. **Análise de Consistência dos Dados**
+- Validar se os campos obrigatórios existem.
+- Identificar:
+  - Nome incompleto (ex: "Item 1", "Imagem 2", etc.)
+  - Preço ausente ou inválido
+  - Descrição pobre (menos de 10 palavras ou muito genérica)
+  - Categoria ausente
+  - Código inconsistente
+  - Dimensões faltando
+  - Material faltando
+
+3. **Correção, Enriquecimento e Organização com IA**
+- Quando inconsistências forem detectadas:
+  - Enviar o produto para a IA (via API OpenAI GPT-4o, Claude 3, ou outro LLM configurado).
+- A IA deve:
+  - Corrigir nomes incompletos
+  - Criar descrições técnicas vendedoras (não exageradas, comerciais e claras)
+  - Categorizar o produto (ex: "Sofá", "Mesa de Jantar", "Cadeira de Escritório")
+  - Inferir medidas ou pedir fallback para "Sob Consulta"
+  - Sugerir materiais prováveis (ex: madeira, couro, tecido)
+  - Completar o JSON do produto
+
+4. **Formato de saída esperado (JSON estruturado):**
+
+```json
+{
+  "nome": "Sofá Home Supreme",
+  "codigo": "SLE1823313",
+  "descricao": "Sofá de 3 lugares com estrutura em madeira maciça e estofado em tecido linho bege. Dimensões: Largura 210cm x Altura 85cm x Profundidade 90cm.",
+  "preco": "R$ 3.500,00",
+  "dimensoes": "210x85x90 cm",
+  "categoria": "Sofás",
+  "material": "Tecido Linho",
+  "imagem": "https://linkfirebase.com/imagens/sofa_supreme.jpg",
+  "local": "2º Piso",
+  "fornecedor": "Enobil"
+}

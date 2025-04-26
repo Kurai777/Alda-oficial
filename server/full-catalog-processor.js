@@ -237,17 +237,42 @@ async function processFullCatalog(filePath, userId, catalogId) {
  * @param {string} filePath - Caminho para o arquivo Excel
  * @param {number} userId - ID do usuário
  * @param {number} catalogId - ID do catálogo
- * @returns {Promise<{success: boolean, count: number}>} - Resultado da importação
+ * @param {boolean} useAI - Se deve usar IA para enriquecer os produtos (default: false)
+ * @returns {Promise<{success: boolean, count: number, enhancedCount?: number}>} - Resultado da importação
  */
-async function importFullCatalog(filePath, userId, catalogId) {
-  console.log(`Importando catálogo completo: ${filePath}`);
+async function importFullCatalog(filePath, userId, catalogId, useAI = false) {
+  console.log(`Importando catálogo completo: ${filePath} ${useAI ? 'com IA' : 'sem IA'}`);
   
   try {
     // Processar o catálogo
-    const products = await processFullCatalog(filePath, userId, catalogId);
+    let products = await processFullCatalog(filePath, userId, catalogId);
     
     if (!products || products.length === 0) {
       return { success: false, error: 'Nenhum produto encontrado no Excel' };
+    }
+    
+    let enhancedCount = 0;
+    
+    // Aplicar camada de enriquecimento com IA se solicitado
+    if (useAI && (process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY)) {
+      try {
+        console.log(`Iniciando enriquecimento de dados com IA para ${products.length} produtos`);
+        const { enhanceCatalogWithAI } = await import('./ai-catalog-enhancer.js');
+        
+        // Enriquecer produtos com IA
+        const enhancedProducts = await enhanceCatalogWithAI(products);
+        
+        // Contar quantos produtos foram enriquecidos
+        enhancedCount = enhancedProducts.filter(p => p.isAIEnhanced).length;
+        
+        products = enhancedProducts;
+        console.log(`Enriquecimento com IA concluído: ${enhancedCount} produtos melhorados`);
+      } catch (aiError) {
+        console.error('Erro ao enriquecer produtos com IA:', aiError);
+        // Continua com os produtos originais mesmo se houver erro na IA
+      }
+    } else if (useAI) {
+      console.warn('Enriquecimento com IA solicitado, mas nenhuma chave de API disponível');
     }
     
     // Limpar produtos existentes do catálogo atual
@@ -262,7 +287,11 @@ async function importFullCatalog(filePath, userId, catalogId) {
       console.log(`Inserido lote ${i/batchSize + 1} com ${batch.length} produtos`);
     }
     
-    return { success: true, count: products.length };
+    return { 
+      success: true, 
+      count: products.length,
+      enhancedCount
+    };
   } catch (error) {
     console.error('Erro ao importar catálogo completo:', error);
     return { success: false, error: error.message };

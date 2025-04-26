@@ -53,7 +53,10 @@ reprocessRouter.post('/process-full-catalog/:catalogId', async (req, res) => {
     const { catalogId } = req.params;
     const userId = 1; // ID fixo para testes
     
-    console.log(`Iniciando processamento completo do catálogo ${catalogId} para o usuário ${userId}`);
+    // Verificar se deve usar IA para enriquecimento
+    const useAI = req.query.useAI === 'true' || req.body.useAI === true;
+    
+    console.log(`Iniciando processamento completo do catálogo ${catalogId} para o usuário ${userId} ${useAI ? 'com enriquecimento de IA' : ''}`);
     
     // Buscar informações do catálogo no banco de dados
     const [catalog] = await db.select().from(catalogs).where(eq(catalogs.id, parseInt(catalogId)));
@@ -93,7 +96,7 @@ reprocessRouter.post('/process-full-catalog/:catalogId', async (req, res) => {
     }
     
     // Processar o catálogo completo
-    const result = await importFullCatalog(filePath, userId, parseInt(catalogId));
+    const result = await importFullCatalog(filePath, userId, parseInt(catalogId), useAI);
     
     if (result.success) {
       // Atualizar o status do catálogo
@@ -103,7 +106,9 @@ reprocessRouter.post('/process-full-catalog/:catalogId', async (req, res) => {
       
       return res.status(200).json({
         message: `Catálogo ${catalogId} processado completamente com sucesso`,
-        productsCount: result.count
+        productsCount: result.count,
+        enhancedCount: result.enhancedCount || 0,
+        aiEnhanced: !!useAI
       });
     } else {
       return res.status(500).json({
