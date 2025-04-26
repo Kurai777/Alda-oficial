@@ -3658,6 +3658,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Adicionar rotas para correção de imagens
+  addFixImageRoutes(app);
+
   const httpServer = createServer(app);
   return httpServer;
 }

@@ -26,6 +26,7 @@ export function FixProductImagesButton({ catalogId, onComplete }: FixProductImag
     try {
       setIsFixing(true);
       
+      // Rota já implementada no servidor: /api/fix-product-images/:catalogId
       const response = await apiRequest('POST', `/api/fix-product-images/${catalogId}`);
       const result = await response.json();
       
