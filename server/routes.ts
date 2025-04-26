@@ -1098,12 +1098,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
           
           try {
-            // PRIMEIRO TENTAR SEMPRE COM PROCESSADOR UNIVERSAL
-            console.log("USANDO PROCESSADOR UNIVERSAL para detecção automática de qualquer catálogo");
+            // PRIMEIRO TENTAR SEMPRE COM O NOVO PROCESSADOR UNIVERSAL DE COLUNAS FIXAS
+            console.log("USANDO NOVO PROCESSADOR UNIVERSAL (COLUNAS FIXAS) para qualquer tipo de catálogo");
+            console.log("Mapeamento EXPLÍCITO: G=Nome, H=Código, M=Preço, C=Fornecedor, B=Local");
             
             try {
-              // Importar o processador universal
-              const universalProcessor = await import('./universal-catalog-processor.js');
+              // Importar o novo processador universal com colunas fixas
+              const universalProcessor = await import('./universal-catalog-processor-new.js');
               
               // Criar diretório temporário para imagens extraídas 
               const extractedImagesDir = path.join(path.dirname(filePath), 'extracted_images', path.basename(filePath, path.extname(filePath)));
@@ -1117,14 +1118,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
               const { processExcelFile } = await import('./excel-processor-improved.js');
               const dummyProducts = await processExcelFile(filePath, userId, firestoreCatalogId);
               
-              // Processar o Excel com o processador universal
-              let universalProducts = await universalProcessor.processUniversalCatalog(filePath, userId, firestoreCatalogId);
+              // Processar o Excel com o novo processador universal
+              console.log(`Iniciando processamento com mapeamento FIXO de colunas!`);
+              let universalProducts = await universalProcessor.processExcelUniversal(filePath, userId, firestoreCatalogId);
               
-              console.log(`Produtos detectados pelo processador universal: ${universalProducts.length}`);
+              console.log(`Produtos detectados pelo NOVO processador universal: ${universalProducts.length}`);
               
               // Associar imagens aos produtos
               if (universalProducts.length > 0) {
-                universalProducts = await universalProcessor.associateUniversalProductsWithImages(
+                universalProducts = await universalProcessor.associateProductsWithImages(
                   universalProducts, filePath, extractedImagesDir, userId, firestoreCatalogId
                 );
                 
