@@ -360,7 +360,15 @@ export async function processUniversalCatalog(filePath, userId, catalogId) {
         continue;
       }
       
-      // Inicializar o produto
+      // ======= MAPEAMENTO EXPLÍCITO PARA PRODUTOS =======
+    
+      // Início do registro em log
+      console.log(`\n============ PROCESSANDO LINHA ${i+1} ============`);
+      
+      // Log dos dados brutos da linha
+      console.log(`DADOS DA LINHA ${i+1}:`, JSON.stringify(row));
+      
+      // Inicializar o produto com dados obrigatórios
       const product = {
         userId: userId,
         catalogId: parseInt(catalogId),
@@ -371,100 +379,91 @@ export async function processUniversalCatalog(filePath, userId, catalogId) {
         colors: []
       };
       
-      // Extrair dados baseado no mapeamento de colunas
-      let productName = '';
-      let productCode = '';
-      let productDesc = '';
+      // ======= EXTRAÇÃO DE PRODUTO EXPLÍCITA PARA GARANTIR CAMPOS CORRETOS =======
       
-      // Processar cada coluna mapeada
-      for (const [col, type] of Object.entries(columnMapping)) {
-        if (!row[col]) continue;
-        
-        const value = row[col];
-        const strValue = value.toString().trim();
-        
-        switch (type) {
-          case 'name':
-            productName = strValue;
-            productDesc = strValue;
-            break;
-            
-          case 'code':
-            productCode = strValue;
-            break;
-            
-          case 'price':
-            product.price = extractUniversalPrice(value);
-            break;
-            
-          // Outros tipos podem ser adicionados conforme necessário
-        }
+      // 1. NOME DO PRODUTO: SEMPRE VINDO DA COLUNA G (Descrição do Produto)
+      if (row.G) {
+        product.name = row.G.toString().trim();
+        product.description = product.name;
+        console.log(`NOME extraído da coluna G (Descrição): "${product.name}"`);
+      } else {
+        // Se não houver valor em G, gerar nome genérico
+        product.name = `Item ${i + 1} da Linha Excel ${i+1} (Catálogo ${catalogId})`;
+        product.description = product.name;
+        console.log(`NOME não encontrado na coluna G, usando genérico: "${product.name}"`);
       }
       
-      // Preencher campos do produto
-      if (productName) {
-        product.name = productName;
-        product.description = productDesc;
-      } else {
-        // Tentar extrair nome de outras fontes
-        // Tentar coluna G se disponível
-        if (row.G) {
-          product.name = row.G.toString().trim();
-          product.description = product.name;
-        } else {
-          // Gerar nome com código ou linha
-          product.name = productCode ? 
-            `Produto ${productCode}` : 
-            `Item ${i + 1}`;
-        }
-      }
-      
-      // Definir código do produto
-      if (productCode) {
-        product.code = productCode;
-      } else {
-        // Fallbacks em ordem de preferência: coluna H, F, ou gerar
-        if (row.H) {
-          product.code = row.H.toString().trim();
-        } else if (row.F) {
-          product.code = row.F.toString().trim();
-        } else {
-          // Gerar código único
+      // 2. CÓDIGO DO PRODUTO: SEMPRE VINDO DA COLUNA H (Código)
+      if (row.H) {
+        product.code = row.H.toString().trim();
+        // Verificar se parece um código válido (conter letras e números)
+        if (!/[a-zA-Z0-9]+/.test(product.code) || 
+            product.code.includes('piso') || 
+            product.code.includes('andar') ||
+            /^\d+k$/.test(product.code) ||
+            /^\d+\-\d+k$/.test(product.code)) {
+          // Se não parece um código válido, gerar código único
           product.code = `ITEM-${i}-${Date.now()}`;
+          console.log(`CÓDIGO inválido detectado na coluna H, substituído por: "${product.code}"`);
+        } else {
+          console.log(`CÓDIGO extraído da coluna H: "${product.code}"`);
         }
+      } else {
+        // Se não houver valor em H, gerar código único
+        product.code = `ITEM-${i}-${Date.now()}`;
+        console.log(`CÓDIGO não encontrado na coluna H, usando genérico: "${product.code}"`);
       }
       
-      // SEMPRE priorizar a coluna M (Valor Total) para preço, 
-      // mesmo que o mapeamento automático tenha detectado outra coluna
+      // 3. PREÇO DO PRODUTO: SEMPRE VINDO DA COLUNA M (Valor Total)
+      let valorTotal = null;
+      
       if (row.M) {
+        valorTotal = row.M;
         product.price = extractUniversalPrice(row.M);
-        console.log(`Preço extraído prioritariamente da coluna M (Valor Total): ${row.M} -> ${product.price} centavos`);
+        console.log(`PREÇO extraído da coluna M (Valor Total): ${row.M} -> ${product.price} centavos`);
+      } 
+      // Fallback para outras colunas de preço comuns
+      else if (row.L) {
+        valorTotal = row.L;
+        product.price = extractUniversalPrice(row.L);
+        console.log(`PREÇO extraído da coluna L (fallback): ${row.L} -> ${product.price} centavos`);
+      }
+      else if (row.N) {
+        valorTotal = row.N;
+        product.price = extractUniversalPrice(row.N);
+        console.log(`PREÇO extraído da coluna N (fallback): ${row.N} -> ${product.price} centavos`);
+      }
+      else if (row.J) {
+        valorTotal = row.J;
+        product.price = extractUniversalPrice(row.J);
+        console.log(`PREÇO extraído da coluna J (fallback): ${row.J} -> ${product.price} centavos`);
       }
       
-      // Fallbacks apenas se a coluna M não existir ou o preço for zero
-      if (product.price === 0) {
-        if (row.L) {
-          product.price = extractUniversalPrice(row.L);
-          console.log(`Preço extraído da coluna L (fallback): ${row.L} -> ${product.price} centavos`);
-        }
-        if (product.price === 0 && row.N) {
-          product.price = extractUniversalPrice(row.N);
-          console.log(`Preço extraído da coluna N (fallback): ${row.N} -> ${product.price} centavos`);
-        }
-        if (product.price === 0 && row.J) {
-          product.price = extractUniversalPrice(row.J);
-          console.log(`Preço extraído da coluna J (fallback): ${row.J} -> ${product.price} centavos`);
+      // Se o preço for zero, atribuir um valor arbitrário (temporariamente) para testes
+      if (product.price === 0 && valorTotal !== null) {
+        // Tentar novamente com conversão mais agressiva
+        const rawPriceStr = valorTotal.toString().trim();
+        if (rawPriceStr.includes('R$') || 
+            rawPriceStr.match(/[\d\.,]+/) ||
+            rawPriceStr.match(/\d+/)) {
+          // Extrair apenas dígitos e pontuação
+          const digitsOnly = rawPriceStr.replace(/[^\d,.]/g, '');
+          // Tentar converter assumindo formato brasileiro
+          const cleanValue = digitsOnly.replace(/\./g, '').replace(',', '.');
+          product.price = Math.round(parseFloat(cleanValue) * 100) || 0;
+          console.log(`PREÇO extraído com método alternativo: ${rawPriceStr} -> ${digitsOnly} -> ${cleanValue} -> ${product.price} centavos`);
         }
       }
       
-      // Definir localização
+      // 4. LOCAL E FORNECEDOR
       if (row.B) {
         product.location = row.B.toString().trim();
+        console.log(`LOCAL extraído da coluna B: "${product.location}"`);
       }
       
-      // Definir fabricante
       if (row.C) {
         product.manufacturer = row.C.toString().trim();
+        console.log(`FORNECEDOR extraído da coluna C: "${product.manufacturer}"`);
       }
       
       // Extrair material se possível a partir da descrição
