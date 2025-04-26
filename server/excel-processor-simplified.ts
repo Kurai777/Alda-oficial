@@ -5,11 +5,15 @@
  * focada em extrair informações básicas de produtos e suas imagens.
  */
 
-const XLSX = require('xlsx');
-const fs = require('fs');
-const path = require('path');
-const { extractExcelImages, associateImagesWithProducts } = require('./python-excel-bridge.js');
-const { robust_extractImages } = require('./robust-excel-image-extractor.js');
+import * as XLSX from 'xlsx';
+import fs from 'fs';
+import path from 'path';
+import { robust_extractImages } from './robust-excel-image-extractor.js';
+
+// Para evitar problemas de compatibilidade entre ESM e CommonJS
+const pythonBridge = require('./python-excel-bridge.js');
+const extractExcelImages = pythonBridge.extractExcelImages;
+const associateImagesWithProducts = pythonBridge.associateImagesWithProducts;
 
 // Mapeamento de colunas para formatos conhecidos
 const COLUMN_MAPPINGS = {
