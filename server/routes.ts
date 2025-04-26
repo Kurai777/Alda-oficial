@@ -1121,21 +1121,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 console.log("Tentando métodos alternativos para o arquivo...");
               }
             }
-            else if (isPOEFormat) {
+            else if (isPOEFormat || fileName.toLowerCase().includes('poe')) {
               console.log("DETECTADO FORMATO POE - usando processador especializado para POE");
               
-              // Importar o processador específico para POE
-              const poePorcessor = await import('./poe-excel-processor');
-              
               try {
+                // Importar o novo processador específico para POE
+                const poeProcessor = await import('./poe-catalog-processor.js');
+                
                 console.log(`Iniciando processamento especializado para arquivo POE: ${filePath}`);
                 console.log(`Usuário ID: ${userId}, Catálogo ID: ${firestoreCatalogId}`);
                 
-                // Processar o Excel com o processador especializado para POE
-                productsData = await poePorcessor.processPOEExcelFile(filePath, userId, firestoreCatalogId);
-                extractionInfo = `Extraídos ${productsData.length} produtos do arquivo POE (processador especializado).`;
+                // Criar diretório temporário para imagens extraídas
+                const extractedImagesDir = path.join(path.dirname(filePath), 'extracted_images', path.basename(filePath, path.extname(filePath)));
                 
-                console.log(`Processamento POE concluído com sucesso: ${productsData.length} produtos`);
+                if (!fs.existsSync(extractedImagesDir)) {
+                  fs.mkdirSync(extractedImagesDir, { recursive: true });
+                }
+                
+                // Extrair imagens primeiro
+                console.log(`Extraindo imagens para ${extractedImagesDir}`);
+                const { processExcelFile } = await import('./excel-processor-improved.js');
+                const dummyProducts = await processExcelFile(filePath, userId, firestoreCatalogId);
+                
+                // Processar o Excel com o processador especializado para POE
+                let poeProducts = await poeProcessor.processPOECatalog(filePath, userId, firestoreCatalogId);
+                
+                // Associar imagens aos produtos POE
+                if (poeProducts.length > 0) {
+                  poeProducts = await poeProcessor.associatePOEProductsWithImages(
+                    poeProducts, filePath, extractedImagesDir, userId, firestoreCatalogId
+                  );
+                }
+                
+                productsData = poeProducts;
+                extractionInfo = `Extraídos ${productsData.length} produtos do arquivo POE (processador especializado v2).`;
+                
+                console.log(`Processamento POE v2 concluído com sucesso: ${productsData.length} produtos`);
               } catch (poeError) {
                 console.error("ERRO AO PROCESSAR ARQUIVO POE:", poeError);
                 // Falhar para o método tradicional se o processador POE falhar

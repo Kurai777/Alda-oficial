@@ -54,6 +54,8 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
     manufacturer: "", // Fabricante (Sierra, Estúdio Bola, etc.)
     minPrice: "", // Preço mínimo
     maxPrice: "", // Preço máximo
+    location: "", // Localização (2°Piso, Depósito, etc.)
+    material: "", // Material (Tecido, Couro, etc.)
   });
   
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
@@ -68,7 +70,9 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
     materials: [],
     imageUrl: ''
   });
-  const pageSize = 10;
+  // Reduzindo a quantidade de produtos por página para melhor organização
+  const pageSize = 6;
+  // Grid é o modo padrão para melhor visualização
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('grid');
 
   // Buscar produtos do catálogo (somente da API local para evitar problemas de permissão)
@@ -151,6 +155,20 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
     if (filters.maxPrice) {
       const maxPrice = parseInt(filters.maxPrice) * 100; // Converter para centavos
       if (product.price > maxPrice) return false;
+    }
+    
+    // Filtro por localização
+    if (filters.location && product.location) {
+      if (!product.location.toLowerCase().includes(filters.location.toLowerCase())) {
+        return false;
+      }
+    }
+    
+    // Filtro por material
+    if (filters.material && product.material) {
+      if (!product.material.toLowerCase().includes(filters.material.toLowerCase())) {
+        return false;
+      }
     }
     
     return true;
@@ -335,7 +353,7 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
             Atualizar imagens
           </Button>
           
-          {(filters.category || filters.manufacturer || filters.minPrice || filters.maxPrice) && (
+          {(filters.category || filters.manufacturer || filters.minPrice || filters.maxPrice || filters.location || filters.material) && (
             <Button 
               variant="ghost"
               onClick={() => {
@@ -344,6 +362,8 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
                   manufacturer: "",
                   minPrice: "",
                   maxPrice: "",
+                  location: "",
+                  material: ""
                 });
                 toast({
                   title: "Filtros limpos",
@@ -371,7 +391,7 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
       </div>
 
       {/* Indicadores de filtros ativos */}
-      {(filters.category || filters.manufacturer || filters.minPrice || filters.maxPrice) && (
+      {(filters.category || filters.manufacturer || filters.minPrice || filters.maxPrice || filters.location || filters.material) && (
         <div className="flex flex-wrap gap-2 mb-4">
           <div className="text-sm text-muted-foreground mr-2 flex items-center">
             Filtros ativos:
@@ -417,6 +437,26 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
             </Badge>
           )}
           
+          {filters.location && (
+            <Badge variant="secondary" className="flex items-center gap-1">
+              <span>Localização: {filters.location}</span>
+              <XIcon 
+                className="h-3 w-3 cursor-pointer" 
+                onClick={() => setFilters({...filters, location: ""})}
+              />
+            </Badge>
+          )}
+          
+          {filters.material && (
+            <Badge variant="secondary" className="flex items-center gap-1">
+              <span>Material: {filters.material}</span>
+              <XIcon 
+                className="h-3 w-3 cursor-pointer" 
+                onClick={() => setFilters({...filters, material: ""})}
+              />
+            </Badge>
+          )}
+          
           <Button 
             variant="ghost" 
             size="sm" 
@@ -427,6 +467,8 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
                 manufacturer: "",
                 minPrice: "",
                 maxPrice: "",
+                location: "",
+                material: ""
               });
               toast({
                 title: "Filtros limpos",
