@@ -2447,6 +2447,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.sendFile(fullPath);
       }
       
+      // CASO 5b: Verificar se a URL está no formato /uploads/unique_product_images/
+      if (product?.imageUrl && product.imageUrl.includes('unique_product_images')) {
+        const directPath = path.join(process.cwd(), product.imageUrl.startsWith('/') ? product.imageUrl.substring(1) : product.imageUrl);
+        console.log(`Tentando servir imagem diretamente do caminho: ${directPath}`);
+        if (fs.existsSync(directPath)) {
+          const contentType = mime.lookup(directPath) || 'image/jpeg';
+          res.setHeader('Content-Type', contentType);
+          return res.sendFile(directPath);
+        }
+      }
+      
       // CASO 6: Determinar o placeholder baseado na categoria do produto
       let placeholderFile = 'default.svg';
       if (product.category) {
@@ -2506,6 +2517,49 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error('Erro ao servir imagem extraída:', error);
       res.status(500).json({ message: "Erro ao servir imagem extraída" });
+    }
+  });
+  
+  // Rota para servir imagens únicas de produtos diretamente
+  app.get("/uploads/unique_product_images/:filename", (req: Request, res: Response) => {
+    try {
+      const { filename } = req.params;
+      
+      // Caminho da imagem no sistema de arquivos
+      const imagePath = path.join(process.cwd(), 'uploads', 'unique_product_images', filename);
+      
+      console.log(`Servindo imagem única de produto: ${imagePath}`);
+      
+      if (!fs.existsSync(imagePath)) {
+        console.error(`Imagem única de produto não encontrada: ${imagePath}`);
+        
+        // Gerar SVG placeholder
+        const svgContent = `
+        <svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400">
+          <rect width="600" height="400" fill="#f0f0f0" />
+          <text x="300" y="200" font-family="Arial" font-size="16" fill="#666666" text-anchor="middle">
+            Imagem do produto não disponível
+          </text>
+        </svg>`;
+        
+        res.setHeader('Content-Type', 'image/svg+xml');
+        return res.send(svgContent);
+      }
+      
+      // Determinar o tipo MIME com base na extensão do arquivo
+      const contentType = mime.lookup(filename) || 'image/jpeg';
+      res.setHeader('Content-Type', contentType);
+      
+      // Adicionar cache headers para melhorar performance
+      // Tempo de cache zero para forçar o navegador a sempre verificar novamente
+      const cacheTime = req.query.t ? 0 : 3600; // Se tem parâmetro de timestamp, não cachear
+      res.setHeader('Cache-Control', `public, max-age=${cacheTime}`);
+      
+      // Servir o arquivo
+      res.sendFile(imagePath);
+    } catch (error) {
+      console.error('Erro ao servir imagem única de produto:', error);
+      res.status(500).json({ message: "Erro ao servir imagem do produto" });
     }
   });
   
