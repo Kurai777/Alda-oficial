@@ -5,9 +5,14 @@
  * garantindo que cada produto tenha sua própria imagem única.
  */
 
-const fs = require('fs');
-const path = require('path');
-const fetch = require('node-fetch');
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import fetch from 'node-fetch';
+
+// Obter o diretório atual usando ES modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Configurações
 const CATALOG_ID = 4; // ID do catálogo a ser testado
