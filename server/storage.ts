@@ -467,6 +467,11 @@ export class MemStorage implements IStorage {
       }
     );
   }
+  
+  // Método para obter todos os catálogos de um usuário (alias para compatibilidade)
+  async getCatalogs(userId: number | string): Promise<Catalog[]> {
+    return this.getCatalogsByUserId(userId);
+  }
 
   async createCatalog(insertCatalog: InsertCatalog): Promise<Catalog> {
     const id = this.catalogId++;
@@ -802,6 +807,11 @@ export class DatabaseStorage implements IStorage {
       console.error('Error getting catalogs by user ID:', error);
       return [];
     }
+  }
+  
+  // Método para obter todos os catálogos de um usuário (alias para compatibilidade)
+  async getCatalogs(userId: number | string): Promise<Catalog[]> {
+    return this.getCatalogsByUserId(userId);
   }
   
   async createCatalog(insertCatalog: InsertCatalog): Promise<Catalog> {

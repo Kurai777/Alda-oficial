@@ -220,6 +220,9 @@ export async function processExcelFile(filePath, userId, catalogId) {
     // Começar na linha após o cabeçalho (ou na primeira linha para formato POE)
     const startRow = isPOEFormat ? 0 : headerRow + 1;
     
+    // Contador para gerar códigos únicos se necessário
+    let unknownCodeCounter = 1;
+    
     for (let i = startRow; i < rawData.length; i++) {
       const row = rawData[i];
       
@@ -228,14 +231,20 @@ export async function processExcelFile(filePath, userId, catalogId) {
         const code = row.B ? row.B.toString().trim() : '';
         const name = row.C ? row.C.toString().trim() : '';
         
-        // Pular linhas sem código ou nome
-        if (!code || !name) continue;
+        // Pular linhas completamente vazias
+        if (!code && !name && !row.D && !row.E && !row.F) continue;
         
         // Normalizar código POE
         let formattedCode = code;
-        if (code.toUpperCase().startsWith('POE')) {
+        if (code && code.toUpperCase().startsWith('POE')) {
           formattedCode = 'POE-' + code.replace(/POE[\s-]*/i, '');
+        } else if (!code) {
+          // Gerar código único baseado na linha
+          formattedCode = `ITEM-${i+1}-${Date.now().toString().slice(-4)}`;
         }
+        
+        // Garantir que um nome mínimo seja definido
+        const productName = name || `Item ${i+1} da Linha Excel ${i+1}`;
         
         // Converter preço para formato numérico
         let price = 0;
@@ -247,7 +256,7 @@ export async function processExcelFile(filePath, userId, catalogId) {
         // Criar objeto do produto
         const product = {
           code: formattedCode,
-          name: name,
+          name: productName,
           price: price,
           category: row.D ? row.D.toString().trim() : '',
           manufacturer: row.E ? row.E.toString().trim() : '',
@@ -258,11 +267,24 @@ export async function processExcelFile(filePath, userId, catalogId) {
         };
         
         products.push(product);
+        console.log(`Produto processado: ${product.name} (${product.code})`);
       } else {
         // Formato genérico usando o mapeamento de cabeçalhos
         const produto = {};
+        let hasData = false;
         let hasCode = false;
         let hasName = false;
+        
+        // Verificar se há algum dado útil na linha
+        for (const value of Object.values(row)) {
+          if (value && value.toString().trim()) {
+            hasData = true;
+            break;
+          }
+        }
+        
+        // Pular linhas completamente vazias
+        if (!hasData) continue;
         
         for (const [column, value] of Object.entries(row)) {
           if (!value) continue;
@@ -283,15 +305,29 @@ export async function processExcelFile(filePath, userId, catalogId) {
           }
         }
         
-        // Adicionar metadados
-        if (hasCode && hasName) {
-          produto['userId'] = userId;
-          produto['catalogId'] = parseInt(catalogId);
-          produto['excelRowNumber'] = i + 1;
-          produto['isEdited'] = false;
-          
-          products.push(produto);
+        // Adicionar código e nome padrão se não foram encontrados
+        if (!hasCode) {
+          produto['code'] = `ITEM-${unknownCodeCounter++}-${Date.now().toString().slice(-4)}`;
         }
+        
+        if (!hasName) {
+          produto['name'] = `Item da Linha Excel ${i+1}`;
+        }
+        
+        // Garantir que price seja um número
+        if (!produto['price'] || isNaN(produto['price'])) {
+          produto['price'] = 0;
+        }
+        
+        // Adicionar metadados
+        produto['userId'] = userId;
+        produto['catalogId'] = parseInt(catalogId);
+        produto['excelRowNumber'] = i + 1;
+        produto['isEdited'] = false;
+        
+        // Agora que temos código e nome garantidos, podemos adicionar
+        products.push(produto);
+        console.log(`Produto processado: ${produto.name} (${produto.code})`);
       }
     }
     
