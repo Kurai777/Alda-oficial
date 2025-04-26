@@ -131,20 +131,15 @@ export async function processPOECatalog(filePath, userId, catalogId) {
       console.log("Nenhum cabeçalho explícito encontrado, usando primeira linha como referência");
     }
     
-    // Mapeamento atualizado baseado no formato real do arquivo Excel
-    // Este mapeamento foi ajustado conforme solicitação do cliente
+    // MAPEAMENTO EXPLÍCITO CONFORME SOLICITAÇÃO URGENTE
+    // Este mapeamento FIXO foi ajustado para o padrão POE conforme solicitado
     const columnMapping = {
-      // COLUNAS ATUALIZADAS DO EXCEL POE
-      A: 'itemCode',      // Coluna A: Número do item (ex: "20-40k", "1-5k")
-      B: 'location',      // Coluna B: "Local" - como "2°Piso", "Depósito/OUTLET", etc.
-      C: 'manufacturer',  // Coluna C: Fabricante ou modelo (ex: "Boheme", "OXY")
-      D: 'imageRef',      // Coluna D: "Imagem" - referência/imagem embutida
-      E: 'quantity',      // Coluna E: "Qtd" - quantidade
-      F: 'internalName',  // Coluna F: Nome interno (será usado como code)
-      G: 'description',   // Coluna G: Descrição completa (será usada como nome do produto)
-      H: 'code',          // Coluna H: Código do produto
-      L: 'totalPrice',    // Coluna L: Valor Total (preço final)
-      M: 'totalPrice2'    // Coluna M: Valor Total alternativo (caso L esteja vazio)
+      // MAPEAMENTO FIXO DE COLUNAS
+      B: 'location',      // Coluna B: Local/Categoria (ex: "2º Piso", "Depósito/OUTLET")
+      C: 'manufacturer',  // Coluna C: Fornecedor/Fabricante (ex: "Boheme", "EB América")
+      G: 'name',          // Coluna G: Descrição do Produto (NOME REAL) - OBRIGATÓRIO
+      H: 'code',          // Coluna H: Código do Produto (CÓDIGO REAL) - OBRIGATÓRIO
+      M: 'price'          // Coluna M: Valor Total (PREÇO FINAL) - OBRIGATÓRIO
     };
     
     // Processar os dados convertendo para formato padrão de produto
