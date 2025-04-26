@@ -40,3 +40,39 @@ export async function updateCatalogStatusInFirestore(userId: any, catalogId: any
     throw error;
   }
 }
+
+// Função para excluir um catálogo e seus produtos do Firestore
+export async function deleteCatalogFromFirestore(userId: string, catalogId: string) {
+  try {
+    console.log(`Excluindo catálogo ${catalogId} do usuário ${userId} do Firestore`);
+    
+    // Em um ambiente real, este seria o código para exclusão no Firebase:
+    /*
+    const firestore = admin.firestore();
+    
+    // Excluir produtos do catálogo
+    const productsRef = firestore.collection(`users/${userId}/catalogs/${catalogId}/products`);
+    const productsSnapshot = await productsRef.get();
+    
+    const batch = firestore.batch();
+    productsSnapshot.docs.forEach(doc => {
+      batch.delete(doc.ref);
+    });
+    
+    // Excluir o próprio catálogo
+    const catalogRef = firestore.doc(`users/${userId}/catalogs/${catalogId}`);
+    batch.delete(catalogRef);
+    
+    // Executar o batch delete
+    await batch.commit();
+    */
+    
+    // Para ambiente de desenvolvimento, apenas simulamos a exclusão
+    console.log(`Mock: Catálogo ${catalogId} e seus produtos excluídos do Firestore com sucesso!`);
+    
+    return { success: true };
+  } catch (error) {
+    console.error('Erro ao excluir catálogo do Firestore:', error);
+    throw error;
+  }
+}

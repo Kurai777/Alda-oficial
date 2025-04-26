@@ -96,18 +96,20 @@ export default function Catalogs() {
   const deleteMutation = useMutation({
     mutationFn: async (catalogId: number) => {
       console.log(`Solicitando exclusão do catálogo ID ${catalogId}`);
-      const response = await fetch(`/api/catalogs/${catalogId}`, {
-        method: 'DELETE',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      });
-      
-      if (!response.ok) {
-        throw new Error(`Erro HTTP ${response.status}: ${await response.text()}`);
+      try {
+        const response = await apiRequest("DELETE", `/api/catalogs/${catalogId}`);
+        
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error(`Erro ao excluir catálogo: ${errorText}`);
+          throw new Error(`Erro HTTP ${response.status}: ${errorText}`);
+        }
+        
+        return catalogId;
+      } catch (error) {
+        console.error("Erro durante a exclusão:", error);
+        throw error;
       }
-      
-      return catalogId;
     },
     onSuccess: (catalogId) => {
       queryClient.invalidateQueries({ queryKey: ["/api/catalogs"] });
@@ -135,7 +137,7 @@ export default function Catalogs() {
   };
 
   const handleDeleteCatalog = (catalogId: number) => {
-    setCatalogToDelete(null);
+    setCatalogToDelete(catalogId);
     deleteMutation.mutate(catalogId);
   };
 
