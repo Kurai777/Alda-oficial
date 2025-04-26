@@ -344,13 +344,66 @@ export async function detectExcelFormat(filePath) {
       row.B && typeof row.B === 'string' && row.B.toString().toUpperCase().includes('POE')
     );
     
-    // Se é formato POE, definir o mapeamento POE padrão
+    // Tentar detectar padrão específico do Sofá Home
+    const sofaHomePattern = rawData.some(row => 
+      row.A && typeof row.A === 'string' && 
+      (row.A.toString().includes('Sofá Home') || row.A.toString().includes('SOFA'))
+    );
+    
+    console.log("Verificando padrão de Sofá:", sofaHomePattern);
+    
+    // Se é formato POE, definir o mapeamento com base no tipo de dados
     if (isPOEFormat) {
-      columnMappings.B = 'code';
-      columnMappings.C = 'name';
-      columnMappings.D = 'category';
-      columnMappings.E = 'manufacturer';
-      columnMappings.F = 'price';
+      if (sofaHomePattern) {
+        console.log("Detectado formato específico Sofá/POE");
+        // Formato específico do Excel do Sofá
+        columnMappings.A = 'name';       // Nome (Sofá Home)
+        columnMappings.B = 'location';   // Local (2º Piso)
+        columnMappings.C = 'manufacturer'; // Fornecedor (Enobli)
+        columnMappings.F = 'code';       // Código (SLE00...)
+        columnMappings.G = 'description'; // Descrição
+        columnMappings.I = 'price';      // Coluna com valor (R$ 22.000)
+      } else {
+        // Formato POE padrão
+        columnMappings.B = 'code';
+        columnMappings.C = 'name';
+        columnMappings.D = 'category';
+        columnMappings.E = 'manufacturer';
+        columnMappings.F = 'price';
+      }
+    }
+    
+    // Verificar se tem linha de cabeçalho específica com "Nome"
+    const nomeHeader = rawData.findIndex(row => 
+      row.A && row.A.toString().trim() === 'Nome' && 
+      row.B && row.B.toString().trim() === 'Local'
+    );
+    
+    if (nomeHeader >= 0) {
+      console.log(`Encontrado cabeçalho com Nome/Local na linha ${nomeHeader}`);
+      
+      // Usar este cabeçalho para mapear colunas
+      const header = rawData[nomeHeader];
+      
+      // Procura por colunas específicas no cabeçalho
+      Object.entries(header).forEach(([col, val]) => {
+        if (!val) return;
+        
+        const headerText = val.toString().trim().toLowerCase();
+        
+        // Mapear cabeçalhos específicos
+        if (headerText === 'nome') columnMappings[col] = 'name';
+        else if (headerText === 'local') columnMappings[col] = 'location';
+        else if (headerText === 'forn.') columnMappings[col] = 'manufacturer';
+        else if (headerText === 'imagem') columnMappings[col] = 'imageColumn';
+        else if (headerText === 'qtd.') columnMappings[col] = 'quantity';
+        else if (headerText === 'cod.') columnMappings[col] = 'code';
+        else if (headerText === 'descrição') columnMappings[col] = 'description';
+        else if (headerText.includes('valor')) columnMappings[col] = 'price';
+      });
+      
+      // Atualizar a linha de cabeçalho
+      headerInfo.headerRow = nomeHeader;
     }
     
     // Preparar informações sobre o formato
@@ -404,6 +457,17 @@ export function extractPrice(value) {
   
   // Converter para string
   const str = String(value);
+  
+  // Verificar se é um valor em formato de moeda brasileira (R$ 22.639,00)
+  if (str.includes('R$') || str.includes('BRL')) {
+    console.log(`Detectado formato de preço brasileiro: ${str}`);
+    
+    // Remover símbolos de moeda e extrair apenas números/pontos/vírgulas
+    const cleaned = str.replace(/[^\d,.]/g, '');
+    
+    // Formato brasileiro: trocar ponto (separador de milhar) por vazio e vírgula (decimal) por ponto
+    return parseFloat(cleaned.replace(/\./g, '').replace(',', '.')) || 0;
+  }
   
   // Remover símbolos de moeda e extrair apenas números/pontos/vírgulas
   const cleaned = str.replace(/[^\d,.]/g, '');

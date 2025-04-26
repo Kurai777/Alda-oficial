@@ -272,6 +272,19 @@ export async function processExcelFile(filePath, userId, catalogId) {
             product.manufacturer = value.toString().trim();
             break;
             
+          case 'description':
+            // Se já tiver descrição, concatenar
+            if (product.description) {
+              product.description += `. ${value.toString().trim()}`;
+            } else {
+              product.description = value.toString().trim();
+            }
+            break;
+            
+          case 'location':
+            product.location = value.toString().trim();
+            break;
+            
           case 'dimensions':
             product.dimensions = value.toString().trim();
             break;
@@ -283,6 +296,34 @@ export async function processExcelFile(filePath, userId, catalogId) {
           case 'color':
             product.color = value.toString().trim();
             break;
+            
+          case 'quantity':
+            product.quantity = parseInt(value) || 0;
+            break;
+            
+          case 'imageColumn':
+            // Se houver uma URL de imagem diretamente na célula
+            if (typeof value === 'string' && value.trim().toLowerCase().startsWith('http')) {
+              product.externalImageUrl = value.trim();
+            }
+            break;
+        }
+      }
+      
+      // Se o nome for identificado como "Sofá Home" ou semelhante,
+      // e temos um código ou descrição, podemos melhorar o nome
+      if (product.name && 
+          (product.name.includes('Sofá') || product.name.includes('Sofa')) && 
+          (product.description || product.code)) {
+        
+        // Adicionar o tipo/modelo do sofá no nome
+        const descriptionParts = (product.description || '').split(/\s+/);
+        const firstWord = descriptionParts[0];
+        
+        if (firstWord && firstWord.length > 2) {
+          product.name = `${product.name} ${firstWord}`;
+        } else if (product.code) {
+          product.name = `${product.name} ${product.code}`;
         }
       }
       
