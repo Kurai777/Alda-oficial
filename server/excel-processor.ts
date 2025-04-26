@@ -443,10 +443,39 @@ function normalizeExcelProducts(rawProducts: ExcelProduct[], userId?: string | n
     `);
   }
   
-  // Determinar possíveis nomes de campos com base na primeira linha
-  const nameFields = ['nome', 'name', 'produto', 'product', 'titulo', 'title', 'item', 'descrição', 'description', 'descrição do produto', 'desc. produto'];
-  const codeFields = ['codigo', 'code', 'sku', 'referencia', 'reference', 'id', 'item_id', 'código', 'cod', 'cod.', 'código produto'];
-  const priceFields = ['preco', 'price', 'valor', 'value', 'custo', 'cost', 'preco_venda', 'sale_price', 'preço', 'preço tabela', 'valor unit', 'preço s/ imp', 'preço venda', 'valor unit.', 'valor venda'];
+  // EXPANDIDO: Determinar possíveis nomes de campos com base na primeira linha
+  const nameFields = [
+    'nome', 'name', 'produto', 'product', 'titulo', 'title', 'item', 
+    'descrição', 'description', 'descrição do produto', 'desc. produto',
+    'sofá', 'poltrona', 'cadeira', 'mesa', 'aparador', 'cabeceira', 'armário',
+    'mobiliário', 'peça', 'rack', 'painel', 'estante', 'recamier',
+    'sofá home', 'sofa', 'conjunto', 'modelo', 'artigo', 'móvel',
+    'peças', 'itens', 'objeto', 'ref.', 'tipo', 'ref',
+    // Considerar também campos com caracteres especiais normalizados
+    'descricao', 'descricao do produto', 'movel', 'mobiliario'
+  ];
+  
+  const codeFields = [
+    'codigo', 'code', 'sku', 'referencia', 'reference', 'ref', 'id', 'item_id', 
+    'código', 'cod', 'cod.', 'código produto', 'cód.', 'cód', 'cód produto',
+    'ref.', 'ref', 'nº', 'no.', 'num', 'número', 'código do produto',
+    'codigo do produto', 'código do item', 'código ref', 'cod ref', 'referência',
+    // Considerar versões sem acentuação
+    'codigo produto', 'codigo do produto', 'numero', 'referencia'
+  ];
+  
+  const priceFields = [
+    'preco', 'price', 'valor', 'value', 'custo', 'cost', 'preco_venda', 
+    'sale_price', 'preço', 'preço tabela', 'valor unit', 'preço s/ imp', 
+    'preço venda', 'valor unit.', 'valor venda', 'valor unitário', 'r$',
+    'preço de venda', 'valor de venda', 'preço de tabela', 'preço à vista',
+    'preço a vista', 'valor à vista', 'valor a vista', 'preço unitário',
+    'preço unit.', 'preço unit', 'p. venda', 'p. unit.',
+    // Considerar campos compostos
+    'valor (r$)', 'preço (r$)', 'custo (r$)', 'preço de venda (r$)',
+    // Nomes genéricos que podem ser preço em determinados contextos
+    'total', 'subtotal'
+  ];
   
   // Para outros formatos, verificar se é um formato de planilha baseado em datas
   let isDateBasedSheet = false;

@@ -926,27 +926,30 @@ export async function extractImagesFromExcel(excelPath, products, userId, catalo
         // Definir nome de arquivo seguro
         const fileName = image.image_filename || `image_${i}.png`;
         
-        // Tentar associar a imagem a um produto
+        // Tentar associar a imagem a um produto - abordagem melhorada
         let productCode = null;
+        let matchedProductIndex = null;
         
-        // Método 1: Verificar se o nome da imagem contém um código de produto
-        for (const code in productCodeMap) {
-          // Limpar código para comparação
-          const cleanCode = code.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+        // ESTRATÉGIA 1: Verificar se o nome da imagem contém um código de produto
+        for (const normalizedCode in productCodeMap) {
+          // Usar código normalizado (já foi processado no mapeamento)
           const cleanFileName = fileName.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
           
-          if (cleanCode && cleanFileName.includes(cleanCode)) {
-            productCode = code;
-            console.log(`Imagem ${fileName} associada ao produto com código ${code} (pelo nome)`);
+          if (normalizedCode.length > 2 && cleanFileName.includes(normalizedCode)) {
+            // Encontrou correspondência pelo código
+            matchedProductIndex = productCodeMap[normalizedCode];
+            const matchedProduct = products[matchedProductIndex];
+            productCode = matchedProduct.code || matchedProduct.codigo;
+            console.log(`Imagem "${fileName}" associada ao produto "${matchedProduct.name}" (código ${productCode}) via correspondência de códigos`);
             break;
           }
         }
         
-        // Método 2: Se não encontrou pelo nome, tentar associar pelo índice
+        // ESTRATÉGIA 2: Se não encontrou pelo código, tentar associar pelo índice na lista
         if (!productCode && i < products.length) {
           const product = products[i];
           productCode = product.code || product.codigo;
-          console.log(`Imagem ${fileName} associada ao produto ${productCode} (por índice)`);
+          console.log(`Imagem "${fileName}" associada por posição ao produto "${product.name}" (código ${productCode})`);
         }
         
         // Se não encontrou nenhum código, usar um código temporário
@@ -1071,7 +1074,7 @@ export async function hasExcelImages(excelPath) {
 }
 
 /**
- * Filtra imagens que não são produtos
+ * Filtra imagens que não são produtos - VERSÃO MAIS PERMISSIVA
  * @param {Array} images Lista de imagens extraídas
  * @returns {Array} Lista filtrada de imagens de produtos
  */
@@ -1107,50 +1110,48 @@ function filterNonProductImages(images) {
   
   console.log(`Imagens ordenadas por tamanho para priorizar imagens maiores`);
   
-  // Filtrar mantendo imagens de produtos e filtrando apenas elementos decorativos óbvios
+  // Verificação MAIS PERMISSIVA - apenas descarta imagens muito pequenas ou com nomes óbvios de elementos decorativos
   const filteredImages = sortedImages.filter(image => {
     try {
       // Obter nome do arquivo para diagnóstico
       const filename = image.image_filename || image.original_path || '';
       
-      // Critério 1: Ignorar imagens extremamente pequenas (provavelmente ícones)
-      // Reduzido o limite para capturar mais imagens
-      if (image.image && (image.image.width < 25 || image.image.height < 25)) {
-        console.log(`Filtragem: Ignorando imagem minúscula: ${filename} (${image.image.width}x${image.image.height})`);
-        return false;
-      }
-      
-      // Verificar tamanho também usando base64 - CRITÉRIO REDUZIDO
+      // CRITÉRIO 1: Verificar tamanho usando base64 - MUITO REDUZIDO
+      // Apenas descarta imagens extremamente pequenas que são claramente ícones
       if (image.image_base64) {
         try {
           const base64WithoutHeader = image.image_base64.split(',').pop();
           const sizeInBytes = Math.floor((base64WithoutHeader.length * 3) / 4);
           
-          // Reduzido para 2KB - apenas ícones muito pequenos
-          if (sizeInBytes < 2 * 1024) {
-            console.log(`Filtragem: Ignorando ícone muito pequeno (${Math.round(sizeInBytes/1024)}KB): ${filename}`);
+          // Reduzido para apenas 0.5KB - só rejeita imagens realmente minúsculas
+          if (sizeInBytes < 512) { // 0.5KB
+            console.log(`Filtragem: Ignorando ícone extremamente pequeno (${Math.round(sizeInBytes/1024*10)/10}KB): ${filename}`);
             return false;
           }
         } catch (e) {
-          // Continuar com outras verificações
+          // Continuar com outras verificações em caso de erro
         }
       }
       
-      // Critério 2: Lista REDUZIDA de padrões para ignorar
-      // Apenas padrões muito óbvios de elementos não produtos
+      // CRITÉRIO 2: Lista MUITO REDUZIDA de padrões para ignorar
+      // Apenas padrões óbvios de elementos de UI como cabeçalhos e rodapés
       const rejectPatterns = [
-        /header\d*/i, /footer\d*/i, /logo\d*/i, /bg_/i,
-        /rodapé/i, /cabeçalho/i
+        /^header\d*$/i, 
+        /^footer\d*$/i, 
+        /^logo\d*$/i, 
+        /^rodapé$/i, 
+        /^cabeçalho$/i
       ];
       
+      // Verificar se o nome do arquivo EXATAMENTE corresponde a um dos padrões (não apenas contém)
       const matchesPattern = rejectPatterns.some(pattern => pattern.test(filename));
       
       if (matchesPattern) {
-        console.log(`Filtragem: Ignorando elemento decorativo óbvio: ${filename}`);
+        console.log(`Filtragem: Ignorando elemento de UI óbvio: ${filename}`);
         return false;
       }
       
-      // Critério 3: Proporção extrema (apenas elementos muito alongados)
+      // CRITÉRIO 3: Proporções realmente extremas que não podem ser produtos
       if (image.image_base64) {
         try {
           const dimensions = extractImageDimensionsFromBase64(image.image_base64);
@@ -1159,28 +1160,35 @@ function filterNonProductImages(images) {
             const { width, height } = dimensions;
             const aspectRatio = width / height;
             
-            // Apenas proporções realmente extremas (linhas horizontais/verticais)
-            if (aspectRatio > 10 || aspectRatio < 0.1) {
-              console.log(`Filtragem: Ignorando elemento decorativo (proporção ${aspectRatio.toFixed(2)}): ${filename}`);
+            // Apenas linhas horizontais ou verticais muito extremas (mais extremo que antes)
+            if (aspectRatio > 20 || aspectRatio < 0.05) {
+              console.log(`Filtragem: Ignorando elemento extremamente alongado (proporção ${aspectRatio.toFixed(2)}): ${filename}`);
               return false;
             }
           }
         } catch (e) {
-          // Ignorar erros
+          // Ignorar erros na verificação de proporção
         }
       }
       
       // Se chegou até aqui, considerar uma imagem de produto válida
-      console.log(`Filtragem: Mantendo imagem válida: ${filename}`);
+      console.log(`Filtragem: Mantendo imagem potencialmente válida: ${filename}`);
       return true;
     } catch (error) {
       console.error(`Erro na filtragem: ${error.message}`);
-      // Em caso de erro, manter a imagem
+      // Em caso de erro, manter a imagem por segurança
       return true;
     }
   });
   
   console.log(`Total de imagens após filtragem: ${filteredImages.length} (${filteredImages.length}/${images.length} = ${Math.round(filteredImages.length/images.length*100)}%)`);
+  
+  // Se aplicamos filtragem muito agressiva e ficamos com menos de 20% das imagens, considerar usar todas
+  if (filteredImages.length > 0 && filteredImages.length < images.length * 0.2) {
+    console.log(`ATENÇÃO: Filtragem muito agressiva detectada! Mantendo todas as imagens para segurança.`);
+    return sortedImages; // Retornar todas as imagens ordenadas por tamanho
+  }
+  
   return filteredImages;
 }
 
