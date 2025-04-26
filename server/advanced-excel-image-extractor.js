@@ -1110,37 +1110,37 @@ function filterNonProductImages(images) {
   
   console.log(`Imagens ordenadas por tamanho para priorizar imagens maiores`);
   
-  // Verificação MAIS PERMISSIVA - apenas descarta imagens muito pequenas ou com nomes óbvios de elementos decorativos
+  // FILTRAGEM AINDA MAIS PERMISSIVA - praticamente retém todas as imagens
+  // Apenas descarta imagens minúsculas que são claramente ícones/decorações
   const filteredImages = sortedImages.filter(image => {
     try {
       // Obter nome do arquivo para diagnóstico
       const filename = image.image_filename || image.original_path || '';
       
-      // CRITÉRIO 1: Verificar tamanho usando base64 - MUITO REDUZIDO
-      // Apenas descarta imagens extremamente pequenas que são claramente ícones
+      // CRITÉRIO 1: Verificar tamanho usando base64 - CRITÉRIO ULTRA REDUZIDO 
+      // Apenas descarta imagens que são literalmente pequenos ícones (botões, etc)
       if (image.image_base64) {
         try {
           const base64WithoutHeader = image.image_base64.split(',').pop();
           const sizeInBytes = Math.floor((base64WithoutHeader.length * 3) / 4);
           
-          // Reduzido para apenas 0.5KB - só rejeita imagens realmente minúsculas
-          if (sizeInBytes < 512) { // 0.5KB
+          // Reduzido para apenas 0.2KB - só rejeita ícones extremamente pequenos
+          if (sizeInBytes < 200) { // 0.2KB - valor mínimo absoluto
             console.log(`Filtragem: Ignorando ícone extremamente pequeno (${Math.round(sizeInBytes/1024*10)/10}KB): ${filename}`);
             return false;
           }
         } catch (e) {
           // Continuar com outras verificações em caso de erro
+          console.log(`Erro ao calcular tamanho da imagem: ${e.message}`);
         }
       }
       
-      // CRITÉRIO 2: Lista MUITO REDUZIDA de padrões para ignorar
-      // Apenas padrões óbvios de elementos de UI como cabeçalhos e rodapés
+      // CRITÉRIO 2: Lista EXTREMAMENTE REDUZIDA de padrões para ignorar
+      // Apenas padrões que são 100% garantidos de serem elementos de UI
       const rejectPatterns = [
-        /^header\d*$/i, 
-        /^footer\d*$/i, 
-        /^logo\d*$/i, 
-        /^rodapé$/i, 
-        /^cabeçalho$/i
+        /^header$/i,    // Apenas exato "header"
+        /^footer$/i,    // Apenas exato "footer"
+        /^logo$/i       // Apenas exato "logo"
       ];
       
       // Verificar se o nome do arquivo EXATAMENTE corresponde a um dos padrões (não apenas contém)

@@ -1265,11 +1265,53 @@ function normalizeExcelProducts(rawProducts: ExcelProduct[], userId?: string | n
         }
       }
       
-      // Construir o objeto de produto normalizado
+      // Garantir que o código e o nome do produto sejam válidos
+      let validProductName = productName;
+      let validProductCode = productCode;
+      
+      // Validar e corrigir nome de produto
+      if (!validProductName || validProductName.trim() === '') {
+        // Tentar extrair nome do produto da descrição se estiver disponível
+        if (fullDescription && fullDescription.trim() !== '') {
+          // Usar as primeiras 5 palavras da descrição como nome
+          const descriptionWords = fullDescription.trim().split(' ');
+          validProductName = descriptionWords.slice(0, 5).join(' ');
+          
+          if (validProductName.length > 50) {
+            validProductName = validProductName.substring(0, 47) + '...';
+          }
+        } else if (manufacturer) {
+          // Usar o fabricante + um identificador único
+          validProductName = `${manufacturer} ${Date.now().toString().slice(-4)}`;
+        } else {
+          // Nome genérico + timestamp (últimos 4 dígitos)
+          validProductName = `Produto ${Date.now().toString().slice(-4)}`;
+        }
+        console.log(`Nome de produto corrigido: "${productName}" -> "${validProductName}"`);
+      }
+      
+      // Validar e corrigir código de produto
+      if (!validProductCode || validProductCode.trim() === '') {
+        if (location) {
+          // Usar localização para criar um código único
+          const locCode = location.replace(/[^a-zA-Z0-9]/g, '').substring(0, 4).toUpperCase();
+          validProductCode = `${locCode}-${Date.now().toString().slice(-6)}`;
+        } else if (manufacturer) {
+          // Usar fabricante para criar um código único
+          const mfrCode = manufacturer.replace(/[^a-zA-Z0-9]/g, '').substring(0, 4).toUpperCase();
+          validProductCode = `${mfrCode}-${Date.now().toString().slice(-6)}`;
+        } else {
+          // Código automático com prefixo consistente
+          validProductCode = `AUTO-${Date.now().toString().slice(-6)}-${Math.floor(Math.random()*1000)}`;
+        }
+        console.log(`Código de produto corrigido: "${productCode}" -> "${validProductCode}"`);
+      }
+      
+      // Construir o objeto de produto normalizado com valores garantidos
       normalizedProducts.push({
-        name: productName || 'Produto sem nome',
-        description: fullDescription,
-        code: productCode || `AUTO-${Date.now().toString().slice(-8)}-${Math.floor(Math.random()*1000)}`,
+        name: validProductName,
+        description: fullDescription || validProductName, // Usar nome como descrição se não houver descrição
+        code: validProductCode,
         price,
         category,
         manufacturer, // Adicionar o fornecedor/fabricante
