@@ -1027,10 +1027,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Criar um novo catálogo no banco de dados
       const catalog = await storage.createCatalog({
         userId: typeof userId === 'string' ? parseInt(userId) : userId,
-        name: req.body.name || fileName,
-        description: req.body.description || `Catálogo importado de ${fileName}`,
-        createdAt: new Date(),
-        status: "processing"
+        fileName: fileName,
+        fileUrl: filePath,
+        processedStatus: "processing"
       });
       
       // ID do catálogo no banco relacional
@@ -1243,7 +1242,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
         
         // Atualizar o status do catálogo no banco de dados
-        await storage.updateCatalogStatus(catalogId, "completed");
+        await storage.updateCatalog(catalogId, { processedStatus: "completed" });
         
         // Retornar resposta de sucesso
         return res.status(200).json({
@@ -1258,7 +1257,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.error("Erro ao processar arquivo:", error);
         
         // Atualizar o status do catálogo no banco de dados
-        await storage.updateCatalogStatus(catalogId, "error");
+        await storage.updateCatalog(catalogId, { processedStatus: "error" });
         
         // Atualizar o status do catálogo no Firestore
         try {
