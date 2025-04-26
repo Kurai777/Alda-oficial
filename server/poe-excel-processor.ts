@@ -1,224 +1,174 @@
 /**
- * Processador especializado para arquivos Excel no formato POE
+ * Processador especializado de Excel no formato POE
  * 
- * Este módulo implementa lógica específica para o formato POE que utiliza
- * cabeçalhos alfabéticos (A, B, C...) para identificar colunas.
+ * Este módulo é dedicado ao processamento de planilhas Excel no formato POE,
+ * que utiliza cabeçalhos alfabéticos (A, B, C...) e tem códigos de produtos
+ * começando com "POE".
  */
 
 import * as XLSX from 'xlsx';
 import * as fs from 'fs';
 import * as path from 'path';
-import { v4 as uuidv4 } from 'uuid';
+import { extractExcelImages, associateImagesWithProducts } from './python-excel-bridge.js';
+import { robust_extractImages } from './robust-excel-image-extractor.js';
 
-interface POEProduct {
-  name: string;
-  code: string;
-  price: number;
-  description?: string;
-  excelRowNumber: number;
-  imageCell?: string; // Valor da célula que contém a imagem (coluna F geralmente)
-  [key: string]: any;
-}
+// Mapeamento de colunas para o formato POE
+const POE_COLUMNS = {
+  CODIGO: 'B',    // Coluna B contém o código do produto
+  NOME: 'C',      // Coluna C contém o nome/descrição do produto
+  PRECO: 'F',     // Coluna F contém o preço
+  CATEGORIA: 'D', // Coluna D geralmente contém categoria ou descrição adicional
+  FORNECEDOR: 'E' // Coluna E pode conter informações do fornecedor
+};
 
 /**
- * Processa um arquivo Excel no formato POE e extrai produtos
+ * Processa um arquivo Excel no formato POE
  * @param filePath Caminho para o arquivo Excel
- * @param userId ID do usuário para associar ao produto
- * @param catalogId ID do catálogo
- */
-export async function processPOEExcelFile(
-  filePath: string,
-  userId?: string | number,
-  catalogId?: string | number
-): Promise<any[]> {
-  console.log(`Processando arquivo Excel POE: ${filePath}`);
-  console.log(`Usuário ID: ${userId}, Catálogo ID: ${catalogId}`);
-  
-  // Verificar se o arquivo existe
-  if (!fs.existsSync(filePath)) {
-    throw new Error(`Arquivo não encontrado: ${filePath}`);
-  }
-  
-  // Carregar o arquivo Excel
-  const workbook = XLSX.readFile(filePath);
-  const sheetName = workbook.SheetNames[0]; // Usar primeira aba
-  const worksheet = workbook.Sheets[sheetName];
-  
-  // Obter os dados como array de objetos com cabeçalhos
-  const rawData = XLSX.utils.sheet_to_json(worksheet, { header: "A" });
-  console.log(`Planilha contém ${rawData.length} linhas`);
-  
-  // Array para armazenar os produtos extraídos
-  const products: POEProduct[] = [];
-  
-  // Extrair informações da planilha (formato POE tem cabeçalhos alfabéticos A, B, C...)
-  for (let i = 1; i < rawData.length; i++) {
-    const row = rawData[i] as any;
-    
-    // Verificar se a linha tem informações de produto
-    if (row.B && row.C) {
-      // No formato POE:
-      // - Coluna B: Código do produto
-      // - Coluna C: Nome do produto
-      // - Coluna D: Descrição (opcional)
-      // - Coluna E: Preço
-      // - Coluna F: Geralmente contém referência à imagem
-      
-      const product: POEProduct = {
-        name: row.C?.toString() || "Produto sem nome",
-        code: row.B?.toString() || "UNKNOWN-CODE",
-        price: typeof row.E === 'number' ? row.E : 
-               typeof row.E === 'string' ? 
-               parseFloat(row.E.replace('R$', '').replace('.', '').replace(',', '.')) : 0,
-        description: row.D?.toString() || "",
-        excelRowNumber: i,
-        imageCell: row.F?.toString() || "",
-        userId: userId,
-        catalogId: catalogId,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-        imageUrl: null
-      };
-      
-      // Adicionar o produto ao array de produtos
-      products.push(product);
-    }
-  }
-  
-  console.log(`Extraídos ${products.length} produtos do Excel POE`);
-  
-  // Extrair e associar imagens
-  const productsWithImages = await extractAndMapPOEImages(filePath, products, userId, catalogId);
-  
-  return productsWithImages;
-}
-
-/**
- * Extrai imagens do Excel POE e as associa aos produtos
- * @param excelPath Caminho para o arquivo Excel
- * @param products Lista de produtos extraídos
  * @param userId ID do usuário
  * @param catalogId ID do catálogo
+ * @returns Lista de produtos extraídos
  */
-async function extractAndMapPOEImages(
-  excelPath: string,
-  products: POEProduct[],
-  userId?: string | number,
-  catalogId?: string | number
-): Promise<POEProduct[]> {
-  console.log(`Extraindo imagens do Excel POE: ${excelPath}`);
-  
+export async function processPOEExcelFile(filePath: string, userId: any, catalogId: any): Promise<any[]> {
   try {
-    // Criar diretório para salvar as imagens
-    const outputDir = path.join('uploads', 'extracted_images', `${Date.now()}_${path.basename(excelPath, path.extname(excelPath))}`);
-    if (!fs.existsSync(outputDir)) {
-      fs.mkdirSync(outputDir, { recursive: true });
+    console.log(`Processando Excel no formato POE: ${filePath}`);
+    
+    // Carregar o workbook
+    const workbook = XLSX.readFile(filePath, { cellFormula: false, cellHTML: false });
+    
+    // Obter a primeira planilha
+    const firstSheetName = workbook.SheetNames[0];
+    const sheet = workbook.Sheets[firstSheetName];
+    
+    // Converter para JSON com cabeçalhos alfabéticos (A, B, C...)
+    const data = XLSX.utils.sheet_to_json(sheet, { header: 'A', raw: true });
+    
+    if (!data || data.length === 0) {
+      throw new Error('Planilha vazia ou inválida');
     }
     
-    // Importar os módulos de extração
-    const robustExtractor = require('./robust-excel-image-extractor');
-    const pythonBridge = require('./python-excel-bridge');
+    console.log(`Planilha POE contém ${data.length} linhas`);
     
-    // Tentar extrair imagens com método JavaScript robusto
-    console.log(`Tentando extrair imagens com método JavaScript robusto...`);
-    const jsResult = await robustExtractor.extractImages(excelPath, outputDir);
-    
-    // Se falhar, tentar com Python como fallback
-    if (!jsResult.success || jsResult.count === 0) {
-      console.log(`Método JavaScript falhou, tentando com Python...`);
-      await pythonBridge.extractExcelImages(excelPath, outputDir);
+    // Verificar se realmente é formato POE
+    let isPOE = false;
+    for (let i = 0; i < Math.min(20, data.length); i++) {
+      const row = data[i];
+      if (row[POE_COLUMNS.CODIGO] && 
+          typeof row[POE_COLUMNS.CODIGO] === 'string' && 
+          row[POE_COLUMNS.CODIGO].toString().toUpperCase().includes('POE')) {
+        isPOE = true;
+        break;
+      }
     }
     
-    // Listar todas as imagens extraídas
-    console.log(`Verificando imagens extraídas em: ${outputDir}`);
-    const extractedImages = fs.existsSync(outputDir) ? 
-      fs.readdirSync(outputDir).filter(file => /\.(png|jpg|jpeg|gif|emf)$/i.test(file)) : [];
-    
-    console.log(`${extractedImages.length} imagens extraídas do Excel POE`);
-    
-    // Array para armazenar o resultado final
-    const processedProducts = [...products];
-    
-    // Se não houver imagens extraídas, retornar os produtos sem imagens
-    if (extractedImages.length === 0) {
-      console.log(`Nenhuma imagem extraída do Excel POE`);
-      return processedProducts;
+    if (!isPOE) {
+      console.warn('Arquivo não parece ser no formato POE');
+      // Continuar mesmo assim, usando o mapeamento de colunas POE
     }
     
-    // Associar imagens aos produtos
-    // No formato POE, a coluna F geralmente contém uma referência à imagem
-    const productsWithImages = processedProducts.map((product, index) => {
-      // Procurar pela imagem - várias estratégias
-      let imageFile;
-      
-      // Estratégia 1: Usar código do produto para encontrar a imagem
-      if (product.code) {
-        imageFile = extractedImages.find(img => 
-          img.toLowerCase().includes(product.code.toLowerCase()) ||
-          // Também verificar com código sem traços/espaços
-          img.toLowerCase().includes(product.code.toLowerCase().replace(/[\s-_]/g, ''))
-        );
+    // Encontrar a primeira linha com dados válidos (pulando cabeçalhos e linhas em branco)
+    let startRow = 0;
+    for (let i = 0; i < Math.min(10, data.length); i++) {
+      const row = data[i];
+      if (row[POE_COLUMNS.CODIGO] && row[POE_COLUMNS.NOME]) {
+        startRow = i;
+        break;
       }
-      
-      // Estratégia 2: Usar nome do produto para encontrar a imagem
-      if (!imageFile && product.name) {
-        const productNameSimplified = product.name.toLowerCase().replace(/[\s-_]/g, '');
-        imageFile = extractedImages.find(img => 
-          img.toLowerCase().includes(productNameSimplified)
-        );
-      }
-      
-      // Estratégia 3: Usar valor da célula de imagem
-      if (!imageFile && product.imageCell) {
-        imageFile = extractedImages.find(img => 
-          img.toLowerCase().includes(product.imageCell.toLowerCase())
-        );
-      }
-      
-      // Estratégia 4: Usar índice como distribuição sequencial
-      if (!imageFile && index < extractedImages.length) {
-        imageFile = extractedImages[index];
-      }
-      
-      // Se encontrou uma imagem, associá-la ao produto
-      if (imageFile) {
-        // Caminhos para imagem
-        const imagePath = path.join(outputDir, imageFile);
-        const uniqueFilename = `${uuidv4()}_${imageFile}`;
-        const uniqueImageDir = path.join('uploads', 'unique_product_images');
-        
-        // Criar diretório para imagens únicas
-        if (!fs.existsSync(uniqueImageDir)) {
-          fs.mkdirSync(uniqueImageDir, { recursive: true });
-        }
-        
-        // Caminho para imagem única
-        const uniqueImagePath = path.join(uniqueImageDir, uniqueFilename);
-        
-        // Copiar imagem para o diretório de imagens únicas
-        try {
-          fs.copyFileSync(imagePath, uniqueImagePath);
-          console.log(`Imagem copiada para: ${uniqueImagePath}`);
-        } catch (copyError) {
-          console.error(`Erro ao copiar imagem para: ${uniqueImagePath}`, copyError);
-        }
-        
-        // Associar URL da imagem ao produto (usando caminho relativo)
-        product.imageUrl = `/uploads/unique_product_images/${uniqueFilename}`;
-        product.originalImageFile = imageFile;
-      }
-      
-      return product;
-    });
+    }
     
-    // Contar produtos com imagens
-    const productsWithImagesCount = productsWithImages.filter(p => p.imageUrl).length;
-    console.log(`${productsWithImagesCount} de ${productsWithImages.length} produtos possuem imagens associadas`);
+    console.log(`Primeira linha de dados detectada: ${startRow}`);
     
-    return productsWithImages;
-  } catch (error) {
-    console.error('Erro ao extrair e mapear imagens POE:', error);
-    // Retornar produtos sem imagens em caso de erro
+    // Extrair produtos
+    const products = [];
+    
+    for (let i = startRow; i < data.length; i++) {
+      const row = data[i];
+      
+      // Verificar se a linha tem dados válidos
+      if (!row[POE_COLUMNS.CODIGO] || !row[POE_COLUMNS.NOME]) {
+        continue;
+      }
+      
+      // Formatação especial para códigos POE
+      let codigo = row[POE_COLUMNS.CODIGO].toString().trim();
+      if (codigo.toUpperCase().startsWith('POE')) {
+        // Garantir formatação consistente
+        codigo = 'POE-' + codigo.replace(/POE[\s-]*/i, '');
+      }
+      
+      // Construir objeto do produto
+      const produto: any = {
+        code: codigo,
+        name: row[POE_COLUMNS.NOME].toString().trim(),
+        price: row[POE_COLUMNS.PRECO] ? parseFloat(row[POE_COLUMNS.PRECO].toString().replace(/[^\d,.]/g, '').replace(',', '.')) : 0,
+        category: row[POE_COLUMNS.CATEGORIA] ? row[POE_COLUMNS.CATEGORIA].toString().trim() : '',
+        manufacturer: row[POE_COLUMNS.FORNECEDOR] ? row[POE_COLUMNS.FORNECEDOR].toString().trim() : '',
+        userId,
+        catalogId: parseInt(catalogId),
+        excelRowNumber: i + 1,
+        isEdited: false
+      };
+      
+      // Converter campos para strings se necessário
+      if (typeof produto.category !== 'string') produto.category = String(produto.category || '');
+      if (typeof produto.manufacturer !== 'string') produto.manufacturer = String(produto.manufacturer || '');
+      
+      // Adicionar à lista
+      products.push(produto);
+    }
+    
+    console.log(`Extraídos ${products.length} produtos do arquivo POE`);
+    
+    // Extrair imagens e associá-las aos produtos
+    // Criar diretório para imagens extraídas
+    const extractedImagesDir = path.join(path.dirname(filePath), 'extracted_images', path.basename(filePath, path.extname(filePath)));
+    
+    if (!fs.existsSync(extractedImagesDir)) {
+      fs.mkdirSync(extractedImagesDir, { recursive: true });
+    }
+    
+    // Extrair imagens do Excel
+    console.log(`Extraindo imagens de ${filePath} para ${extractedImagesDir}`);
+    try {
+      // Primeiro, tentar com o extrator robusto
+      const robustResult = await robust_extractImages(filePath, extractedImagesDir);
+      console.log(`Extrator robusto: ${robustResult.success ? 'Sucesso' : 'Falha'}, ${robustResult.imageCount} imagens`);
+      
+      // Se falhar ou não encontrar imagens, tentar com Python
+      if (!robustResult.success || robustResult.imageCount === 0) {
+        console.log('Tentando extrair imagens com Python...');
+        const pythonResult = await extractExcelImages(filePath, extractedImagesDir);
+        console.log(`Extrator Python: ${pythonResult.success ? 'Sucesso' : 'Falha'}, ${pythonResult.imageCount} imagens`);
+      }
+      
+      // Verificar quantas imagens foram extraídas
+      const extractedFiles = fs.existsSync(extractedImagesDir) ? 
+        fs.readdirSync(extractedImagesDir).filter(file => 
+          /\.(png|jpg|jpeg|gif)$/i.test(file)
+        ) : [];
+      
+      console.log(`Total de ${extractedFiles.length} imagens extraídas`);
+      
+      // Associar imagens aos produtos
+      if (extractedFiles.length > 0) {
+        console.log('Associando imagens aos produtos...');
+        const productsWithImages = await associateImagesWithProducts(
+          products, extractedImagesDir, userId, catalogId
+        );
+        
+        // Contar produtos com imagens
+        const productsWithImagesCount = productsWithImages.filter(p => p.imageUrl).length;
+        console.log(`${productsWithImagesCount} produtos foram associados com imagens`);
+        
+        return productsWithImages;
+      }
+    } catch (imageError) {
+      console.error('Erro ao extrair ou associar imagens:', imageError);
+      // Continuar mesmo se houver erro nas imagens
+    }
+    
     return products;
+  } catch (error) {
+    console.error('Erro ao processar Excel POE:', error);
+    throw error;
   }
 }

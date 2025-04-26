@@ -167,6 +167,88 @@ if __name__ == "__main__":
   }
 }
 
+/**
+ * Associa imagens extraídas com produtos baseado em códigos de produto
+ * @param {Array} products Lista de produtos a serem associados com imagens
+ * @param {string} imagesDir Diretório contendo as imagens extraídas
+ * @param {string} userId ID do usuário
+ * @param {string} catalogId ID do catálogo
+ * @returns {Array} Lista de produtos com URLs de imagens associadas
+ */
+async function associateImagesWithProducts(products, imagesDir, userId, catalogId) {
+  try {
+    console.log(`Associando imagens de ${imagesDir} com ${products.length} produtos`);
+    
+    if (!fs.existsSync(imagesDir)) {
+      console.warn(`Diretório de imagens não encontrado: ${imagesDir}`);
+      return products;
+    }
+    
+    // Ler todas as imagens do diretório
+    const files = fs.readdirSync(imagesDir).filter(file => 
+      /\.(png|jpg|jpeg|gif|emf)$/i.test(file)
+    );
+    
+    if (files.length === 0) {
+      console.warn('Nenhuma imagem encontrada para associar com produtos');
+      return products;
+    }
+    
+    console.log(`Encontradas ${files.length} imagens no diretório`);
+    
+    // Criar diretório para imagens associadas
+    const targetDir = path.join('uploads', userId.toString(), catalogId.toString());
+    if (!fs.existsSync(targetDir)) {
+      fs.mkdirSync(targetDir, { recursive: true });
+    }
+    
+    // Para cada produto, tentar encontrar uma imagem com nome semelhante ao código
+    const updatedProducts = products.map(product => {
+      const code = product.code || product.codigo || "";
+      
+      if (!code) {
+        console.warn('Produto sem código, não é possível associar imagem');
+        return product;
+      }
+      
+      // Tentar encontrar uma imagem que contenha o código do produto no nome
+      const matchingFile = files.find(file => {
+        const cleanFileName = file.toLowerCase().replace(/\.[^/.]+$/, ""); // Remove extensão
+        const cleanCode = code.toLowerCase().trim().replace(/\s+/g, "");
+        return cleanFileName.includes(cleanCode);
+      });
+      
+      if (matchingFile) {
+        // Copiar a imagem para o diretório do usuário/catálogo
+        const sourceFilePath = path.join(imagesDir, matchingFile);
+        const targetFileName = `${Date.now()}-${matchingFile}`;
+        const targetFilePath = path.join(targetDir, targetFileName);
+        
+        try {
+          fs.copyFileSync(sourceFilePath, targetFilePath);
+          
+          // Atualizar produto com URL da imagem
+          const imageUrl = `/api/images/${userId}/${catalogId}/${targetFileName}`;
+          console.log(`Associada imagem ${matchingFile} ao produto ${code}: ${imageUrl}`);
+          return { ...product, imageUrl };
+        } catch (copyError) {
+          console.error(`Erro ao copiar imagem ${matchingFile}:`, copyError);
+          return product;
+        }
+      } else {
+        console.log(`Nenhuma imagem encontrada para o produto ${code}`);
+        return product;
+      }
+    });
+    
+    return updatedProducts;
+  } catch (error) {
+    console.error('Erro ao associar imagens com produtos:', error);
+    return products;
+  }
+}
+
 module.exports = {
-  extractExcelImages
+  extractExcelImages,
+  associateImagesWithProducts
 };

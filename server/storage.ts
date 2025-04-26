@@ -816,7 +816,7 @@ export class DatabaseStorage implements IStorage {
   
   async updateCatalogStatus(id: number, status: string, firestoreCatalogId?: string): Promise<Catalog | undefined> {
     try {
-      const updateData: any = { status };
+      const updateData: any = { processedStatus: status };
       if (firestoreCatalogId) {
         updateData.firestoreCatalogId = firestoreCatalogId;
       }
@@ -828,6 +828,19 @@ export class DatabaseStorage implements IStorage {
       return catalog;
     } catch (error) {
       console.error('Error updating catalog status:', error);
+      return undefined;
+    }
+  }
+  
+  async updateCatalog(id: number, updateData: Partial<InsertCatalog>): Promise<Catalog | undefined> {
+    try {
+      const [catalog] = await db.update(catalogs)
+        .set(updateData)
+        .where(eq(catalogs.id, id))
+        .returning();
+      return catalog;
+    } catch (error) {
+      console.error('Error updating catalog:', error);
       return undefined;
     }
   }
