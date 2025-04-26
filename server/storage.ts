@@ -397,6 +397,27 @@ export class MemStorage implements IStorage {
     return updatedProduct;
   }
 
+  /**
+   * Atualiza apenas a URL da imagem de um produto
+   */
+  async updateProductImageUrl(id: number, imageUrl: string): Promise<Product | undefined> {
+    const existingProduct = this.products.get(id);
+    if (!existingProduct) {
+      console.error(`Produto com ID ${id} não encontrado ao tentar atualizar URL da imagem`);
+      return undefined;
+    }
+    
+    console.log(`Atualizando URL da imagem do produto ${id} para: ${imageUrl}`);
+    const updatedProduct: Product = { 
+      ...existingProduct,
+      imageUrl: imageUrl,
+      isEdited: true
+    };
+    
+    this.products.set(id, updatedProduct);
+    return updatedProduct;
+  }
+  
   async deleteProduct(id: number): Promise<boolean> {
     console.log(`Excluindo produto com ID ${id}`);
     return this.products.delete(id);
@@ -726,6 +747,25 @@ export class DatabaseStorage implements IStorage {
     } catch (error) {
       console.error('Error getting products by imageUrl:', error);
       return [];
+    }
+  }
+  
+  /**
+   * Atualiza apenas a URL da imagem de um produto
+   */
+  async updateProductImageUrl(id: number, imageUrl: string): Promise<Product | undefined> {
+    try {
+      console.log(`DB: Atualizando URL da imagem do produto ${id} para: ${imageUrl}`);
+      const [product] = await db.update(products)
+        .set({ imageUrl: imageUrl, isEdited: true })
+        .where(eq(products.id, id))
+        .returning();
+      
+      console.log(`DB: URL da imagem atualizada com sucesso para o produto ${id}`);
+      return product;
+    } catch (error) {
+      console.error(`Error updating product image URL: ${error}`);
+      return undefined;
     }
   }
   

@@ -1,14 +1,26 @@
-import fs from 'fs';
-import path from 'path';
-import { storage } from './storage';
-import { ProcessedProduct } from './excel-processor';
+/**
+ * Excel Fixed Image Mapper - Mapeador inteligente de imagens para produtos em planilhas Excel
+ * 
+ * Este módulo fornece funcionalidades para mapear imagens extraídas de arquivos Excel
+ * para os produtos correspondentes, usando uma lógica mais robusta e inteligente:
+ * 
+ * 1. Tentativa por código do produto (correspondência exata)
+ * 2. Tentativa por posição da imagem (Y) considerando tolerância de ±1 linha
+ * 3. Tentativa por texto alternativo ou nome do arquivo de imagem
+ */
 
+import * as fs from 'fs';
+import * as path from 'path';
+import { storage } from './storage';
+import { Product } from '@shared/schema';
+
+// Interfaces
 interface ExcelImage {
-  index: number;
-  name: string;
-  path: string;
-  anchorRow?: number; // Posição Y aproximada da imagem
-  altText?: string;   // Texto alternativo da imagem, se disponível
+  index: number;       // Índice da imagem
+  name: string;        // Nome do arquivo de imagem
+  path: string;        // Caminho completo do arquivo
+  anchorRow?: number;  // Posição Y aproximada da imagem na planilha
+  altText?: string;    // Texto alternativo da imagem, se disponível
 }
 
 interface ProductImageMapping {
@@ -23,125 +35,148 @@ interface ProductImageMapping {
  * utilizando uma estratégia de correspondência mais robusta
  */
 export async function mapImagesToProducts(
-  catalogId: number, 
-  extractedImagesDir: string,
-  uniqueImagesDir: string
+  catalogId: number,
+  extractedImagesDir: string
 ): Promise<ProductImageMapping[]> {
-  // 1. Carregar todos os produtos do catálogo
+  // Obter produtos do catálogo
   const products = await storage.getProductsByCatalogId(catalogId);
+  if (!products || products.length === 0) {
+    console.error(`Nenhum produto encontrado para o catálogo ${catalogId}`);
+    return [];
+  }
   
-  // 2. Obter informações das imagens extraídas
-  const images = getExtractedImagesInfo(extractedImagesDir);
-  console.log(`Encontradas ${images.length} imagens para mapear em ${products.length} produtos`);
+  console.log(`Mapeando imagens para ${products.length} produtos no catálogo ${catalogId}`);
   
-  const mappings: ProductImageMapping[] = [];
+  // Obter informações sobre as imagens extraídas
+  const extractedImages = getExtractedImagesInfo(extractedImagesDir);
+  if (extractedImages.length === 0) {
+    console.error(`Nenhuma imagem encontrada no diretório: ${extractedImagesDir}`);
+    return [];
+  }
   
-  // 3. Para cada produto, tentar encontrar a imagem correspondente
+  console.log(`Encontradas ${extractedImages.length} imagens extraídas em ${extractedImagesDir}`);
+  
+  // Mapeamento final de produtos para imagens
+  const productImageMappings: ProductImageMapping[] = [];
+  
+  // Para cada produto, tentar encontrar a melhor imagem correspondente
   for (const product of products) {
-    // Ignorar produtos sem código ou com código vazio
-    if (!product.code || product.code.trim() === '') continue;
-    
-    const productCode = product.code.toLowerCase().trim();
     let bestMatch: { image: ExcelImage; confidence: number } | null = null;
     
-    // A. Primeira estratégia: correspondência exata por código no nome da imagem ou texto alternativo
-    for (const image of images) {
-      // Verificar correspondência por código no nome da imagem
-      if (image.name.toLowerCase().includes(productCode) || 
-          (image.altText && image.altText.toLowerCase().includes(productCode))) {
-        // Correspondência exata por código tem confiança alta
-        bestMatch = { image, confidence: 0.9 };
-        break;
-      }
-    }
-    
-    // B. Segunda estratégia: correspondência por posição na planilha (±1 linha de tolerância)
-    if (!bestMatch) {
-      // Tentar extrair número de linha do produto
-      const rowMatch = /row_(\d+)/.exec(product.description || '');
-      if (rowMatch) {
-        const productRow = parseInt(rowMatch[1], 10);
+    // 1. Tentar correspondência por código de produto (prioridade alta)
+    if (product.code) {
+      const codeMatch = extractedImages.find(img => {
+        // Verificar se o nome da imagem ou texto alternativo contém o código
+        const imgName = path.parse(img.name).name.toLowerCase();
+        const altText = img.altText?.toLowerCase() || '';
+        const productCode = product.code.toLowerCase();
         
-        for (const image of images) {
-          if (image.anchorRow) {
-            // Verificar se a imagem está ancorada próxima à linha do produto (±1 linha)
-            const rowDifference = Math.abs(image.anchorRow - productRow);
-            if (rowDifference <= 1) {
-              const confidence = rowDifference === 0 ? 0.8 : 0.6; // Confiança menor se não for exatamente na mesma linha
-              
-              // Atualizar melhor correspondência apenas se for melhor que a atual
-              if (!bestMatch || confidence > bestMatch.confidence) {
-                bestMatch = { image, confidence };
-              }
-            }
-          }
-        }
-      }
-    }
-    
-    // C. Terceira estratégia: correspondência por índice (mantida para compatibilidade)
-    if (!bestMatch) {
-      // Extrair índice do produto
-      const indexMatch = /index_(\d+)/.exec(product.description || '');
-      if (indexMatch) {
-        const productIndex = parseInt(indexMatch[1], 10);
-        
-        // Encontrar imagem com o mesmo índice
-        const matchingImage = images.find(img => img.index === productIndex);
-        if (matchingImage) {
-          bestMatch = { image: matchingImage, confidence: 0.5 };
-        }
-      }
-    }
-    
-    // D. Se ainda não encontrou, tentar pela linha mais próxima
-    if (!bestMatch && product.description) {
-      // Tentar extrair linha do produto de outras formas (ex: do código do produto)
-      const codeMatch = /(\d+)/.exec(product.code);
-      if (codeMatch) {
-        const codeNumber = parseInt(codeMatch[0], 10);
-        
-        for (const image of images) {
-          if (image.anchorRow) {
-            // Usar uma tolerância maior agora
-            const rowDifference = Math.abs(image.anchorRow - codeNumber);
-            if (rowDifference <= 3) { // Tolerância maior
-              bestMatch = { image, confidence: 0.3 };
-              break;
-            }
-          }
-        }
-      }
-    }
-    
-    // Se encontrou uma correspondência, criar uma cópia única da imagem
-    if (bestMatch) {
-      // Garantir que o diretório de imagens únicas existe
-      if (!fs.existsSync(uniqueImagesDir)) {
-        fs.mkdirSync(uniqueImagesDir, { recursive: true });
-      }
-      
-      // Gerar nome de arquivo único baseado no código do produto e timestamp
-      const timestamp = Date.now();
-      const uniqueFilename = `${productCode.replace(/[^a-z0-9]/gi, '_')}_${product.id}_${timestamp}${path.extname(bestMatch.image.path)}`;
-      const uniqueImagePath = path.join(uniqueImagesDir, uniqueFilename);
-      
-      // Copiar a imagem para o novo local
-      fs.copyFileSync(bestMatch.image.path, uniqueImagePath);
-      
-      // Adicionar ao mapeamento
-      mappings.push({
-        productId: product.id,
-        productCode: product.code,
-        imagePath: uniqueImagePath,
-        confidence: bestMatch.confidence
+        return imgName.includes(productCode) || altText.includes(productCode);
       });
       
-      console.log(`Mapeada imagem para produto ${product.code} (ID: ${product.id}) com confiança ${bestMatch.confidence}`);
+      if (codeMatch) {
+        bestMatch = { image: codeMatch, confidence: 0.9 }; // Alta confiança para correspondência de código
+        console.log(`Encontrada correspondência por código para produto ${product.id} (${product.code}): ${codeMatch.name}`);
+      }
+    }
+    
+    // 2. Se não encontrou por código, tentar por posição com tolerância (Y ±1)
+    if (!bestMatch && product.excelRowNumber) {
+      // Procurar imagens próximas à linha do produto (±1 linha)
+      const rowMatches = extractedImages.filter(img => {
+        if (!img.anchorRow) return false;
+        
+        // Usar uma tolerância de ±1 linha
+        const tolerance = 1;
+        return Math.abs(img.anchorRow - product.excelRowNumber!) <= tolerance;
+      });
+      
+      if (rowMatches.length > 0) {
+        // Se encontrou múltiplas imagens, pegar a mais próxima
+        rowMatches.sort((a, b) => {
+          const distA = Math.abs((a.anchorRow || 0) - (product.excelRowNumber || 0));
+          const distB = Math.abs((b.anchorRow || 0) - (product.excelRowNumber || 0));
+          return distA - distB;
+        });
+        
+        bestMatch = { 
+          image: rowMatches[0], 
+          confidence: rowMatches[0].anchorRow === product.excelRowNumber ? 0.85 : 0.7 
+        };
+        
+        console.log(`Encontrada correspondência por posição para produto ${product.id} na linha ${product.excelRowNumber}: ${bestMatch.image.name} (anchorRow: ${bestMatch.image.anchorRow})`);
+      }
+    }
+    
+    // 3. Tentar por nome do produto ou descrição (prioridade mais baixa)
+    if (!bestMatch && (product.name || product.description)) {
+      const nameWords = (product.name || '').toLowerCase().split(/\s+/);
+      const descWords = (product.description || '').toLowerCase().split(/\s+/);
+      
+      // Palavras significativas do produto (ignorar palavras muito curtas)
+      const significantWords = [...nameWords, ...descWords]
+        .filter(w => w.length > 3)
+        .slice(0, 5); // Limitar a 5 palavras significativas
+      
+      if (significantWords.length > 0) {
+        // Verificar cada imagem para correspondência de texto
+        let bestTextMatch: { image: ExcelImage; matchCount: number } | null = null;
+        
+        for (const img of extractedImages) {
+          const imgName = path.parse(img.name).name.toLowerCase();
+          const altText = (img.altText || '').toLowerCase();
+          const combinedText = `${imgName} ${altText}`;
+          
+          // Contar quantas palavras significativas correspondem
+          const matchCount = significantWords.filter(word => 
+            combinedText.includes(word)
+          ).length;
+          
+          if (matchCount > 0 && (!bestTextMatch || matchCount > bestTextMatch.matchCount)) {
+            bestTextMatch = { image: img, matchCount };
+          }
+        }
+        
+        if (bestTextMatch) {
+          // Calcular confiança com base no número de palavras correspondentes
+          const confidence = Math.min(0.6, 0.3 + (bestTextMatch.matchCount / significantWords.length) * 0.3);
+          
+          // Usar esta correspondência apenas se não encontramos nada melhor
+          if (!bestMatch || confidence > bestMatch.confidence) {
+            bestMatch = { image: bestTextMatch.image, confidence };
+            console.log(`Encontrada correspondência por texto para produto ${product.id} (${product.name}): ${bestMatch.image.name}`);
+          }
+        }
+      }
+    }
+    
+    // 4. Se ainda não encontrou, atribuir a primeira imagem não utilizada (último recurso)
+    if (!bestMatch && extractedImages.length > 0) {
+      // Filtrar imagens já utilizadas
+      const usedImagePaths = productImageMappings.map(m => m.imagePath);
+      const unusedImages = extractedImages.filter(img => !usedImagePaths.includes(img.path));
+      
+      if (unusedImages.length > 0) {
+        bestMatch = { image: unusedImages[0], confidence: 0.3 }; // Baixa confiança para correspondência aleatória
+        console.log(`Atribuindo imagem não utilizada para produto ${product.id}: ${unusedImages[0].name} (baixa confiança)`);
+      }
+    }
+    
+    // Adicionar ao mapeamento se encontrou uma correspondência
+    if (bestMatch) {
+      productImageMappings.push({
+        productId: product.id,
+        productCode: product.code,
+        imagePath: bestMatch.image.path,
+        confidence: bestMatch.confidence
+      });
+    } else {
+      console.warn(`Nenhuma imagem encontrada para o produto ${product.id} (${product.name})`);
     }
   }
   
-  return mappings;
+  console.log(`Mapeamento concluído: ${productImageMappings.length} produtos com imagens mapeadas`);
+  return productImageMappings;
 }
 
 /**
@@ -149,72 +184,96 @@ export async function mapImagesToProducts(
  */
 function getExtractedImagesInfo(extractedImagesDir: string): ExcelImage[] {
   if (!fs.existsSync(extractedImagesDir)) {
-    console.error(`Diretório de imagens extraídas não encontrado: ${extractedImagesDir}`);
+    console.error(`Diretório não encontrado: ${extractedImagesDir}`);
     return [];
   }
   
-  const images: ExcelImage[] = [];
-  const files = fs.readdirSync(extractedImagesDir);
-  
-  for (const file of files) {
-    if (!/\.(png|jpg|jpeg|gif)$/i.test(file)) continue;
+  try {
+    // Ler arquivos no diretório
+    const files = fs.readdirSync(extractedImagesDir)
+      .filter(file => /\.(png|jpg|jpeg|gif)$/i.test(file));
     
-    const filePath = path.join(extractedImagesDir, file);
-    
-    // Extrair índice da imagem (formato comum: img_X.png ou imageX.jpg)
-    const indexMatch = /img_(\d+)|image(\d+)/i.exec(file);
-    const index = indexMatch ? parseInt(indexMatch[1] || indexMatch[2], 10) : -1;
-    
-    // Ler metadados adicionais se existirem
-    let anchorRow: number | undefined;
-    let altText: string | undefined;
-    
-    const metadataPath = path.join(extractedImagesDir, `${path.basename(file, path.extname(file))}_metadata.json`);
-    if (fs.existsSync(metadataPath)) {
-      try {
-        const metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
-        anchorRow = metadata.anchorRow;
-        altText = metadata.altText;
-      } catch (error) {
-        console.error(`Erro ao ler metadados da imagem ${file}:`, error);
+    // Extrair informações de cada imagem
+    const images: ExcelImage[] = files.map((fileName, index) => {
+      const filePath = path.join(extractedImagesDir, fileName);
+      const stats = fs.statSync(filePath);
+      
+      // Extrair informações do nome do arquivo
+      // Formato possível: image1_row5_colB.png (onde 5 seria a linha da planilha)
+      let anchorRow: number | undefined = undefined;
+      const rowMatch = fileName.match(/(_row(\d+)_)|(-row(\d+)-)/);
+      
+      if (rowMatch) {
+        anchorRow = parseInt(rowMatch[2] || rowMatch[4], 10);
+      } else {
+        // Tentar extrair do formato "imageXX.png" onde XX pode incluir o número da linha
+        const numericMatch = fileName.match(/image(\d+)/i);
+        if (numericMatch) {
+          // Em alguns casos, o número da imagem pode corresponder aproximadamente à linha
+          const imageNum = parseInt(numericMatch[1], 10);
+          // Considerar como possível linha apenas se for um número razoável (< 100)
+          if (imageNum > 0 && imageNum < 100) {
+            anchorRow = imageNum;
+          }
+        }
       }
-    }
-    
-    images.push({
-      index,
-      name: file,
-      path: filePath,
-      anchorRow,
-      altText
+      
+      // Texto alternativo (normalmente armazenado em um arquivo separado ou metadados)
+      // Esta é uma implementação simplificada; uma versão completa poderia ler metadados da imagem
+      const altTextPath = path.join(extractedImagesDir, `${path.parse(fileName).name}_alt.txt`);
+      let altText: string | undefined = undefined;
+      
+      if (fs.existsSync(altTextPath)) {
+        altText = fs.readFileSync(altTextPath, 'utf8').trim();
+      }
+      
+      return {
+        index,
+        name: fileName,
+        path: filePath,
+        anchorRow,
+        altText
+      };
     });
+    
+    return images;
+  } catch (error) {
+    console.error('Erro ao ler informações das imagens:', error);
+    return [];
   }
-  
-  return images;
 }
 
 /**
  * Atualiza as URLs de imagens dos produtos com base no novo mapeamento
  */
 export async function updateProductImageUrls(
-  catalogId: number, 
-  mappings: ProductImageMapping[]
+  userId: number | string,
+  catalogId: number,
+  imageMappings: ProductImageMapping[]
 ): Promise<number> {
   let updatedCount = 0;
   
-  for (const mapping of mappings) {
+  for (const mapping of imageMappings) {
     try {
-      // Criar URL relativa para a imagem
-      const relativePath = mapping.imagePath.replace(process.cwd(), '');
-      const imageUrl = `/api/product-images${relativePath}`;
+      // Construir URL relativa para a imagem
+      const imageName = path.basename(mapping.imagePath);
+      const imageUrl = `/uploads/users/${userId}/catalogs/${catalogId}/images/${imageName}`;
       
-      // Atualizar URL da imagem no produto
-      await storage.updateProductImageUrl(mapping.productId, imageUrl);
-      updatedCount++;
+      // Atualizar URL da imagem do produto
+      const updatedProduct = await storage.updateProductImageUrl(mapping.productId, imageUrl);
+      
+      if (updatedProduct) {
+        updatedCount++;
+        console.log(`Atualizada URL de imagem para produto ${mapping.productId}: ${imageUrl}`);
+      } else {
+        console.error(`Falha ao atualizar URL de imagem para produto ${mapping.productId}`);
+      }
     } catch (error) {
-      console.error(`Erro ao atualizar URL da imagem para o produto ${mapping.productId}:`, error);
+      console.error(`Erro ao atualizar URL de imagem para produto ${mapping.productId}:`, error);
     }
   }
   
+  console.log(`Total de ${updatedCount} produtos atualizados com novas URLs de imagens`);
   return updatedCount;
 }
 
@@ -222,24 +281,58 @@ export async function updateProductImageUrls(
  * Processo completo de correção de imagens para um catálogo
  */
 export async function fixProductImages(
+  userId: number | string,
   catalogId: number
-): Promise<{ detected: number; fixed: number; }> {
-  const extractedImagesDir = path.join(process.cwd(), 'uploads', 'extracted_images');
-  const uniqueImagesDir = path.join(process.cwd(), 'uploads', 'unique-images');
-  
-  // Garantir que os diretórios existem
-  if (!fs.existsSync(uniqueImagesDir)) {
-    fs.mkdirSync(uniqueImagesDir, { recursive: true });
+): Promise<{ success: boolean; updated: number; message: string }> {
+  try {
+    console.log(`Iniciando correção de imagens para catálogo ${catalogId}`);
+    
+    // Diretórios de imagens para o catálogo
+    const extractedImagesDir = path.join('uploads', 'users', String(userId), 'catalogs', String(catalogId), 'extracted_images');
+    
+    // Verificar se o diretório existe
+    if (!fs.existsSync(extractedImagesDir)) {
+      return { 
+        success: false, 
+        updated: 0, 
+        message: `Diretório de imagens extraídas não encontrado: ${extractedImagesDir}` 
+      };
+    }
+    
+    // 1. Mapear imagens para produtos
+    const imageMappings = await mapImagesToProducts(catalogId, extractedImagesDir);
+    
+    if (imageMappings.length === 0) {
+      return {
+        success: false,
+        updated: 0,
+        message: "Nenhuma correspondência de imagem encontrada para os produtos"
+      };
+    }
+    
+    // 2. Atualizar URLs de imagens dos produtos
+    const updatedCount = await updateProductImageUrls(userId, catalogId, imageMappings);
+    
+    return {
+      success: true,
+      updated: updatedCount,
+      message: `${updatedCount} produtos atualizados com novas URLs de imagens`
+    };
+  } catch (error) {
+    console.error('Erro ao corrigir imagens dos produtos:', error);
+    return {
+      success: false,
+      updated: 0,
+      message: `Erro ao processar correção de imagens: ${error}`
+    };
   }
-  
-  // 1. Mapear imagens para produtos
-  const mappings = await mapImagesToProducts(catalogId, extractedImagesDir, uniqueImagesDir);
-  
-  // 2. Atualizar URLs das imagens dos produtos
-  const updatedCount = await updateProductImageUrls(catalogId, mappings);
-  
-  return {
-    detected: mappings.length,
-    fixed: updatedCount
-  };
 }
+
+/**
+ * Exporta as funções principais do módulo
+ */
+export default {
+  mapImagesToProducts,
+  updateProductImageUrls,
+  fixProductImages
+};

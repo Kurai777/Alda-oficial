@@ -15,7 +15,7 @@ import { db } from './db';
 import { products } from '@shared/schema';
 import { storage } from './storage';
 import { createUniqueImageCopy, findImageFile } from './excel-image-analyzer';
-import { fixProductImages } from './excel-fixed-image-mapper';
+import excelFixedImageMapper from './excel-fixed-image-mapper';
 
 // Diretórios para imagens
 const UPLOADS_DIR = path.join(process.cwd(), 'uploads');
@@ -222,21 +222,27 @@ export async function fixAllSharedImagesInCatalog(catalogId: number) {
     // Inicializar diretórios
     initializeDirectories();
     
-    // Usar o algoritmo de mapeamento inteligente
-    const result = await fixProductImages(catalogId);
+    // Obter informações do catálogo para passar o userId
+    const catalog = await storage.getCatalog(catalogId);
+    if (!catalog) {
+      throw new Error(`Catálogo ${catalogId} não encontrado`);
+    }
     
-    console.log(`Processo de correção de imagens concluído: ${result.detected} detectadas, ${result.fixed} corrigidas`);
+    // Usar o algoritmo de mapeamento inteligente
+    const result = await excelFixedImageMapper.fixProductImages(catalog.userId, catalogId);
+    
+    console.log(`Processo de correção de imagens concluído: ${result.updated} produtos atualizados`);
     
     // Formatar o resultado para compatibilidade com a API
     return {
-      total: result.detected + (result.fixed === 0 ? 0 : 1),
-      fixed: result.fixed,
-      alreadyUnique: result.detected - result.fixed,
+      total: result.updated + (result.updated === 0 ? 0 : 1),
+      fixed: result.updated,
+      alreadyUnique: 0,
       failed: 0,
       products: [{
         id: 0,
         status: 'summary',
-        message: `Total: ${result.detected}, Corrigidas: ${result.fixed}`
+        message: `${result.success ? 'Sucesso' : 'Falha'}: ${result.message}`
       }]
     };
   } catch (error) {
