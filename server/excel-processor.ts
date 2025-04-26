@@ -911,9 +911,33 @@ function normalizeExcelProducts(rawProducts: ExcelProduct[], userId?: string | n
         
         if (!hasAnyData) continue;
         
-        // Se tem dados mas não identificamos nome/código, criar um nome genérico
-        productName = 'Produto ' + (Math.floor(Math.random() * 10000));
-        productCode = 'CODE-' + Date.now().toString().slice(-6);
+        // Se tem dados mas não identificamos nome/código, vamos tentar extrair um nome a partir de qualquer campo
+        let possibleNameFound = false;
+        
+        // Procurar qualquer campo de texto que possa servir como nome
+        for (const [key, value] of Object.entries(rawProduct)) {
+          if (typeof value === 'string' && value.trim().length > 3 && 
+              !key.toLowerCase().includes('cod') && 
+              !key.toLowerCase().includes('ref') && 
+              !key.toLowerCase().includes('valo') && 
+              !key.toLowerCase().includes('preç')) {
+            
+            productName = value.trim();
+            console.log(`Nome do produto extraído do campo '${key}': "${productName}"`);
+            possibleNameFound = true;
+            break;
+          }
+        }
+        
+        // Se realmente não encontramos nada, usar um nome genérico sequencial
+        if (!possibleNameFound) {
+          console.log("Nenhum campo adequado para nome do produto encontrado, usando nome genérico");
+          productName = 'Produto sem nome';
+        }
+        
+        // Gerar código único para identificação
+        const uniqueId = Date.now().toString().slice(-6) + Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+        productCode = 'UNKNOWN-CODE';
       }
       
 

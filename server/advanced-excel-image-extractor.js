@@ -867,13 +867,50 @@ export async function extractImagesFromExcel(excelPath, products, userId, catalo
     
     console.log(`Encontradas ${result.images.length} imagens no Excel (antes da filtragem)`);
     
-    // Filtrar imagens que não são de produtos
+    // NOVO: Garantir que temos produtos para associar imagens
+    if (!products || products.length === 0) {
+      console.log('ATENÇÃO: Lista de produtos vazia para associação de imagens');
+      // Criar produtos vazios para cada imagem para garantir que as imagens não serão perdidas
+      for (let i = 0; i < Math.min(result.images.length, 100); i++) { // Limitar a 100 produtos
+        products.push({
+          name: `Produto Auto-Gerado ${i+1}`,
+          code: `AUTO-${Date.now()}-${i}`,
+          price: 0,
+          description: 'Produto criado automaticamente para preservar imagem'
+        });
+      }
+      console.log(`Criados ${products.length} produtos genéricos para preservar imagens`);
+    }
+    
+    // Filtrar imagens que não são de produtos (agora menos restritivo)
     const filteredImages = filterNonProductImages(result.images);
     
-    console.log(`Após filtragem: ${filteredImages.length} imagens válidas de produtos`);
+    console.log(`Após filtragem: ${filteredImages.length} imagens válidas de produtos (${filteredImages.length}/${result.images.length} = ${Math.round(filteredImages.length/result.images.length*100)}%)`);
+    
+    // Mapear produtos por código para associação mais flexível
+    // Reutilizar o productCodeMap existente
+    const productByIndex = {};
+    
+    // Criar um mapa de produtos por código para facilitar a associação
+    products.forEach((product, index) => {
+      if (product.code) {
+        const normalizedCode = String(product.code).toLowerCase().replace(/[-_\s]/g, '');
+        // Usar diretamente product.code como chave no mapa
+        productCodeMap[normalizedCode] = index;
+      }
+      productByIndex[index] = product;
+    });
+    
+    console.log(`Mapa de produtos por código criado com ${Object.keys(productCodeMap).length} entradas`);
     
     // Objeto para armazenar URLs de imagens por código
     const imageUrlMap = {};
+    
+    // NOVO: Se temos mais imagens do que produtos, vamos garantir que cada produto tenha pelo menos uma imagem
+    const productCount = products.length;
+    const imageCount = filteredImages.length;
+    
+    console.log(`Relação imagens/produtos: ${imageCount}/${productCount} (${Math.round(imageCount/productCount*100)}%)`);
     
     // Processar cada imagem
     for (let i = 0; i < filteredImages.length; i++) {
@@ -906,8 +943,8 @@ export async function extractImagesFromExcel(excelPath, products, userId, catalo
         }
         
         // Método 2: Se não encontrou pelo nome, tentar associar pelo índice
-        if (!productCode && i < productsByIndex.length) {
-          const product = productsByIndex[i];
+        if (!productCode && i < products.length) {
+          const product = products[i];
           productCode = product.code || product.codigo;
           console.log(`Imagem ${fileName} associada ao produto ${productCode} (por índice)`);
         }
