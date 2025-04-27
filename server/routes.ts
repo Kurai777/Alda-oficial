@@ -26,7 +26,7 @@ import { processExcelWithAI } from './ai-excel-processor.js';
 import { getAuth, signInWithEmailAndPassword } from 'firebase/auth';
 import firebaseAppClient from '../client/src/lib/firebase';
 import { fixProductImages } from './excel-fixed-image-mapper';
-import { extractAndUploadExcelImages } from './excel-image-extractor';
+import { extractAndUploadImagesSequentially } from './excel-image-extractor';
 import { Catalog as SharedCatalog } from "@shared/schema";
 
 type MoodboardCreateInput = {
@@ -1181,29 +1181,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Salvar o catálogo no Firestore também
         try {
           const { createCatalogInFirestore } = await import('./firestore-service');
-          let productsData: any[] = [];
+          let productsData: any[] = []; 
           let extractionInfo = "";
-          let imageMap = new Map<string, string>(); 
+          let imagesUploadedCount = 0; // Contagem de imagens enviadas
 
           try {
             // ======= PROCESSAMENTO BASEADO NO TIPO DE ARQUIVO =======
             if (fileType === 'xlsx' || fileType === 'xls') {
               
-              // ** ETAPA 1: Chamar o Extrator de Imagens baseado em PYTHON **
-              console.log(`---> Iniciando EXTRAÇÃO DE IMAGENS (Python) para: ${processingFilePath}`);
+              // ** ETAPA 1: Extrair e Fazer Upload das Imagens (Sequencial) **
+              console.log(`---> Iniciando extração/upload SEQUENCIAL de imagens para: ${processingFilePath}`);
               try {
-                // Chamar a função correta que usa Python
-                imageMap = await extractAndUploadExcelImages(processingFilePath, userId, catalogId);
-                console.log(`---> Extração Python concluída. ${imageMap.size} imagens mapeadas (código -> url).`);
+                // Chamar a função SEQUENCIAL correta
+                imagesUploadedCount = await extractAndUploadImagesSequentially(processingFilePath, userId, catalogId);
+                console.log(`---> Extração/upload sequencial concluído. ${imagesUploadedCount} imagens enviadas para S3.`);
               } catch (imageError) {
-                console.error("Erro durante extração/upload de imagens (Python) (continuando sem imagens):", imageError);
+                console.error("Erro durante extração/upload sequencial de imagens:", imageError);
+                // Continuar mesmo se falhar
               }
 
               // ** ETAPA 2: Chamar IA para Extrair Dados Textuais **
               console.log(`---> Chamando processExcelWithAI para dados textuais: ${processingFilePath}`);
               productsData = await processExcelWithAI(processingFilePath); 
               console.log(`<<< Retorno de processExcelWithAI: ${productsData.length} produtos.`);
-              extractionInfo = `IA extraiu ${productsData.length} produtos. Extrator de imagens mapeou ${imageMap.size} imagens.`; // Ajustar log
+              extractionInfo = `IA extraiu ${productsData.length} produtos. ${imagesUploadedCount} imagens foram enviadas para S3.`;
               
             } else if (fileType === 'pdf') {
               console.log("---> Chamando processamento de PDF...");
@@ -1224,32 +1225,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
             }
 
             // ======= FIM DO PROCESSAMENTO =======
-            console.log(`Processamento concluído. Produtos: ${productsData.length}, Imagens Mapeadas: ${imageMap.size}`);
+            console.log(`Processamento concluído. Produtos: ${productsData.length}, Imagens Enviadas: ${imagesUploadedCount}`);
 
-            // ======= ETAPA DE MAPEAMENTO IMAGEM <-> PRODUTO =======
-            // Não precisamos mais mapear por linha, usamos o imageMap direto
-            if (productsData.length > 0 && imageMap.size > 0) {
-                console.log("---> Associando imagens aos produtos via Mapa[código]...");
-                let mappedCount = 0;
-                for (const product of productsData) {
-                    const imageUrl = imageMap.get(product.code); // Tenta pegar a URL usando o código do produto
-                    if (imageUrl) {
-                        product.imageUrl = imageUrl;
-                        mappedCount++;
-                        console.log(`    - Imagem ${imageUrl.split('/').pop()} mapeada para Produto ${product.code}`);
-                    }
-                }
-                console.log(`---> Mapeamento concluído. ${mappedCount} imagens associadas.`);
-            }
+            // ======= REMOVER ETAPA DE MAPEAMENTO =======
+            // Não há mais mapeamento automático por linha ou código aqui
 
-            // ======= SALVAR PRODUTOS =======
+            // ======= SALVAR PRODUTOS (SEM imageUrl automático) =======
             if (!Array.isArray(productsData)) productsData = [];
 
-            // Salvar no Firestore (já pega imageUrl do productData)
+            // Salvar no Firestore 
             try {
               const productsToSaveFirestore = productsData.map(p => ({
                 ...p, 
-                // imageUrl já deve estar no objeto p se foi mapeado
+                imageUrl: null, // << Definir como null inicialmente
                 userId: userId.toString() || 'unknown_user', 
                 catalogId: firestoreCatalogId?.toString() || `unknown-catalog-${catalog?.id || 'new'}`, 
                 localCatalogId: catalog?.id || null, 
@@ -1268,7 +1256,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               console.error("Erro ao salvar produtos no Firestore:", firestoreError);
             }
 
-            // Salvar no Banco Local PG (já pega imageUrl do productData)
+            // Salvar no Banco Local (PostgreSQL)
             const savedLocalProducts = [];
             const localUserIdNum = typeof userId === 'number' ? userId : parseInt(userId.toString()); 
             const localCatalogIdNum = catalog?.id; 
@@ -1291,7 +1279,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                     colors: Array.isArray(productData.colors) ? productData.colors : [],
                     materials: Array.isArray(productData.materials) ? productData.materials : [],
                     sizes: Array.isArray(productData.sizes) ? productData.sizes : [],
-                    imageUrl: productData.imageUrl || null,
+                    imageUrl: null, // << Definir como null inicialmente
                     isEdited: false,
                     createdAt: new Date(),
                     updatedAt: new Date()
