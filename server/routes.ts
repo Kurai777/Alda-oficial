@@ -1389,7 +1389,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                   productsData = sofaProcessor.getExampleProducts(userId, firestoreCatalogId);
                 } else {
                   // Processar o Excel com o processador especializado para Sofá Home
-                  productsData = await sofaProcessor.processSofaHomeExcel(filePath, userId, firestoreCatalogId);
+                  productsData = await sofaProcessor.processSofaHomeExcel(processingFilePath, userId, firestoreCatalogId);
                 }
                 
                 extractionInfo = `Extraídos ${productsData.length} produtos do formato Sofá Home.`;
