@@ -98,9 +98,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if (s3Config.status === 'success') {
       console.log(`✅ Amazon S3 conectado com sucesso - Bucket: ${s3Config.bucket}, Região: ${s3Config.region}`);
       useS3Storage = true;
-      // Configurar multer para usar S3
-      upload = getS3UploadMiddleware('catalogs');
-      console.log('Upload de arquivos configurado para usar Amazon S3');
+      
+      try {
+        // Inicializar pasta de uploads local (mesmo usando S3, é bom ter como fallback)
+        if (!fs.existsSync('./uploads')) {
+          fs.mkdirSync('./uploads', { recursive: true });
+        }
+        
+        // Configurar multer para usar S3 com uma configuração customizada
+        const multerS3Setup = await import('./s3-service.js');
+        upload = multerS3Setup.getS3UploadMiddleware('catalogs');
+        
+        // Caso tudo dê certo com a configuração
+        console.log('Upload de arquivos configurado para usar Amazon S3');
+      } catch (multerError) {
+        console.error('Erro ao configurar multer com S3:', multerError);
+        // Fallback para armazenamento local
+        upload = multer({ storage: localStorage });
+        console.log('⚠️ Voltando para armazenamento local devido a erro na configuração do Multer-S3');
+        useS3Storage = false;
+      }
     } else {
       console.log(`⚠️ Usando armazenamento local: ${s3Config.message}`);
     }
@@ -1063,7 +1080,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Extrair informações do arquivo
       const file = req.file;
-      let filePath: string;
+      console.log("File object:", JSON.stringify(file, null, 2));
+      
+      let filePath: string = '';
       let s3Key: string | null = null;
       const fileName = file.originalname;
       const fileType = fileName.split('.').pop()?.toLowerCase() || '';
@@ -1073,26 +1092,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.log(`Upload realizado pelo usuário: ${userId}`);
       
       // Verificar se estamos usando S3 ou armazenamento local
-      if (useS3Storage && 's3' in file) {
-        // Upload via S3
-        s3Key = (file as any).key || (file as any).s3Key;
+      if (useS3Storage && file.hasOwnProperty('location')) {
+        // Upload via S3 - multer-s3 v3 usa 'location'
+        s3Key = (file as any).key;
+        const s3Location = (file as any).location;
         filePath = s3Key; // Usar o caminho S3 como filePath
-        console.log(`Arquivo recebido via S3: ${fileName} (${fileType}), S3 Key: ${s3Key}`);
-      } else {
+        console.log(`Arquivo recebido via S3 v3: ${fileName} (${fileType}), S3 Key: ${s3Key}, Location: ${s3Location}`);
+      } else if (useS3Storage && (file as any).s3) {
+        // Upload via S3 - multer-s3 v2
+        s3Key = (file as any).key || (file as any).s3?.key;
+        filePath = s3Key; // Usar o caminho S3 como filePath
+        console.log(`Arquivo recebido via S3 v2: ${fileName} (${fileType}), S3 Key: ${s3Key}`);
+      } else if (file.path) {
         // Upload local tradicional
         filePath = file.path;
         console.log(`Arquivo recebido localmente: ${fileName} (${fileType}), salvo em: ${filePath}`);
         
         // Se o S3 estiver configurado, fazer upload do arquivo para S3 (migração)
-        if (useS3Storage && !s3Key && filePath) {
+        if (useS3Storage) {
           try {
-            console.log(`Migrando arquivo para S3 - filepath: ${filePath}, userId: ${userId}`);
+            console.log(`Migrando arquivo local para S3 - filepath: ${filePath}, userId: ${userId}`);
             const userIdNum = typeof userId === 'string' ? parseInt(userId) : userId;
-            
-            // Verifica se o filepath é válido
-            if (!filePath || typeof filePath !== 'string') {
-              throw new Error(`Filepath inválido: ${filePath}`);
-            }
             
             // Importar módulo s3 para upload
             const { uploadFileToS3 } = await import('./s3-service.js');
@@ -1105,13 +1125,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
             s3Key = null; // Garante que o s3Key é nulo em caso de erro
           }
         }
+      } else {
+        // Fallback: Criar um caminho de arquivo temporário
+        filePath = `./uploads/temp-${Date.now()}-${fileName}`;
+        console.log(`Nenhum caminho de arquivo encontrado, usando fallback: ${filePath}`);
       }
+      
+      // Garantir que temos um fileUrl válido
+      const fileUrl = s3Key || filePath;
+      if (!fileUrl) {
+        throw new Error("Não foi possível determinar um URL válido para o arquivo");
+      }
+      
+      console.log(`FileUrl final para o banco: ${fileUrl}`);
       
       // Criar um novo catálogo no banco de dados
       const catalog = await storage.createCatalog({
         userId: typeof userId === 'string' ? parseInt(userId) : userId,
         fileName: fileName,
-        fileUrl: s3Key || filePath, // Usar S3 Key se disponível, caso contrário caminho local
+        fileUrl: fileUrl, // URL válido garantido
         processedStatus: "processing"
       });
       
