@@ -18,7 +18,9 @@ import {
   uploadProductImageToS3,
   migrateExtractedImagesToS3,
   updateProductImagesWithS3Urls,
-  deleteCatalogFromS3
+  deleteCatalogFromS3,
+  catalogFileExistsInS3,
+  getCatalogFileUrl
 } from "./catalog-s3-manager.js";
 
 type MoodboardCreateInput = {
@@ -1076,14 +1078,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (useS3Storage && !s3Key) {
           try {
             console.log("Migrando arquivo para S3...");
-            s3Key = await uploadCatalogFileToS3(filePath, userId, 'temp');
+            const userIdNum = typeof userId === 'string' ? parseInt(userId) : userId;
+            s3Key = await uploadCatalogFileToS3(filePath, userIdNum, 'temp');
             console.log(`Arquivo migrado para S3 com sucesso. S3 Key: ${s3Key}`);
           } catch (s3Error) {
             console.error("Erro ao migrar arquivo para S3, continuando com armazenamento local:", s3Error);
           }
         }
       }
-      console.log(`Upload realizado pelo usuário: ${userId}`);
       
       // Criar um novo catálogo no banco de dados
       const catalog = await storage.createCatalog({
@@ -1169,6 +1171,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
               const { processExcelFile } = await import('./excel-processor-improved.js');
               const dummyProducts = await processExcelFile(filePath, userId, firestoreCatalogId);
               
+              // Migrar imagens extraídas para S3 se estiver disponível
+              let imageS3Map = {};
+              if (useS3Storage) {
+                try {
+                  console.log(`Migrando imagens extraídas para S3...`);
+                  const userIdNum = typeof userId === 'string' ? parseInt(userId) : userId;
+                  const migrationResult = await migrateExtractedImagesToS3(
+                    extractedImagesDir, 
+                    userIdNum, 
+                    catalogId
+                  );
+                  
+                  if (migrationResult.success) {
+                    console.log(`Migração de imagens para S3 concluída: ${migrationResult.uploaded} enviadas, ${migrationResult.failed} falhas`);
+                    imageS3Map = migrationResult.fileMap || {};
+                  } else {
+                    console.warn(`Falha na migração de imagens para S3: ${migrationResult.message}`);
+                  }
+                } catch (s3ImageError) {
+                  console.error(`Erro ao migrar imagens para S3:`, s3ImageError);
+                  console.log(`Continuando com imagens locais`);
+                }
+              }
+              
               // Analisar a estrutura do Excel usando IA
               console.log(`Analisando estrutura do Excel com IA para determinar mapeamento ideal...`);
               const aiAnalyzer = await import('./ai-excel-analyzer.js');
@@ -1219,6 +1245,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 } catch (aiError) {
                   console.error("Erro ao aprimorar dados com IA:", aiError);
                   console.log("Continuando com os dados originais sem aprimoramento de IA");
+                }
+                
+                // Atualizar URLs de imagens para S3 se disponível
+                if (useS3Storage && Object.keys(imageS3Map).length > 0) {
+                  try {
+                    console.log(`Atualizando URLs de imagens para S3...`);
+                    const userIdNum = typeof userId === 'string' ? parseInt(userId) : userId;
+                    universalProducts = await updateProductImagesWithS3Urls(
+                      universalProducts, 
+                      imageS3Map, 
+                      userIdNum, 
+                      catalogId
+                    );
+                    console.log(`URLs de imagens atualizadas para S3 com sucesso!`);
+                  } catch (s3UrlError) {
+                    console.error(`Erro ao atualizar URLs de imagens para S3:`, s3UrlError);
+                    console.log(`Continuando com URLs locais`);
+                  }
                 }
                 
                 productsData = universalProducts;
@@ -1309,6 +1353,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
                   } catch (aiError) {
                     console.error("Erro ao aprimorar dados POE com IA:", aiError);
                     console.log("Continuando com os dados POE originais sem aprimoramento de IA");
+                  }
+                }
+                
+                // Atualizar URLs de imagens POE para S3 se disponível
+                if (useS3Storage && Object.keys(imageS3Map).length > 0) {
+                  try {
+                    console.log(`Atualizando URLs de imagens POE para S3...`);
+                    const userIdNum = typeof userId === 'string' ? parseInt(userId) : userId;
+                    poeProducts = await updateProductImagesWithS3Urls(
+                      poeProducts, 
+                      imageS3Map, 
+                      userIdNum, 
+                      catalogId
+                    );
+                    console.log(`URLs de imagens POE atualizadas para S3 com sucesso!`);
+                  } catch (s3UrlError) {
+                    console.error(`Erro ao atualizar URLs de imagens POE para S3:`, s3UrlError);
+                    console.log(`Continuando com URLs locais para POE`);
                   }
                 }
                 
