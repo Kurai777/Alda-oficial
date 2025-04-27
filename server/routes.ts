@@ -11,6 +11,15 @@ import { WebSocketServer } from "ws";
 import mime from "mime-types";
 import { createCanvas } from "canvas";
 import { deleteDataFromFirestore } from "./test-upload.js";
+import { getS3UploadMiddleware, checkS3Configuration } from "./s3-service.js";
+import { 
+  uploadCatalogFileToS3, 
+  getProductImageUrl, 
+  uploadProductImageToS3,
+  migrateExtractedImagesToS3,
+  updateProductImagesWithS3Urls,
+  deleteCatalogFromS3
+} from "./catalog-s3-manager.js";
 
 type MoodboardCreateInput = {
   userId: number;
@@ -36,12 +45,16 @@ declare global {
   namespace Express {
     interface Request {
       firebaseUser?: DecodedIdToken;
+      s3Key?: string; // Chave S3 do arquivo enviado
     }
   }
 }
 
-// Configuração do multer para upload de arquivos
-const storage1 = multer.diskStorage({
+// Verificar se devemos usar S3 ou armazenamento local
+let useS3Storage = false;
+
+// Configuração do multer para armazenamento local (fallback)
+const localStorage = multer.diskStorage({
   destination: function (req, file, cb) {
     cb(null, './uploads/');
   },
@@ -50,7 +63,8 @@ const storage1 = multer.diskStorage({
   }
 });
 
-const upload = multer({ storage: storage1 });
+// Inicialmente, configurar para armazenamento local (será substituído depois de verificar S3)
+let upload = multer({ storage: localStorage });
 
 async function extractProductsFromExcel(filePath: string): Promise<any[]> {
   const XLSX = require('xlsx');
@@ -76,6 +90,23 @@ async function extractProductsFromExcel(filePath: string): Promise<any[]> {
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  // Verificar configuração do S3 e ativar se disponível
+  try {
+    const s3Config = await checkS3Configuration();
+    if (s3Config.status === 'success') {
+      console.log(`✅ Amazon S3 conectado com sucesso - Bucket: ${s3Config.bucket}, Região: ${s3Config.region}`);
+      useS3Storage = true;
+      // Configurar multer para usar S3
+      upload = getS3UploadMiddleware('catalogs');
+      console.log('Upload de arquivos configurado para usar Amazon S3');
+    } else {
+      console.log(`⚠️ Usando armazenamento local: ${s3Config.message}`);
+    }
+  } catch (error) {
+    console.error('Erro ao verificar configuração do S3:', error);
+    console.log('⚠️ Usando armazenamento local devido a erro na configuração do S3');
+  }
+
   // Rota de healthcheck
   app.get("/api/healthcheck", (_req: Request, res: Response) => {
     res.status(200).json({ 
