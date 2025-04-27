@@ -1084,14 +1084,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.log(`Arquivo recebido localmente: ${fileName} (${fileType}), salvo em: ${filePath}`);
         
         // Se o S3 estiver configurado, fazer upload do arquivo para S3 (migração)
-        if (useS3Storage && !s3Key) {
+        if (useS3Storage && !s3Key && filePath) {
           try {
-            console.log("Migrando arquivo para S3...");
+            console.log(`Migrando arquivo para S3 - filepath: ${filePath}, userId: ${userId}`);
             const userIdNum = typeof userId === 'string' ? parseInt(userId) : userId;
-            s3Key = await uploadCatalogFileToS3(filePath, userIdNum, 'temp');
+            
+            // Verifica se o filepath é válido
+            if (!filePath || typeof filePath !== 'string') {
+              throw new Error(`Filepath inválido: ${filePath}`);
+            }
+            
+            // Importar módulo s3 para upload
+            const { uploadFileToS3 } = await import('./s3-service.js');
+            
+            // Fazer upload diretamente com o módulo S3
+            s3Key = await uploadFileToS3(filePath, userIdNum, 'catalogs', 'temp');
             console.log(`Arquivo migrado para S3 com sucesso. S3 Key: ${s3Key}`);
           } catch (s3Error) {
             console.error("Erro ao migrar arquivo para S3, continuando com armazenamento local:", s3Error);
+            s3Key = null; // Garante que o s3Key é nulo em caso de erro
           }
         }
       }
