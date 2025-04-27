@@ -1137,7 +1137,44 @@ export async function registerRoutes(app: Express): Promise<Server> {
         throw new Error("Não foi possível determinar um URL válido para o arquivo");
       }
       
+      // Determinar o caminho de acesso efetivo ao arquivo
+      // Se for S3, precisamos baixar para um caminho local temporário para processamento
+      let processingFilePath = filePath;
+      
+      // Se estiver no S3, vamos baixar para um caminho local temporário
+      if (useS3Storage && s3Key) {
+        try {
+          console.log(`Arquivo está no S3, baixando para processamento local...`);
+          
+          // Criar pasta temporária
+          const tempDir = './uploads/temp';
+          if (!fs.existsSync(tempDir)) {
+            fs.mkdirSync(tempDir, { recursive: true });
+          }
+          
+          // Caminho temporário para download
+          const tempPath = path.join(tempDir, `${Date.now()}-${fileName}`);
+          
+          // Importar serviço S3
+          const { downloadFileFromS3 } = await import('./s3-service.js');
+          
+          // Baixar arquivo do S3
+          const fileBuffer = await downloadFileFromS3(s3Key);
+          
+          // Salvar localmente
+          fs.writeFileSync(tempPath, fileBuffer);
+          
+          console.log(`Arquivo baixado do S3 para: ${tempPath}`);
+          processingFilePath = tempPath;
+        } catch (downloadError) {
+          console.error(`Erro ao baixar arquivo do S3:`, downloadError);
+          // Manter o caminho original em caso de erro
+          console.log(`Usando o caminho original: ${filePath}`);
+        }
+      }
+      
       console.log(`FileUrl final para o banco: ${fileUrl}`);
+      console.log(`Caminho de processamento efetivo: ${processingFilePath}`);
       
       // Criar um novo catálogo no banco de dados
       const catalog = await storage.createCatalog({
@@ -1184,13 +1221,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
           // Criar diretório para imagens extraídas se não existir
           await fs.promises.mkdir(`./uploads/extracted_images`, { recursive: true });
           
+          // Verificar se o arquivo existe fisicamente
+          if (!fs.existsSync(processingFilePath)) {
+            console.error(`Erro: Arquivo não encontrado em ${processingFilePath}`);
+            throw new Error(`Arquivo não encontrado em ${processingFilePath}`);
+          }
+          
+          console.log(`Verificação de arquivo: ${processingFilePath} existe e será processado`);
+          
           // Detectar automaticamente o formato do Excel baseado no conteúdo
           let isPOEFormat = false;
           let isSofaHomeFormat = false;
           
           try {
             const { detectExcelFormat } = await import('./excel-format-detector');
-            const formatInfo = await detectExcelFormat(filePath);
+            const formatInfo = await detectExcelFormat(processingFilePath);
             
             isPOEFormat = formatInfo.isPOEFormat;
             isSofaHomeFormat = formatInfo.isSofaHomeFormat;
@@ -1212,7 +1257,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             
             try {
               // Criar diretório temporário para imagens extraídas 
-              const extractedImagesDir = path.join(path.dirname(filePath), 'extracted_images', path.basename(filePath, path.extname(filePath)));
+              const extractedImagesDir = path.join(path.dirname(processingFilePath), 'extracted_images', path.basename(processingFilePath, path.extname(processingFilePath)));
               
               if (!fs.existsSync(extractedImagesDir)) {
                 fs.mkdirSync(extractedImagesDir, { recursive: true });
@@ -1221,7 +1266,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               // Extrair imagens primeiro
               console.log(`Extraindo imagens para ${extractedImagesDir}`);
               const { processExcelFile } = await import('./excel-processor-improved.js');
-              const dummyProducts = await processExcelFile(filePath, userId, firestoreCatalogId);
+              const dummyProducts = await processExcelFile(processingFilePath, userId, firestoreCatalogId);
               
               // Migrar imagens extraídas para S3 se estiver disponível
               let imageS3Map = {};
@@ -1252,14 +1297,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
               const aiAnalyzer = await import('./ai-excel-analyzer.js');
               
               // Determinar o mapeamento de colunas usando IA
-              const columnMapping = await aiAnalyzer.analyzeExcelStructure(filePath);
+              const columnMapping = await aiAnalyzer.analyzeExcelStructure(processingFilePath);
               console.log("IA DETERMINOU O SEGUINTE MAPEAMENTO:");
               console.log(JSON.stringify(columnMapping, null, 2));
               
               // Processar o Excel com o mapeamento determinado pela IA
               console.log(`Iniciando processamento com mapeamento DINÂMICO determinado pela IA!`);
               let universalProducts = await aiAnalyzer.processExcelWithAIMapping(
-                filePath, columnMapping, userId, firestoreCatalogId
+                processingFilePath, columnMapping, userId, firestoreCatalogId
               );
               
               console.log(`Produtos detectados pelo processador baseado em IA: ${universalProducts.length}`);
@@ -1270,7 +1315,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 
                 // Importar o processador universal com colunas fixas
                 const universalProcessor = await import('./universal-catalog-processor-new.js');
-                universalProducts = await universalProcessor.processExcelUniversal(filePath, userId, firestoreCatalogId);
+                universalProducts = await universalProcessor.processExcelUniversal(processingFilePath, userId, firestoreCatalogId);
                 console.log(`Produtos detectados pelo NOVO processador universal (fallback): ${universalProducts.length}`);
               }
               
@@ -1279,7 +1324,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 // Usar o associador de imagens do processador universal
                 const universalProcessor = await import('./universal-catalog-processor-new.js');
                 universalProducts = await universalProcessor.associateProductsWithImages(
-                  universalProducts, filePath, extractedImagesDir, userId, firestoreCatalogId
+                  universalProducts, processingFilePath, extractedImagesDir, userId, firestoreCatalogId
                 );
                 
                 // Adicionar camada de IA para aprimorar os dados
@@ -1362,7 +1407,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 // Importar o novo processador aprimorado para POE que corrige os erros de mapeamento
                 const poeProcessor = await import('./poe-catalog-processor-new.js');
                 
-                console.log(`Iniciando processamento especializado com o NOVO PROCESSADOR POE: ${filePath}`);
+                console.log(`Iniciando processamento especializado com o NOVO PROCESSADOR POE: ${processingFilePath}`);
                 console.log(`Usuário ID: ${userId}, Catálogo ID: ${firestoreCatalogId}`);
                 console.log(`ATENÇÃO: Usando mapeamento EXPLÍCITO das colunas conforme solicitado:`);
                 console.log(`- Nome do Produto => Coluna G (Descrição)`);
@@ -1370,7 +1415,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 console.log(`- Preço => Coluna M (Valor Total)`);
                 
                 // Criar diretório temporário para imagens extraídas
-                const extractedImagesDir = path.join(path.dirname(filePath), 'extracted_images', path.basename(filePath, path.extname(filePath)));
+                const extractedImagesDir = path.join(path.dirname(processingFilePath), 'extracted_images', path.basename(processingFilePath, path.extname(processingFilePath)));
                 
                 if (!fs.existsSync(extractedImagesDir)) {
                   fs.mkdirSync(extractedImagesDir, { recursive: true });
@@ -1379,15 +1424,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 // Extrair imagens primeiro
                 console.log(`Extraindo imagens para ${extractedImagesDir}`);
                 const { processExcelFile } = await import('./excel-processor-improved.js');
-                const dummyProducts = await processExcelFile(filePath, userId, firestoreCatalogId);
+                const dummyProducts = await processExcelFile(processingFilePath, userId, firestoreCatalogId);
                 
                 // Processar o Excel com o processador especializado para POE
-                let poeProducts = await poeProcessor.processPOECatalog(filePath, userId, firestoreCatalogId);
+                let poeProducts = await poeProcessor.processPOECatalog(processingFilePath, userId, firestoreCatalogId);
                 
                 // Associar imagens aos produtos POE
                 if (poeProducts.length > 0) {
                   poeProducts = await poeProcessor.associatePOEProductsWithImages(
-                    poeProducts, filePath, extractedImagesDir, userId, firestoreCatalogId
+                    poeProducts, processingFilePath, extractedImagesDir, userId, firestoreCatalogId
                   );
                   
                   // Adicionar camada de IA para aprimorar os dados POE
@@ -1443,12 +1488,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
               const { processExcelWithFixedColumns } = await import('./fixed-excel-processor');
               
               // Usar o processador com colunas fixas para extrair os dados do Excel
-              console.log(`Iniciando processamento do arquivo Excel com colunas fixas: ${filePath}`);
+              console.log(`Iniciando processamento do arquivo Excel com colunas fixas: ${processingFilePath}`);
               console.log(`Usuário ID: ${userId}, Catálogo ID: ${firestoreCatalogId}`);
               
               // Processar o Excel com o formato de colunas fixas
               try {
-                productsData = await processExcelWithFixedColumns(filePath, userId, firestoreCatalogId);
+                productsData = await processExcelWithFixedColumns(processingFilePath, userId, firestoreCatalogId);
                 
                 // Adicionar camada de IA para aprimorar os dados do processador de colunas fixas
                 if (productsData.length > 0) {
@@ -1497,7 +1542,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             try {
               // Primeiro tentar com o processador melhorado
               const { processExcelFile } = await import('./excel-processor-improved.js');
-              productsData = await processExcelFile(filePath, userId, firestoreCatalogId);
+              productsData = await processExcelFile(processingFilePath, userId, firestoreCatalogId);
               
               // Adicionar camada de IA para aprimorar os produtos do fallback
               if (productsData.length > 0) {
@@ -1525,7 +1570,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               // Fallback para o método simples ESM
               console.log("Fallback para método ESM de processamento Excel...");
               const { processExcelFile } = await import('./excel-processor-simplified-esm.js');
-              productsData = await processExcelFile(filePath, userId, firestoreCatalogId);
+              productsData = await processExcelFile(processingFilePath, userId, firestoreCatalogId);
               extractionInfo = `Extraídos ${productsData.length} produtos do arquivo Excel (método simplificado).`;
             }
             
