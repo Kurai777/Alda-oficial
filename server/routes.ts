@@ -53,7 +53,7 @@ declare global {
 }
 
 // Verificar se devemos usar S3 ou armazenamento local
-let useS3Storage = false;
+let useS3Storage = true; // Forçando uso do S3 para todos os ambientes
 
 // Configuração do multer para armazenamento local (fallback)
 const localStorage = multer.diskStorage({
@@ -112,27 +112,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Caso tudo dê certo com a configuração
         console.log('Upload de arquivos configurado para usar Amazon S3');
       } catch (multerError) {
-        console.error('Erro ao configurar multer com S3:', multerError);
-        // Fallback para armazenamento local
-        upload = multer({ storage: localStorage });
-        console.log('⚠️ Voltando para armazenamento local devido a erro na configuração do Multer-S3');
-        useS3Storage = false;
+        console.error('ERRO CRÍTICO: Falha ao configurar Multer com S3:', multerError);
+        throw new Error(`Configuração do Multer-S3 obrigatória para o funcionamento da aplicação`);
       }
     } else {
-      console.log(`⚠️ Usando armazenamento local: ${s3Config.message}`);
+      console.error('ERRO CRÍTICO: Não foi possível conectar ao S3: ${s3Config.message}');
+      throw new Error(`Configuração do S3 obrigatória para o funcionamento da aplicação`);
     }
   } catch (error) {
-    console.error('Erro ao verificar configuração do S3:', error);
-    console.log('⚠️ Usando armazenamento local devido a erro na configuração do S3');
+    console.error('ERRO CRÍTICO: Não foi possível conectar ao S3:', error);
+    throw new Error(`Configuração do S3 obrigatória para o funcionamento da aplicação`);
   }
   
   // Adicionar rotas de imagem S3
   try {
     const { addS3ImageRoutes } = await import('./s3-image-routes');
     await addS3ImageRoutes(app);
-    console.log('Rotas de imagem S3 adicionadas');
+    console.log('Rotas de imagem S3 adicionadas com sucesso');
   } catch (error) {
-    console.error('Erro ao adicionar rotas de imagem S3:', error);
+    console.error('ERRO CRÍTICO: Não foi possível adicionar rotas de imagem S3:', error);
+    throw new Error(`Configuração das rotas de imagem S3 é obrigatória para o funcionamento da aplicação`);
   }
 
   // Rota de healthcheck
