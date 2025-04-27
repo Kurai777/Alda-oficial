@@ -1052,21 +1052,44 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Extrair informações do arquivo
       const file = req.file;
-      const filePath = file.path;
+      let filePath: string;
+      let s3Key: string | null = null;
       const fileName = file.originalname;
       const fileType = fileName.split('.').pop()?.toLowerCase() || '';
       
-      console.log(`Arquivo recebido: ${fileName} (${fileType}), salvo em: ${filePath}`);
-      
       // Verificar quem está fazendo o upload (obter o ID do usuário)
-      const userId = req.params.userId || req.query.userId || req.body.userId || req.session.userId || 1;
+      const userId = req.params.userId || req.query.userId || req.body.userId || req.session?.userId || 1;
+      console.log(`Upload realizado pelo usuário: ${userId}`);
+      
+      // Verificar se estamos usando S3 ou armazenamento local
+      if (useS3Storage && 's3' in file) {
+        // Upload via S3
+        s3Key = (file as any).key || (file as any).s3Key;
+        filePath = s3Key; // Usar o caminho S3 como filePath
+        console.log(`Arquivo recebido via S3: ${fileName} (${fileType}), S3 Key: ${s3Key}`);
+      } else {
+        // Upload local tradicional
+        filePath = file.path;
+        console.log(`Arquivo recebido localmente: ${fileName} (${fileType}), salvo em: ${filePath}`);
+        
+        // Se o S3 estiver configurado, fazer upload do arquivo para S3 (migração)
+        if (useS3Storage && !s3Key) {
+          try {
+            console.log("Migrando arquivo para S3...");
+            s3Key = await uploadCatalogFileToS3(filePath, userId, 'temp');
+            console.log(`Arquivo migrado para S3 com sucesso. S3 Key: ${s3Key}`);
+          } catch (s3Error) {
+            console.error("Erro ao migrar arquivo para S3, continuando com armazenamento local:", s3Error);
+          }
+        }
+      }
       console.log(`Upload realizado pelo usuário: ${userId}`);
       
       // Criar um novo catálogo no banco de dados
       const catalog = await storage.createCatalog({
         userId: typeof userId === 'string' ? parseInt(userId) : userId,
         fileName: fileName,
-        fileUrl: filePath,
+        fileUrl: s3Key || filePath, // Usar S3 Key se disponível, caso contrário caminho local
         processedStatus: "processing"
       });
       

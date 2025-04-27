@@ -15,9 +15,48 @@ import mime from 'mime-types';
 import fs from 'fs';
 import { Readable } from 'stream';
 
+// Mapeamento de regiões comuns (caso o usuário tenha digitado um nome amigável)
+const regionMap = {
+  'eua-leste-1': 'us-east-1',
+  'eua-leste-2': 'us-east-2',
+  'eua-oeste-1': 'us-west-1',
+  'eua-oeste-2': 'us-west-2',
+  'brasil': 'sa-east-1',
+  'sao-paulo': 'sa-east-1',
+  'europa': 'eu-west-1',
+  'london': 'eu-west-2'
+};
+
+// Obter região normalizada
+function getNormalizedRegion() {
+  const configuredRegion = process.env.AWS_REGION;
+  
+  if (!configuredRegion) {
+    console.error('AWS_REGION não está definida');
+    return 'us-east-1'; // Região padrão
+  }
+  
+  // Limpar a região (remover espaços e converter para minúsculas)
+  const cleanRegion = configuredRegion.trim().toLowerCase();
+  
+  // Verificar se é um nome amigável e converter
+  if (regionMap[cleanRegion]) {
+    return regionMap[cleanRegion];
+  }
+  
+  // Verificar se é um código válido de região da AWS (usando um padrão básico)
+  const validRegionPattern = /^[a-z]{2}-[a-z]+-\d+$/;
+  if (validRegionPattern.test(cleanRegion)) {
+    return cleanRegion;
+  }
+  
+  console.warn(`Região AWS '${configuredRegion}' não reconhecida, usando us-east-1 como padrão`);
+  return 'us-east-1'; // Região padrão
+}
+
 // Inicializar o cliente S3
 const s3Client = new S3Client({
-  region: process.env.AWS_REGION,
+  region: getNormalizedRegion(),
   credentials: {
     accessKeyId: process.env.AWS_ACCESS_KEY_ID,
     secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
