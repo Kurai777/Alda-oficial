@@ -124,15 +124,18 @@ export function getS3UploadMiddleware(category) {
       acl: 'private', // Acesso privado por padrão
       contentType: multerS3.AUTO_CONTENT_TYPE,
       metadata: function (req, file, cb) {
-        cb(null, {
-          userId: req.body.userId || req.session?.userId || '0',
-          category: category
-        });
+        // Corrigindo problema com os headers sendo arrays ao invés de strings
+        const metadata = {
+          userId: String(req.body.userId || req.session?.userId || '0'),
+          category: String(category || 'uncategorized')
+        };
+        cb(null, metadata);
       },
       key: function (req, file, cb) {
         const userId = req.body.userId || req.session?.userId || '0';
         const subId = req.body.subId || req.body.catalogId || req.body.quoteId || '';
         const s3Key = generateS3Key(userId, category, subId, file.originalname);
+        console.log(`Gerando chave S3: ${s3Key} para arquivo ${file.originalname}`);
         cb(null, s3Key);
       }
     }),
@@ -140,15 +143,23 @@ export function getS3UploadMiddleware(category) {
       fileSize: 100 * 1024 * 1024, // 100MB limite de tamanho
     },
     fileFilter: function (req, file, cb) {
-      // Verificar se o tipo de arquivo é suportado
-      const mime = file.mimetype;
-      const isSupported = Object.keys(SUPPORTED_FILE_TYPES).includes(mime) ||
-                           Object.values(SUPPORTED_FILE_TYPES).flat().includes(path.extname(file.originalname));
-      
-      if (isSupported) {
-        cb(null, true);
-      } else {
-        cb(new Error(`Tipo de arquivo não suportado: ${mime}`), false);
+      try {
+        // Verificar se o tipo de arquivo é suportado
+        const mimeType = file.mimetype;
+        const fileExtension = path.extname(file.originalname).toLowerCase();
+        
+        const isSupported = Object.keys(SUPPORTED_FILE_TYPES).includes(mimeType) ||
+                           Object.values(SUPPORTED_FILE_TYPES).flat().includes(fileExtension);
+        
+        if (isSupported) {
+          cb(null, true);
+        } else {
+          console.warn(`Tipo de arquivo não suportado: ${mimeType} (${fileExtension})`);
+          cb(new Error(`Tipo de arquivo não suportado: ${mimeType}`), false);
+        }
+      } catch (error) {
+        console.error("Erro ao validar arquivo:", error);
+        cb(error, false);
       }
     }
   });
@@ -169,21 +180,39 @@ export async function uploadBufferToS3(buffer, filename, userId, category, subId
     const s3Key = generateS3Key(userId, category, subId, filename);
     const contentType = mime.lookup(filename) || 'application/octet-stream';
     
-    const command = new PutObjectCommand({
-      Bucket: S3_BUCKET,
-      Key: s3Key,
+    // Sanitização de valores para evitar problemas de tipo
+    const params = {
+      Bucket: String(S3_BUCKET),
+      Key: String(s3Key),
       Body: buffer,
-      ContentType: contentType,
-      ACL: 'private'
-    });
+      ContentType: String(contentType)
+    };
     
+    // Remoção da propriedade ACL que pode causar problemas
+    // ACL: 'private' é agora o padrão no S3
+    
+    const command = new PutObjectCommand(params);
+    
+    console.log(`Enviando arquivo para S3: ${s3Key} (${formatBytes(buffer.length)})`);
     await s3Client.send(command);
+    console.log(`Upload concluído para: ${s3Key}`);
     
     return s3Key;
   } catch (error) {
-    console.error('Erro ao fazer upload para S3:', error);
+    console.error('Erro ao fazer upload para S3:', error, error.stack);
     throw error;
   }
+}
+
+// Função auxiliar para formatar tamanho de arquivo
+function formatBytes(bytes, decimals = 2) {
+  if (!bytes) return '0 Bytes';
+  
+  const k = 1024;
+  const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  
+  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(decimals))} ${sizes[i]}`;
 }
 
 /**
