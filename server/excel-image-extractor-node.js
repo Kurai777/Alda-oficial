@@ -3,6 +3,7 @@ import path from 'path';
 import StreamZip from 'node-stream-zip'; // Biblioteca para ler arquivos ZIP
 import { XMLParser } from 'fast-xml-parser'; // Para parsear XML interno do Excel
 import { uploadBufferToS3 } from './s3-service.js';
+import mime from 'mime-types'; // Usar import ES6
 
 /**
  * Mapeia IDs de relacionamento para caminhos de imagem.
@@ -38,46 +39,95 @@ async function getDrawingRelationships(zip) {
 }
 
 /**
- * Extrai informações de ancoragem das imagens do arquivo de desenho.
- * @param {StreamZip} zip Arquivo Zip aberto do Excel.
- * @returns {Promise<Map<string, number>>} Mapa de rId para anchorRow.
+ * Encontra o caminho do arquivo de desenho associado a uma planilha.
  */
-async function getImageAnchors(zip) {
-  const drawingPath = 'xl/drawings/drawing1.xml'; // Caminho comum
+async function findDrawingFileForSheet(zip, sheetXmlPath) {
+    const sheetRelsPath = `xl/worksheets/_rels/${path.basename(sheetXmlPath)}.rels`;
+    console.log(`Procurando relacionamentos da planilha em: ${sheetRelsPath}`);
+    try {
+        if (await zip.entry(sheetRelsPath)) {
+            const relsContent = await zip.entryData(sheetRelsPath);
+            const parser = new XMLParser({ ignoreAttributes: false });
+            const relsData = parser.parse(relsContent);
+            
+            if (relsData.Relationships && relsData.Relationships.Relationship) {
+                const relArray = Array.isArray(relsData.Relationships.Relationship) 
+                                   ? relsData.Relationships.Relationship 
+                                   : [relsData.Relationships.Relationship];
+                                   
+                const drawingRel = relArray.find(rel => rel['@_Type']?.endsWith('/drawing'));
+                if (drawingRel && drawingRel['@_Target']) {
+                    // O Target é relativo a xl/worksheets/, precisamos do caminho completo
+                    const drawingPathRelative = drawingRel['@_Target'].startsWith('..') 
+                        ? drawingRel['@_Target'].substring(3) // Remove ../
+                        : `drawings/${drawingRel['@_Target']}`;
+                    const fullDrawingPath = `xl/${drawingPathRelative}`;
+                    console.log(`Arquivo de desenho encontrado para ${sheetXmlPath}: ${fullDrawingPath}`);
+                    return fullDrawingPath;
+                }
+            }
+        }
+    } catch(error) {
+        console.error(`Erro ao ler relacionamentos de ${sheetXmlPath}:`, error);
+    }
+    console.log(`Nenhum arquivo de desenho encontrado para ${sheetXmlPath}. Usando padrão drawing1.xml.`);
+    return 'xl/drawings/drawing1.xml'; // Fallback para o padrão
+}
+
+/**
+ * Extrai informações de ancoragem das imagens (agora usa o drawingPath correto)
+ */
+async function getImageAnchors(zip, drawingPath) { // Recebe o caminho do desenho
   const anchors = new Map();
+  console.log(`Tentando ler âncoras de: ${drawingPath}`);
   try {
     if (await zip.entry(drawingPath)) {
       const drawingContent = await zip.entryData(drawingPath);
       const parser = new XMLParser({ 
         ignoreAttributes: false,
-        isArray: (tagName, jPath) => jPath.endsWith('xdr:twoCellAnchor') || jPath.endsWith('xdr:pic') // Garante que sejam arrays
+        // Garantir que ambos os tipos de âncora e pic sejam arrays
+        isArray: (tagName, jPath) => jPath.endsWith('xdr:twoCellAnchor') || 
+                                     jPath.endsWith('xdr:oneCellAnchor') || 
+                                     jPath.endsWith('xdr:pic')
       });
       const drawingData = parser.parse(drawingContent);
 
-      // Navegar pela estrutura XML complexa para encontrar a âncora da imagem
-      const anchorsData = drawingData['xdr:wsDr']?.['xdr:twoCellAnchor'] || [];
-      
-      for (const anchor of anchorsData) {
-        const pic = anchor['xdr:pic'];
+      const processAnchor = (anchor) => {
+        // Tenta encontrar 'xdr:pic' diretamente ou dentro de 'xdr:graphicFrame'
+        const picArray = anchor['xdr:pic'] || 
+                         anchor['xdr:graphicFrame']?.['xdr:nvGraphicFramePr']?.['xdr:cNvPr']?.['@_name']?.includes('Picture') ? 
+                         [anchor['xdr:graphicFrame']?.['xdr:pic']] : // Simular array se encontrado em graphicFrame
+                         []; // Caso não seja nem um nem outro
+                         
+        const pic = picArray && picArray.length > 0 ? picArray[0] : null;
+
         if (pic) {
           const rId = pic['xdr:blipFill']?.['a:blip']?.['@_r:embed'];
-          const fromRow = anchor['xdr:from']?.['xdr:row']; // Linha inicial (0-based)
-          const toRow = anchor['xdr:to']?.['xdr:row'];     // Linha final (0-based)
+          const fromRow = anchor['xdr:from']?.['xdr:row']; 
+          const toRow = anchor['xdr:to']?.['xdr:row']; // Pode não existir em oneCellAnchor
           
-          // Usar a linha final como referência de âncora (convertida para 1-based)
+          // Prioriza toRow, depois fromRow. Adiciona +1 para ser 1-based.
           const anchorRow = (typeof toRow === 'number') ? toRow + 1 : 
                             (typeof fromRow === 'number' ? fromRow + 1 : null);
                             
           if (rId && anchorRow !== null) {
+            console.log(`  -> Encontrada âncora para rId ${rId} na linha ${anchorRow}`);
             anchors.set(rId, anchorRow);
           }
         }
-      }
+      };
+
+      // Processar ambos os tipos de âncora
+      (drawingData['xdr:wsDr']?.['xdr:twoCellAnchor'] || []).forEach(processAnchor);
+      (drawingData['xdr:wsDr']?.['xdr:oneCellAnchor'] || []).forEach(processAnchor);
+
+    } else {
+      console.warn(`Arquivo de desenho ${drawingPath} não encontrado no ZIP.`);
     }
   } catch (error) {
-    console.error("Erro ao ler âncoras de desenho:", error);
+    console.error(`Erro ao ler âncoras de ${drawingPath}:`, error);
   }
-  console.log(`Âncoras de imagem encontradas: ${anchors.size}`);
+  console.log(`Âncoras de imagem encontradas em ${drawingPath}: ${anchors.size}`);
   return anchors;
 }
 
@@ -96,8 +146,16 @@ export async function extractImagesFromExcelZip(
 
   try {
     zip = new StreamZip.async({ file: filePath });
-    const relationships = await getDrawingRelationships(zip);
-    const anchors = await getImageAnchors(zip);
+
+    // *** DESCOBRIR O ARQUIVO DE DESENHO CORRETO ***
+    // Assumindo que processamos a primeira planilha (sheet1.xml)
+    // Uma implementação mais completa poderia iterar por todas as planilhas
+    const sheetXmlPath = 'xl/worksheets/sheet1.xml'; // Caminho comum para a primeira planilha
+    const drawingPath = await findDrawingFileForSheet(zip, sheetXmlPath);
+
+    // Ler relacionamentos e âncoras USANDO o drawingPath correto
+    const relationships = await getDrawingRelationships(zip); // Rels do desenho ainda são fixos?
+    const anchors = await getImageAnchors(zip, drawingPath); // Passa o caminho correto
     const entries = await zip.entries();
     const imageEntries = Object.values(entries).filter(entry => 
         entry.name.startsWith('xl/media/image') && !entry.isDirectory
@@ -137,7 +195,7 @@ export async function extractImagesFromExcelZip(
 
       try {
         const imageBuffer = await zip.entryData(entry.name);
-        const mimeType = require('mime-types').lookup(entry.name) || 'image/png';
+        const mimeType = mime.lookup(entry.name) || 'image/png';
         const originalFileName = path.basename(entry.name);
         const s3Key = `users/${userId}/products/${catalogId}/${Date.now()}-${originalFileName}`;
         const imageUrl = await uploadBufferToS3(imageBuffer, s3Key, mimeType);

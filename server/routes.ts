@@ -26,7 +26,7 @@ import { processExcelWithAI } from './ai-excel-processor.js';
 import { getAuth, signInWithEmailAndPassword } from 'firebase/auth';
 import firebaseAppClient from '../client/src/lib/firebase';
 import { fixProductImages } from './excel-fixed-image-mapper';
-import { extractImagesFromExcelZip } from './excel-image-extractor-node.js';
+import { extractAndUploadExcelImages } from './excel-image-extractor';
 import { Catalog as SharedCatalog } from "@shared/schema";
 
 type MoodboardCreateInput = {
@@ -1183,24 +1183,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const { createCatalogInFirestore } = await import('./firestore-service');
           let productsData: any[] = [];
           let extractionInfo = "";
-          let extractedImageData: {imageUrl: string, anchorRow: number}[] = [];
+          let imageMap = new Map<string, string>(); 
 
           try {
             // ======= PROCESSAMENTO BASEADO NO TIPO DE ARQUIVO =======
             if (fileType === 'xlsx' || fileType === 'xls') {
-              console.log(`---> Iniciando extração de imagens (Node.js ZIP) para: ${processingFilePath}`);
+              
+              // ** ETAPA 1: Chamar o Extrator de Imagens baseado em PYTHON **
+              console.log(`---> Iniciando EXTRAÇÃO DE IMAGENS (Python) para: ${processingFilePath}`);
               try {
-                extractedImageData = await extractImagesFromExcelZip(processingFilePath, userId, catalogId);
-                console.log(`---> Extração Node.js concluída. ${extractedImageData.length} imagens com posição encontradas.`);
+                // Chamar a função correta que usa Python
+                imageMap = await extractAndUploadExcelImages(processingFilePath, userId, catalogId);
+                console.log(`---> Extração Python concluída. ${imageMap.size} imagens mapeadas (código -> url).`);
               } catch (imageError) {
-                console.error("Erro durante extração de imagens Node.js (continuando sem imagens):", imageError);
+                console.error("Erro durante extração/upload de imagens (Python) (continuando sem imagens):", imageError);
               }
 
-              // ** ETAPA 2: Chamar IA para Extrair Dados Textuais (com excelRowNumber!) **
+              // ** ETAPA 2: Chamar IA para Extrair Dados Textuais **
               console.log(`---> Chamando processExcelWithAI para dados textuais: ${processingFilePath}`);
               productsData = await processExcelWithAI(processingFilePath); 
               console.log(`<<< Retorno de processExcelWithAI: ${productsData.length} produtos.`);
-              extractionInfo = `IA extraiu ${productsData.length} produtos. ${extractedImageData.length} imagens foram processadas.`;
+              extractionInfo = `IA extraiu ${productsData.length} produtos. Extrator de imagens mapeou ${imageMap.size} imagens.`; // Ajustar log
               
             } else if (fileType === 'pdf') {
               console.log("---> Chamando processamento de PDF...");
@@ -1221,44 +1224,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
             }
 
             // ======= FIM DO PROCESSAMENTO =======
-            console.log(`Processamento concluído. Produtos: ${productsData.length}, Imagens Extraídas: ${extractedImageData.length}`);
+            console.log(`Processamento concluído. Produtos: ${productsData.length}, Imagens Mapeadas: ${imageMap.size}`);
 
             // ======= ETAPA DE MAPEAMENTO IMAGEM <-> PRODUTO =======
-            if (productsData.length > 0 && extractedImageData.length > 0) {
-                console.log("---> Iniciando mapeamento de imagens para produtos...");
+            // Não precisamos mais mapear por linha, usamos o imageMap direto
+            if (productsData.length > 0 && imageMap.size > 0) {
+                console.log("---> Associando imagens aos produtos via Mapa[código]...");
                 let mappedCount = 0;
                 for (const product of productsData) {
-                    if (!product.excelRowNumber) continue; // Pular se IA não retornou a linha
-                    
-                    let bestImageMatch: {imageUrl: string, distance: number} | null = null;
-                    
-                    // Encontrar a imagem com a linha mais próxima
-                    for (const imgData of extractedImageData) {
-                        const distance = Math.abs(imgData.anchorRow - product.excelRowNumber);
-                        
-                        // Definir uma tolerância máxima (ex: 2 linhas de diferença)
-                        const MAX_ROW_DISTANCE = 2; 
-                        
-                        if (distance <= MAX_ROW_DISTANCE) {
-                            if (!bestImageMatch || distance < bestImageMatch.distance) {
-                                bestImageMatch = { imageUrl: imgData.imageUrl, distance: distance };
-                            }
-                        }
-                    }
-                    
-                    // Se encontrou uma imagem próxima, associar
-                    if (bestImageMatch) {
-                        product.imageUrl = bestImageMatch.imageUrl;
+                    const imageUrl = imageMap.get(product.code); // Tenta pegar a URL usando o código do produto
+                    if (imageUrl) {
+                        product.imageUrl = imageUrl;
                         mappedCount++;
-                        console.log(`    - Imagem ${bestImageMatch.imageUrl.split('/').pop()} mapeada para Produto ${product.code} (Linha Excel: ${product.excelRowNumber}, Linha Img: ${bestImageMatch.distance === 0 ? product.excelRowNumber : 'próxima'})`);
-                    } else {
-                         console.log(`    - Nenhuma imagem encontrada próxima à linha ${product.excelRowNumber} para Produto ${product.code}`);
+                        console.log(`    - Imagem ${imageUrl.split('/').pop()} mapeada para Produto ${product.code}`);
                     }
                 }
-                console.log(`---> Mapeamento concluído. ${mappedCount} imagens associadas a produtos.`);
+                console.log(`---> Mapeamento concluído. ${mappedCount} imagens associadas.`);
             }
 
-            // ======= SALVAR PRODUTOS (agora com imageUrl preenchido) =======
+            // ======= SALVAR PRODUTOS =======
             if (!Array.isArray(productsData)) productsData = [];
 
             // Salvar no Firestore (já pega imageUrl do productData)
