@@ -22,6 +22,7 @@ export interface IStorage {
   // User methods
   getUser(id: number): Promise<User | undefined>;
   getUserByEmail(email: string): Promise<User | undefined>;
+  getUserByFirebaseId(firebaseId: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
   updateUser(id: number, userData: Partial<User>): Promise<User | undefined>;
 
@@ -204,9 +205,24 @@ export class MemStorage implements IStorage {
     );
   }
 
+  async getUserByFirebaseId(firebaseId: string): Promise<User | undefined> {
+    return Array.from(this.users.values()).find(
+      (user) => user.firebaseId === firebaseId
+    );
+  }
+
   async createUser(insertUser: InsertUser): Promise<User> {
     const id = this.userId++;
-    const user: User = { ...insertUser, id, createdAt: new Date() };
+    const user: User = { 
+      id, 
+      email: insertUser.email,
+      password: insertUser.password,
+      name: insertUser.name || null,
+      companyName: insertUser.companyName || "Empresa Padrão",
+      firebaseId: insertUser.firebaseId || null,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
     this.users.set(id, user);
     return user;
   }
@@ -215,7 +231,11 @@ export class MemStorage implements IStorage {
     const existingUser = this.users.get(id);
     if (!existingUser) return undefined;
     
-    const updatedUser = { ...existingUser, ...userData };
+    const updatedUser: User = { 
+      ...existingUser, 
+      ...userData, 
+      updatedAt: new Date()
+    };
     this.users.set(id, updatedUser);
     return updatedUser;
   }
@@ -514,7 +534,7 @@ export class MemStorage implements IStorage {
     return catalog;
   }
 
-  async updateCatalogStatus(id: number, status: string, firestoreCatalogId?: string, firebaseUserId?: string): Promise<Catalog | undefined> {
+  async updateCatalogStatus(id: number, status: string, firestoreCatalogId?: string): Promise<Catalog | undefined> {
     const existingCatalog = this.catalogs.get(id);
     if (!existingCatalog) return undefined;
 
@@ -523,8 +543,6 @@ export class MemStorage implements IStorage {
       processedStatus: status,
       // Atualizar firestoreCatalogId se fornecido
       ...(firestoreCatalogId ? { firestoreCatalogId } : {}),
-      // Atualizar firebaseUserId se fornecido
-      ...(firebaseUserId ? { firebaseUserId } : { firebaseUserId: existingCatalog.firebaseUserId || null })
     };
     
     this.catalogs.set(id, updatedCatalog);
@@ -562,11 +580,11 @@ export class MemStorage implements IStorage {
     return quote;
   }
 
-  async updateQuote(id: number, quoteUpdate: Partial<InsertQuote>): Promise<Quote | undefined> {
+  async updateQuote(id: number, quote: Partial<InsertQuote>): Promise<Quote | undefined> {
     const existingQuote = this.quotes.get(id);
     if (!existingQuote) return undefined;
 
-    const updatedQuote = { ...existingQuote, ...quoteUpdate };
+    const updatedQuote = { ...existingQuote, ...quote };
     this.quotes.set(id, updatedQuote);
     return updatedQuote;
   }
@@ -593,11 +611,11 @@ export class MemStorage implements IStorage {
     return moodboard;
   }
 
-  async updateMoodboard(id: number, moodboardUpdate: Partial<InsertMoodboard>): Promise<Moodboard | undefined> {
+  async updateMoodboard(id: number, moodboard: Partial<InsertMoodboard>): Promise<Moodboard | undefined> {
     const existingMoodboard = this.moodboards.get(id);
     if (!existingMoodboard) return undefined;
 
-    const updatedMoodboard = { ...existingMoodboard, ...moodboardUpdate };
+    const updatedMoodboard = { ...existingMoodboard, ...moodboard };
     this.moodboards.set(id, updatedMoodboard);
     return updatedMoodboard;
   }
@@ -623,7 +641,7 @@ export class DatabaseStorage implements IStorage {
   // User methods
   async getUser(id: number): Promise<User | undefined> {
     try {
-      const [user] = await db.select().from(users).where(eq(users.id, id));
+      const [user] = await db.select().from(users).where(eq(users.id, id)).limit(1);
       return user;
     } catch (error) {
       console.error('Error getting user:', error);
@@ -633,7 +651,7 @@ export class DatabaseStorage implements IStorage {
   
   async getUserByEmail(email: string): Promise<User | undefined> {
     try {
-      const [user] = await db.select().from(users).where(eq(users.email, email));
+      const [user] = await db.select().from(users).where(eq(users.email, email)).limit(1);
       return user;
     } catch (error) {
       console.error('Error getting user by email:', error);
@@ -641,10 +659,23 @@ export class DatabaseStorage implements IStorage {
     }
   }
   
+  async getUserByFirebaseId(firebaseId: string): Promise<User | undefined> {
+    if (!firebaseId) return undefined;
+    const result = await db.select().from(users).where(eq(users.firebaseId, firebaseId)).limit(1);
+    return result[0];
+  }
+  
   async createUser(insertUser: InsertUser): Promise<User> {
     try {
-      const [user] = await db.insert(users).values(insertUser).returning();
-      return user;
+      const userToInsert = {
+        email: insertUser.email,
+        password: insertUser.password,
+        name: insertUser.name || null,
+        companyName: insertUser.companyName,
+        firebaseId: insertUser.firebaseId || null,
+      };
+      const result = await db.insert(users).values(userToInsert).returning();
+      return result[0];
     } catch (error) {
       console.error('Error creating user:', error);
       throw error;
@@ -653,11 +684,13 @@ export class DatabaseStorage implements IStorage {
   
   async updateUser(id: number, userData: Partial<User>): Promise<User | undefined> {
     try {
-      const [user] = await db.update(users)
-        .set(userData)
-        .where(eq(users.id, id))
-        .returning();
-      return user;
+      const updateData = {
+        ...userData,
+        updatedAt: new Date()
+      };
+      delete updateData.id;
+      const result = await db.update(users).set(updateData).where(eq(users.id, id)).returning();
+      return result[0];
     } catch (error) {
       console.error('Error updating user:', error);
       return undefined;

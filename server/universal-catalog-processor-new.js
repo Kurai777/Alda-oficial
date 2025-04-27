@@ -81,49 +81,120 @@ function extractPrice(priceStr) {
 }
 
 /**
- * Verifica se uma linha deve ser ignorada (cabeçalhos, faixas de preço, etc)
+ * Verifica se um valor parece ser um cabeçalho ou palavra-chave irrelevante.
+ * @param {*} value O valor da célula.
+ * @returns {boolean} True se parecer um cabeçalho/keyword.
+ */
+function looksLikeHeaderOrKeyword(value) {
+  if (value === null || value === undefined) return false;
+  const lowerVal = value.toString().toLowerCase().trim();
+  if (lowerVal.length === 0) return false;
+  
+  const keywords = [
+    'nome', 'produto', 'item', 'desc', 'descrição', 'descricao', 
+    'cod', 'código', 'codigo', 'ref', 'referência', 'referencia',
+    'preco', 'preço', 'valor', 'price', 'cost', 
+    'qtd', 'quant', 'quantidade', 'estoque', 'stock',
+    'cat', 'categoria', 'category', 'segmento',
+    'forn', 'fornecedor', 'fabricante', 'marca', 'supplier', 'brand',
+    'local', 'localização', 'location', 'piso', 'andar', 'depósito', 'deposito', 'outlet',
+    'material', 'cor', 'cores', 'color', 'colour', 'acabamento',
+    'dimens', 'dimensão', 'dimensões', 'dimensions', 'medida', 'tamanho', 'size',
+    'imagem', 'foto', 'image', 'picture',
+    'total', 'subtotal', 'obs', 'observação', 'observacoes', 'detalhes',
+    'linha', 'row', 'coluna', 'column', 'planilha', 'sheet',
+    'data', 'date', 'atualizado', 'criado', 'modificado',
+    'sim', 'não', 'yes', 'no', 'true', 'false', // Evitar booleanos como nome/código
+    'r$' // Evitar apenas o símbolo de moeda
+  ];
+  
+  // Verifica se é exatamente uma keyword ou um padrão comum não-produto
+  return keywords.includes(lowerVal) || 
+         /^\d+k$/i.test(lowerVal) ||        // "50k"
+         /^\d+\s*-\s*\d+k$/i.test(lowerVal) || // "20-40k"
+         /^\d+º?\s*(piso|andar)/i.test(lowerVal) || // "2 piso", "1º andar"
+         /^(depósito|outlet|showroom)$/i.test(lowerVal) || // "depósito"
+         /^[-_=]{4,}$/.test(lowerVal); // Linha separadora "----"
+}
+
+/**
+ * Verifica se uma linha deve ser ignorada (cabeçalhos, totais, vazias, etc).
  * @param {Object} row Linha do Excel 
+ * @param {Object} columnMapping Mapeamento de colunas detectado (ex: {name: 'A', code: 'F'})
  * @returns {boolean} True se a linha deve ser ignorada
  */
-function isIgnorableLine(row) {
-  // Verificar se é uma linha de cabeçalho
-  const headerKeywords = ['descrição', 'código', 'qtd', 'valor', 'local', 'fornecedor'];
+function isIgnorableLine(row, columnMapping) {
+  const nameCol = columnMapping.name;
+  const codeCol = columnMapping.code;
+  const priceCol = columnMapping.price;
+  const descCol = columnMapping.description;
+
+  const nameVal = nameCol && row[nameCol] ? row[nameCol].toString().trim() : '';
+  const codeVal = codeCol && row[codeCol] ? row[codeCol].toString().trim() : '';
+  const priceIsPresent = priceCol && row[priceCol] !== undefined && row[priceCol] !== null && row[priceCol] !== '';
+  const descVal = descCol && row[descCol] ? row[descCol].toString().trim() : '';
+
+  let reason = '';
+
+  // 1. Linha quase vazia? (Verifica se tem pelo menos 2 campos com algum texto)
+  const significantFields = Object.values(row).filter(v => v && v.toString().trim().length > 1).length;
+  if (significantFields < 2) {
+    reason = 'Poucos campos significativos';
+    console.log(`Ignorando linha (${reason}):`, JSON.stringify(row));
+    return true;
+  }
+
+  // 2. Colunas essenciais (Nome E Código) parecem cabeçalho/keyword?
+  const nameLooksBad = !nameVal || nameVal.length < 2 || looksLikeHeaderOrKeyword(nameVal);
+  // Código pode ser numérico, então a validação é mais branda, mas não pode ser keyword
+  const codeLooksBad = !codeVal || codeVal.length < 1 || looksLikeHeaderOrKeyword(codeVal); 
   
-  // Verificar por textos comuns de cabeçalho em qualquer coluna
-  for (const key in row) {
-    if (row[key]) {
-      const cellValue = row[key].toString().toLowerCase().trim();
-      if (headerKeywords.some(keyword => cellValue === keyword || cellValue.includes(keyword))) {
-        console.log(`Ignorando linha de cabeçalho: "${cellValue}"`);
-        return true;
-      }
-    }
+  if (nameLooksBad && codeLooksBad) {
+    reason = `Nome ('${nameVal}') e Código ('${codeVal}') inválidos ou ausentes`;
+    console.log(`Ignorando linha (${reason}):`, JSON.stringify(row));
+    return true;
   }
   
-  // Verificar se é uma linha de faixa de preço ou localização
-  if (row.B) {
-    const valueB = row.B.toString().toLowerCase().trim();
-    if (/^\d+k$/i.test(valueB) || 
-        /^\d+\s*-\s*\d+k$/i.test(valueB) ||
-        valueB.includes('piso') || 
-        valueB.includes('andar')) {
-      console.log(`Ignorando linha de faixa de preço/localização: "${valueB}"`);
-      return true; 
-    }
-  }
-  
-  // Verificar também na coluna H (código) se é uma localização
-  if (row.H) {
-    const valueH = row.H.toString().toLowerCase().trim();
-    if (valueH.includes('piso') || 
-        valueH.includes('andar') ||
-        /^\d+º/i.test(valueH)) {
-      console.log(`Ignorando linha com código inválido: "${valueH}"`);
+  // 3. Nome OU Código isoladamente parecem cabeçalho? (Se o outro estiver faltando)
+  if (nameLooksBad && !codeVal) {
+      reason = `Nome inválido ('${nameVal}') e Código ausente`;
+      console.log(`Ignorando linha (${reason}):`, JSON.stringify(row));
       return true;
-    }
+  }
+   if (codeLooksBad && !nameVal) {
+      reason = `Código inválido ('${codeVal}') e Nome ausente`;
+      console.log(`Ignorando linha (${reason}):`, JSON.stringify(row));
+      return true;
   }
   
-  return false;
+  // 4. Linha parece ser um total/subtotal? (Tem preço mas nome/código inválido)
+  if (priceIsPresent && nameLooksBad && codeLooksBad) {
+       reason = `Preço presente mas Nome ('${nameVal}') e Código ('${codeVal}') inválidos (provável total)`;
+       console.log(`Ignorando linha (${reason}):`, JSON.stringify(row));
+       return true;
+  }
+
+  // 5. Verificar se *todas* as colunas mapeadas contêm keywords (forte indício de cabeçalho)
+  let mappedColsAreKeywords = true;
+  let mappedColsCount = 0;
+  for(const field in columnMapping) {
+      const col = columnMapping[field];
+      if(row[col]){
+          mappedColsCount++;
+          if(!looksLikeHeaderOrKeyword(row[col])) {
+              mappedColsAreKeywords = false;
+              break;
+          }
+      }
+  }
+  if (mappedColsCount > 1 && mappedColsAreKeywords) {
+      reason = `Todas as colunas mapeadas (${Object.values(columnMapping).join(',')}) contêm keywords`;
+       console.log(`Ignorando linha (${reason}):`, JSON.stringify(row));
+       return true;
+  }
+
+  // Se passou por tudo, provavelmente é uma linha de produto válida
+  return false; 
 }
 
 /**
@@ -373,130 +444,138 @@ function detectColumnMapping(rawData) {
 }
 
 /**
- * Processa um arquivo Excel com colunas fixas para extração universal
- * @param {string} filePath Caminho do arquivo Excel
- * @param {any} userId ID do usuário
- * @param {any} catalogId ID do catálogo
- * @returns {Promise<Array>} Lista de produtos processados
+ * Processa um arquivo Excel com detecção automática de colunas
  */
 export async function processExcelUniversal(filePath, userId, catalogId) {
   try {
     console.log(`\n=== INICIANDO PROCESSAMENTO UNIVERSAL (NOVA VERSÃO) ===`);
     console.log(`Arquivo: ${filePath}`);
     
-    // Ler arquivo Excel
     const workbook = XLSX.readFile(filePath, { cellFormula: false, cellHTML: false });
     const firstSheetName = workbook.SheetNames[0];
     const sheet = workbook.Sheets[firstSheetName];
-    
-    // Converter para JSON
     const rawData = XLSX.utils.sheet_to_json(sheet, { header: 'A', raw: true });
     
-    if (!rawData || rawData.length === 0) {
-      throw new Error('Planilha vazia ou inválida');
-    }
-    
+    if (!rawData || rawData.length === 0) throw new Error('Planilha vazia ou inválida');
     console.log(`Extraídos ${rawData.length} registros da planilha`);
-    
-    // Detectar mapeamento de colunas
+
     const columnMapping = detectColumnMapping(rawData);
     console.log("\nMapeamento de colunas detectado:", columnMapping);
-    
-    // Lista para armazenar produtos processados
+
+    if (!columnMapping.name || !columnMapping.code) {
+        console.error("ERRO CRÍTICO: Não foi possível detectar colunas essenciais de Nome e Código. Verifique a planilha e a função detectColumnMapping.");
+        throw new Error("Mapeamento de colunas essenciais (Nome, Código) falhou.");
+    }
+
     const products = [];
+    let skippedProductLines = 0;
     
-    // Processar cada linha
     for (let i = 0; i < rawData.length; i++) {
       const row = rawData[i];
       const rowNum = i + 1;
       
-      // Verificar se a linha é válida
-      if (isIgnorableLine(row)) {
+      console.log(`\n--- Processando Linha Excel ${rowNum} ---`);
+      // Log limitado para não poluir muito: console.log(`Dados Brutos: ${JSON.stringify(row)}`);
+
+      // *** Passa o mapeamento para a função de ignorar ***
+      if (isIgnorableLine(row, columnMapping)) {
+        // A razão já foi logada dentro de isIgnorableLine
+        skippedProductLines++;
         continue;
       }
       
-      // ETAPA 1: NOME DO PRODUTO
+      // Extrair dados usando o mapeamento detectado
       const nameColumn = columnMapping.name;
-      if (!nameColumn || !row[nameColumn]) {
-        console.log(`Linha ${rowNum} sem nome de produto. IGNORANDO`);
-        continue;
-      }
-      
-      const productName = row[nameColumn].toString().trim();
-      if (productName.length < 3) {
-        console.log(`Linha ${rowNum} com nome muito curto: "${productName}". IGNORANDO`);
-        continue;
-      }
-      
-      console.log(`Nome do produto: "${productName}"`);
-      
-      // ETAPA 2: CÓDIGO DO PRODUTO
-      let productCode = "";
       const codeColumn = columnMapping.code;
-      if (codeColumn && row[codeColumn]) {
-        productCode = row[codeColumn].toString().trim();
-        console.log(`Código do produto: "${productCode}"`);
-      } else {
-        productCode = `PROD-${rowNum}-${Date.now()}`;
-        console.log(`Código gerado: "${productCode}"`);
-      }
-      
-      // ETAPA 3: PREÇO DO PRODUTO
-      let productPrice = 0;
       const priceColumn = columnMapping.price;
-      if (priceColumn && row[priceColumn]) {
-        productPrice = extractPrice(row[priceColumn]);
-        console.log(`Preço do produto: ${productPrice} centavos`);
-      }
-      
-      // ETAPA 4: DESCRIÇÃO
-      let description = '';
       const descColumn = columnMapping.description;
+
+      // Extração com fallback para string vazia
+      const potentialName = row[nameColumn] ? row[nameColumn].toString().trim() : '';
+      const potentialCode = row[codeColumn] ? row[codeColumn].toString().trim() : '';
+      let potentialPrice = 0;
+      if (priceColumn && row[priceColumn]) {
+          potentialPrice = extractPrice(row[priceColumn]); // extractPrice já trata erros
+      }
+      let potentialDescription = '';
       if (descColumn && row[descColumn]) {
-        description = row[descColumn].toString().trim();
-        console.log(`Descrição: "${description}"`);
-      } else {
-        description = productName;
+          potentialDescription = row[descColumn].toString().trim();
       }
-      
-      // ETAPA 5: INFERIR CATEGORIA
-      const category = inferCategory(productName, description);
-      console.log(`Categoria inferida: "${category}"`);
-      
-      // ETAPA 6: EXTRAIR MATERIAIS
-      const materials = extractMaterials(description || productName);
-      if (materials.length > 0) {
-        console.log(`Materiais detectados: ${materials.join(', ')}`);
+      // Usar nome como descrição apenas se a descrição estiver vazia
+      if (!potentialDescription) {
+          potentialDescription = potentialName; 
       }
+
+      console.log(`Dados extraídos brutos: Nome='${potentialName}', Código='${potentialCode}', Preço=${potentialPrice}, Desc='${potentialDescription.substring(0,30)}...'`);
+
+      // **Validação Final Rigorosa**
+      // Nome: não pode ser keyword, deve ter min 2 chars
+      if (!potentialName || potentialName.length < 2 || looksLikeHeaderOrKeyword(potentialName)) {
+         console.log(`Linha ${rowNum} IGNORADA PÓS-EXTRAÇÃO: Nome inválido/keyword (\'${potentialName}\').`);
+         skippedProductLines++;
+         continue;
+      }
+      // Código: não pode ser keyword (mas pode ser curto/numérico)
+      let generateCode = false;
+      if (!potentialCode || potentialCode.length < 1 || looksLikeHeaderOrKeyword(potentialCode)) {
+         console.log(`Linha ${rowNum}: Código inválido/keyword (\'${potentialCode}\'). Será gerado um código.`);
+         generateCode = true;
+      }
+      // Preço: Ignorar se for zero E descrição for igual ao nome (sem info extra)
+       if (potentialPrice === 0 && potentialDescription === potentialName) {
+           console.log(`Linha ${rowNum} IGNORADA PÓS-EXTRAÇÃO: Preço zero e sem descrição adicional.`);
+           skippedProductLines++;
+           continue;
+       }
+
+      // Se chegou aqui, é um produto!
+      console.log(`Linha ${rowNum} validada como PRODUTO.`);
       
-      // CRIAR OBJETO DO PRODUTO
+      let productCode = potentialCode;
+      if (generateCode) {
+         // Gerar código único se necessário
+         productCode = `AUTOGEN-${rowNum}-${Date.now().toString().slice(-5)}`; 
+         console.log(`Código final gerado: \"${productCode}\"`);
+      }
+
+      const category = inferCategory(potentialName, potentialDescription);
+      const materials = extractMaterials(potentialDescription || potentialName);
+      
       const product = {
         userId: userId,
         catalogId: parseInt(catalogId),
-        name: productName,
+        name: potentialName,
         code: productCode,
-        description: description,
-        price: productPrice,
+        description: potentialDescription,
+        price: potentialPrice,
         category: category,
         materials: materials,
         colors: [],
         excelRowNumber: rowNum,
-        isEdited: false
+        isEdited: false,
+        // Campos opcionais que podem vir de outras colunas (exemplo)
+        manufacturer: columnMapping.manufacturer && row[columnMapping.manufacturer] ? row[columnMapping.manufacturer].toString().trim() : '',
+        location: columnMapping.location && row[columnMapping.location] ? row[columnMapping.location].toString().trim() : '',
       };
       
-      // Adicionar produto à lista
       products.push(product);
-      console.log(`✅ Produto extraído com sucesso da linha ${rowNum}: ${product.name} (${product.code}) - R$ ${(product.price/100).toFixed(2)}\n`);
+      console.log(`✅ Produto Adicionado: ${product.name} (${product.code}) - R$ ${(product.price/100).toFixed(2)}`);
     }
     
-    console.log(`\n=== PROCESSAMENTO CONCLUÍDO ===`);
+    console.log(`\n=== PROCESSAMENTO EXCEL CONCLUÍDO ===`);
     console.log(`Total de produtos extraídos: ${products.length}`);
+    console.log(`Total de linhas puladas (não produto): ${skippedProductLines}`);
     
+    if (products.length === 0 && rawData.length > 0) {
+        console.warn("ATENÇÃO: NENHUM produto válido foi extraído da planilha. Verifique o arquivo ou a lógica de detecção/validação.");
+    }
+
     return products;
     
   } catch (error) {
-    console.error('Erro ao processar arquivo Excel:', error);
-    throw error;
+    console.error('Erro CRÍTICO ao processar arquivo Excel:', error);
+    // Lançar o erro para que a rota de upload possa tratá-lo
+    throw new Error(`Falha no processamento do Excel: ${error.message}`);
   }
 }
 

@@ -6,14 +6,19 @@ export const users = pgTable("users", {
   id: serial("id").primaryKey(),
   email: text("email").notNull().unique(),
   password: text("password").notNull(),
+  name: text("name"),
   companyName: text("company_name").notNull(),
+  firebaseId: text("firebase_id").unique(),
   createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
 });
 
 export const insertUserSchema = createInsertSchema(users).pick({
   email: true,
   password: true,
+  name: true,
   companyName: true,
+  firebaseId: true,
 });
 
 export const products = pgTable("products", {
