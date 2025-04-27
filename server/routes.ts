@@ -108,6 +108,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     console.error('Erro ao verificar configuração do S3:', error);
     console.log('⚠️ Usando armazenamento local devido a erro na configuração do S3');
   }
+  
+  // Adicionar rotas de imagem S3
+  try {
+    const { addS3ImageRoutes } = await import('./s3-image-routes');
+    await addS3ImageRoutes(app);
+    console.log('Rotas de imagem S3 adicionadas');
+  } catch (error) {
+    console.error('Erro ao adicionar rotas de imagem S3:', error);
+  }
 
   // Rota de healthcheck
   app.get("/api/healthcheck", (_req: Request, res: Response) => {
