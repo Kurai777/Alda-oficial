@@ -36,7 +36,7 @@ import openpyxl, os, sys, json, base64
 
 def extract_images(excel_file_path):
     wb = openpyxl.load_workbook(excel_file_path)
-    result = {"images_base64": [], "error": None} # Retorna lista de strings base64
+    result = {"images_base64": [], "error": None}
     try:
         image_counter = 0
         for sheet_name in wb.sheetnames:
@@ -47,13 +47,17 @@ def extract_images(excel_file_path):
                 image_counter += 1
                 image_data = None
                 try:
+                    # Tentar acessar dados da imagem (callable ou atributo)
                     if hasattr(image_obj, '_data') and callable(image_obj._data):
                         data_result = image_obj._data()
                         if isinstance(data_result, bytes): image_data = data_result
                     elif hasattr(image_obj, '_data') and isinstance(image_obj._data, bytes):
                          image_data = image_obj._data
-                    if not image_data: continue
+                    if not image_data: 
+                         print(f"Img {image_counter}: Dados binários inválidos/ausentes.", file=sys.stderr)
+                         continue
                     
+                    # Converter para base64
                     encoded_image = base64.b64encode(image_data).decode('utf-8')
                     result["images_base64"].append(encoded_image)
                     print(f"Img {image_counter}: Extraído base64 ({len(encoded_image)} chars)", file=sys.stderr)
@@ -81,112 +85,133 @@ if __name__ == "__main__":
 /**
  * Executa o script Python SIMPLIFICADO.
  */
-async function runSimplifiedPythonExtractor(excelFilePath: string): Promise<any> {
+async function runPythonColumnExtractor(excelFilePath: string, imageColumn: string): Promise<any> {
    await ensureDirectories();
-   const pythonScriptPath = await createSimplifiedPythonScript(); 
-   console.log(`Executando script Python SIMPLIFICADO: ${pythonScriptPath} para ${excelFilePath}`);
+   const pythonScriptPath = path.join(PYTHON_SCRIPTS_DIR, 'extract_images_by_column.py');
+   if (!imageColumn) return { images: [], error: "Coluna de imagem não fornecida para o extrator Python" };
+
+   console.log(`Executando script Python POR COLUNA: ${pythonScriptPath} para ${excelFilePath}`);
    return new Promise((resolve) => {
-    // Não precisamos mais passar TEMP_IMAGES_DIR
-    const pythonProcess = spawn('python3', [pythonScriptPath, excelFilePath], { stdio: ['pipe', 'pipe', 'pipe'] });
+    const pythonProcess = spawn('python3', [pythonScriptPath, excelFilePath, imageColumn], { stdio: ['pipe', 'pipe', 'pipe'] });
     let dataString = '';
     let errorString = '';
     pythonProcess.stdout.on('data', (data) => dataString += data.toString());
     pythonProcess.stderr.on('data', (data) => {
       errorString += data.toString();
-      console.error(`[PYTHON SIMPLIFICADO STDERR]: ${data.toString().trim()}`); 
+      console.error(`[PYTHON COLUMN EXTRACTOR STDERR]: ${data.toString().trim()}`); 
     });
     pythonProcess.on('error', (spawnError) => {
-        console.error("Erro ao iniciar processo Python (simplificado):", spawnError);
-        resolve({ images_base64: [], error: `Falha ao iniciar Python: ${spawnError.message}` });
+        console.error("Erro ao iniciar processo Python (column extractor):", spawnError);
+        resolve({ images: [], error: `Falha ao iniciar Python: ${spawnError.message}` });
     });
     pythonProcess.on('close', (code) => {
-      console.log(`Script Python (simplificado) finalizado com código ${code}.`);
+      console.log(`Script Python (column extractor) finalizado com código ${code}.`);
       if (code !== 0) {
-        console.error('Script Python (simplificado) terminou com erro:', errorString);
-        resolve({ images_base64: [], error: `Python script exited with code ${code}: ${errorString}` });
+        console.error('Script Python (column extractor) terminou com erro:', errorString);
+        resolve({ images: [], error: `Python script exited with code ${code}: ${errorString}` });
         return;
       }
       if (!dataString) {
-          console.error('Script Python (simplificado) retornou stdout vazio.');
-          resolve({ images_base64: [], error: 'Python stdout vazio.' });
+          console.error('Script Python (column extractor) retornou stdout vazio.');
+          resolve({ images: [], error: 'Python stdout vazio.' });
           return;
       }
       try {
         const result = JSON.parse(dataString);
-        console.log("Saída JSON do Python (simplificado) parseada com sucesso.");
+        console.log("Saída JSON do Python (column extractor) parseada com sucesso.");
         resolve(result);
       } catch (parseError) {
-        console.error("Falha ao analisar saída JSON do script Python (simplificado):", dataString);
+        console.error("Falha ao analisar saída JSON do script Python (column extractor):", dataString);
         console.error("Erro de parse:", parseError);
         // @ts-ignore
-        resolve({ images_base64: [], error: `Falha ao analisar saída JSON: ${parseError.message}` }); 
+        resolve({ images: [], error: `Falha ao analisar saída JSON: ${parseError.message}` });
       }
     });
   });
 }
 
+// Definir e EXPORTAR um tipo para o objeto de imagem retornado
+export interface ExtractedImageInfo {
+  imageUrl: string;
+  rowNumber: number;
+  sheetName: string;
+  originalIndex: number; // Índice original da imagem no Excel
+}
+
 /**
- * Função exportada principal: Extrai imagens como base64 e faz upload sequencial para S3.
- * Retorna o número de imagens que foram enviadas com sucesso.
+ * Função exportada principal: Extrai imagens como base64, incluindo linha/planilha, 
+ * e faz upload sequencial para S3.
+ * Retorna o número de imagens que foram enviadas com sucesso e a lista de objetos ExtractedImageInfo.
  */
-export async function extractAndUploadImagesSequentially(
-  excelFilePath: string,
-  userId: string | number,
-  catalogId: string | number
-): Promise<number> { 
+export async function extractAndUploadImagesSequentially(excelFilePath: string, userId: number | string, catalogId: number | string, imageColumn: string | null): Promise<{ extractedImages: ExtractedImageInfo[], successCount: number, errorCount: number }> {
   let uploadSuccessCount = 0;
+  const extractedImages: ExtractedImageInfo[] = []; // Array para armazenar os objetos de imagem
+
   try {
-    console.log(`\n=== INICIANDO EXTRAÇÃO BASE64 + UPLOAD SEQUENCIAL S3 ===`);
+    console.log(`\n=== INICIANDO EXTRAÇÃO DETALHADA + UPLOAD SEQUENCIAL S3 ===`); // Log atualizado
     console.log(`Arquivo Excel: ${excelFilePath}`);
 
-    const extractionResult = await runSimplifiedPythonExtractor(excelFilePath);
-
-    if (!extractionResult || extractionResult.error) {
-      console.error('Erro retornado pelo script Python (simplificado):', extractionResult?.error || 'Resultado inválido');
-      return 0;
+    if (!imageColumn) {
+      console.warn("Nenhuma coluna de imagem identificada pela IA. Pulando extração de imagens.");
+      return { extractedImages: [], successCount: 0, errorCount: 0 };
     }
 
-    const { images_base64 } = extractionResult;
-    if (!images_base64 || !Array.isArray(images_base64)) {
-        console.error('Resultado do Python não contém um array "images_base64".', extractionResult);
-        return 0;
-    }
-    
-    console.log(`Python retornou ${images_base64.length} imagens (base64).`);
+    const pythonResult = await runPythonColumnExtractor(excelFilePath, imageColumn);
 
-    if (images_base64.length === 0) {
-      console.log("Nenhuma imagem base64 extraída pelo Python.");
-      return 0;
+    if (!pythonResult || pythonResult.error) {
+      console.error('Erro retornado pelo script Python (column extractor):', pythonResult?.error || 'Resultado inválido');
+      return { extractedImages: [], successCount: 0, errorCount: 0 };
     }
 
-    for (let i = 0; i < images_base64.length; i++) {
-      const base64Data = images_base64[i];
-      const imageIndex = i + 1;
-      const genericFilename = `catalog-${catalogId}-img-${imageIndex}.png`;
+    const imagesData: { row_number: number, image_base64: string }[] = pythonResult.images || [];
+    console.log(`Python retornou ${imagesData.length} imagens da coluna ${imageColumn}.`);
+
+    if (imagesData.length === 0) {
+      console.log("Nenhuma imagem detalhada extraída pelo Python.");
+      return { extractedImages: [], successCount: 0, errorCount: 0 };
+    }
+
+    for (let i = 0; i < imagesData.length; i++) {
+      const imageData = imagesData[i];
+      const imageBase64 = imageData.image_base64;
+      const originalIndex = i;
+      const rowNumber = imageData.row_number;
+      const imageName = `image_row${rowNumber}_idx${originalIndex}.png`;
 
       try {
-        await uploadImageToS3(
-          base64Data,
-          genericFilename, 
+        const publicUrl = await uploadImageToS3(
+          imageBase64,
+          imageName,
           userId,
           catalogId
         );
+        
+        // Adiciona o objeto completo ao array de resultados
+        extractedImages.push({
+          imageUrl: publicUrl,
+          rowNumber: rowNumber,
+          sheetName: imageColumn,
+          originalIndex: originalIndex
+        }); 
+        
         uploadSuccessCount++;
-        if (uploadSuccessCount % 50 === 0 || uploadSuccessCount === images_base64.length) {
-             console.log(`Upload S3: ${uploadSuccessCount}/${images_base64.length} imagens enviadas...`);
+        if (uploadSuccessCount % 50 === 0 || uploadSuccessCount === imagesData.length) {
+          console.log(`Upload S3: ${uploadSuccessCount}/${imagesData.length} imagens enviadas...`);
         }
       } catch (uploadError) {
-        console.error(`Falha no upload S3 para imagem índice ${imageIndex}.`, uploadError);
+        console.error(`Erro no upload S3 para imagem índice ${originalIndex} (linha ${rowNumber}):`, uploadError instanceof Error ? uploadError.message : String(uploadError));
       }
     }
 
-    console.log(`Upload concluído: ${uploadSuccessCount} de ${images_base64.length} imagens enviadas para S3.`);
-    console.log(`=== FIM EXTRAÇÃO BASE64 + UPLOAD S3 ===`);
-    return uploadSuccessCount;
+    console.log(`Upload concluído: ${uploadSuccessCount} de ${imagesData.length} imagens enviadas para S3.`);
+    console.log(`=== FIM EXTRAÇÃO DETALHADA + UPLOAD S3 ===`);
+    // Retorna a contagem e a lista de objetos ExtractedImageInfo
+    return { extractedImages, successCount: uploadSuccessCount, errorCount: 0 };
 
   } catch (error) {
     console.error('Erro CRÍTICO no fluxo de extração/upload sequencial de imagens:', error);
-    return uploadSuccessCount; 
+    // Retorna contagem 0 e array vazio em caso de erro crítico
+    return { extractedImages: [], successCount: 0, errorCount: 0 };
   }
 }
 

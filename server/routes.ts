@@ -26,7 +26,7 @@ import { processExcelWithAI } from './ai-excel-processor.js';
 import { getAuth, signInWithEmailAndPassword } from 'firebase/auth';
 import firebaseAppClient from '../client/src/lib/firebase';
 import { fixProductImages } from './excel-fixed-image-mapper';
-import { extractAndUploadImagesSequentially } from './excel-image-extractor';
+import { extractAndUploadImagesSequentially, type ExtractedImageInfo } from './excel-image-extractor';
 import { Catalog as SharedCatalog } from "@shared/schema";
 
 type MoodboardCreateInput = {
@@ -272,10 +272,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         
         // Retornar dados do novo usuário criado localmente
         return res.status(200).json({
-            id: newUser.id,
-            email: newUser.email,
-            name: newUser.name,
-            firebaseId: newUser.firebaseId
+          id: newUser.id,
+          email: newUser.email,
+          name: newUser.name,
+          firebaseId: newUser.firebaseId
         });
       }
       
@@ -372,15 +372,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Fallback para autenticação por sessão
       if (req.session?.userId) {
-          const user = await storage.getUser(req.session.userId);
+      const user = await storage.getUser(req.session.userId);
           if (user) {
               console.log(`Usuário autenticado via Sessão: ${user.email}`);
-              return res.status(200).json({
-                id: user.id,
-                email: user.email,
-                name: user.name,
-                firebaseId: user.firebaseId
-              });
+      return res.status(200).json({
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        firebaseId: user.firebaseId
+      });
           } else {
              console.log(`Sessão encontrada (userId: ${req.session.userId}) mas usuário não existe no DB.`);
              // Limpar sessão inválida?
@@ -637,10 +637,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const catalogId = parseInt(req.params.id);
       const userId = req.session?.userId || parseInt(req.body.userId as string);
-
+      
       if (isNaN(catalogId)) return res.status(400).json({ message: "ID inválido" });
       if (!userId) return res.status(401).json({ message: "Usuário não autenticado" });
-
+      
       // Obter o catálogo para garantir que pertence ao usuário (opcional, mas bom)
       const catalog = await storage.getCatalog(catalogId);
       if (!catalog || catalog.userId !== userId) {
@@ -653,7 +653,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const result = await fixProductImages(userId, catalogId);
 
       if (result.success) {
-          return res.status(200).json({
+        return res.status(200).json({
             message: result.message,
             updatedCount: result.updated
           });
@@ -675,47 +675,47 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = req.session?.userId || parseInt(req.body.userId as string);
       if (!userId) return res.status(401).json({ message: "Usuário não autenticado" });
-
+      
       const catalogs = await storage.getCatalogs(userId);
       if (!catalogs || catalogs.length === 0) {
         return res.status(404).json({ message: "Nenhum catálogo encontrado" });
       }
-
+      
       const results = [];
       let totalUpdated = 0;
-
-      for (const catalog of catalogs) {
+      
+        for (const catalog of catalogs) {
         console.log(`Iniciando correção de imagens para catálogo ${catalog.id} (todos)`);
         try {
             // *** Chamar a função exportada correta ***
             const result = await fixProductImages(userId, catalog.id);
             results.push({
-                catalogId: catalog.id,
+              catalogId: catalog.id,
                 catalogName: catalog.fileName,
                 status: result.success ? "completed" : "error",
                 updatedCount: result.updated,
                 message: result.message
             });
             if(result.success) totalUpdated += result.updated;
-        } catch (catalogError) {
+          } catch (catalogError) {
             console.error(`Erro ao processar catálogo ${catalog.id} em /remap-all:`, catalogError);
              const message = catalogError instanceof Error ? catalogError.message : String(catalogError);
             results.push({
-                catalogId: catalog.id,
+              catalogId: catalog.id,
                 catalogName: catalog.fileName,
-                status: "error",
-                updatedCount: 0,
+              status: "error",
+              updatedCount: 0,
                 message: message
             });
+          }
         }
-      }
-
-      return res.status(200).json({
+        
+        return res.status(200).json({
         message: `Remapeamento concluído. ${totalUpdated} produtos atualizados em ${catalogs.length} catálogos.`,
-        totalUpdated,
+          totalUpdated,
         catalogsProcessed: results.filter(r => r.status === "completed").length,
-        results
-      });
+          results
+        });
 
     } catch (error) {
       console.error("Erro na rota /remap-all-images:", error);
@@ -1019,11 +1019,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!products || products.length === 0) {
         return res.status(404).json({ message: "Nenhum produto encontrado" });
       }
-
+      
       // ** Lógica de busca visual precisa ser implementada aqui **
       // const similarProducts = await searchSimilarProducts(imageBase64, products, maxResults);
       const similarProducts = products.slice(0, maxResults); // Placeholder
-
+      
       return res.status(200).json({
         results: similarProducts,
         totalProducts: products.length
@@ -1056,352 +1056,386 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       try {
         console.log("=== INÍCIO TRY BLOCK DA ROTA UPLOAD ===");
-        if (!req.file) {
+      if (!req.file) {
           console.log("ERRO PÓS-MULTER: req.file ainda está indefinido!");
           // Se chegou aqui sem erro do Multer mas sem req.file, algo estranho aconteceu
           return res.status(500).json({ message: "Erro interno: Arquivo não processado corretamente pelo middleware." });
-        }
-        
-        // Extrair informações do arquivo
-        const file = req.file;
-        console.log("File object:", JSON.stringify(file, null, 2));
-        
-        let filePath: string = '';
-        let s3Key: string | null = null;
-        const fileName = file.originalname;
-        const fileType = fileName.split('.').pop()?.toLowerCase() || '';
-        
-        // Verificar quem está fazendo o upload (obter o ID do usuário)
-        const userId = req.params.userId || req.query.userId || req.body.userId || req.session?.userId || 1;
-        console.log(`Upload realizado pelo usuário: ${userId}`);
-        
-        // Verificar se estamos usando S3 ou armazenamento local
-        if (useS3Storage && file.hasOwnProperty('location')) {
-          // Upload via S3 - multer-s3 v3 usa 'location'
-          s3Key = (file as any).key;
-          const s3Location = (file as any).location;
+      }
+      
+      // Extrair informações do arquivo
+      const file = req.file;
+      console.log("File object:", JSON.stringify(file, null, 2));
+      
+      let filePath: string = '';
+      let s3Key: string | null = null;
+      const fileName = file.originalname;
+      const fileType = fileName.split('.').pop()?.toLowerCase() || '';
+      
+      // Verificar quem está fazendo o upload (obter o ID do usuário)
+      const userId = req.params.userId || req.query.userId || req.body.userId || req.session?.userId || 1;
+      console.log(`Upload realizado pelo usuário: ${userId}`);
+      
+      // Verificar se estamos usando S3 ou armazenamento local
+      if (useS3Storage && file.hasOwnProperty('location')) {
+        // Upload via S3 - multer-s3 v3 usa 'location'
+        s3Key = (file as any).key;
+        const s3Location = (file as any).location;
           // @ts-ignore - Ignorar possível erro de tipo aqui
           filePath = s3Key; 
-          console.log(`Arquivo recebido via S3 v3: ${fileName} (${fileType}), S3 Key: ${s3Key}, Location: ${s3Location}`);
-        } else if (useS3Storage && (file as any).s3) {
-          // Upload via S3 - multer-s3 v2
-          s3Key = (file as any).key || (file as any).s3?.key;
+        console.log(`Arquivo recebido via S3 v3: ${fileName} (${fileType}), S3 Key: ${s3Key}, Location: ${s3Location}`);
+      } else if (useS3Storage && (file as any).s3) {
+        // Upload via S3 - multer-s3 v2
+        s3Key = (file as any).key || (file as any).s3?.key;
            // @ts-ignore - Ignorar possível erro de tipo aqui
           filePath = s3Key; 
-          console.log(`Arquivo recebido via S3 v2: ${fileName} (${fileType}), S3 Key: ${s3Key}`);
-        } else if (file.path) {
-          // Upload local tradicional
-          filePath = file.path;
-          console.log(`Arquivo recebido localmente: ${fileName} (${fileType}), salvo em: ${filePath}`);
-          
-          // Se o S3 estiver configurado, fazer upload do arquivo para S3 (migração)
-          if (useS3Storage) {
-            try {
-              console.log(`Migrando arquivo local para S3 - filepath: ${filePath}, userId: ${userId}`);
-              const userIdNum = typeof userId === 'string' ? parseInt(userId) : userId;
-              
-              // Importar módulo s3 para upload
-              const { uploadFileToS3 } = await import('./s3-service.js');
-              
-              // Fazer upload diretamente com o módulo S3
-              s3Key = await uploadFileToS3(filePath, userIdNum, 'catalogs', 'temp');
-              console.log(`Arquivo migrado para S3 com sucesso. S3 Key: ${s3Key}`);
-            } catch (s3Error) {
-              console.error("Erro ao migrar arquivo para S3, continuando com armazenamento local:", s3Error);
-              s3Key = null; // Garante que o s3Key é nulo em caso de erro
-            }
-          }
-        } else {
-          // Fallback: Criar um caminho de arquivo temporário
-          filePath = `./uploads/temp-${Date.now()}-${fileName}`;
-          console.log(`Nenhum caminho de arquivo encontrado, usando fallback: ${filePath}`);
-        }
+        console.log(`Arquivo recebido via S3 v2: ${fileName} (${fileType}), S3 Key: ${s3Key}`);
+      } else if (file.path) {
+        // Upload local tradicional
+        filePath = file.path;
+        console.log(`Arquivo recebido localmente: ${fileName} (${fileType}), salvo em: ${filePath}`);
         
-        // Garantir que temos um fileUrl válido
-        const fileUrl = s3Key || filePath;
-        if (!fileUrl) {
-          throw new Error("Não foi possível determinar um URL válido para o arquivo");
-        }
-        
-        // Determinar o caminho de acesso efetivo ao arquivo
-        // Se for S3, precisamos baixar para um caminho local temporário para processamento
-        let processingFilePath = filePath;
-        
-        // Se estiver no S3, vamos baixar para um caminho local temporário
-        if (useS3Storage && s3Key) {
+        // Se o S3 estiver configurado, fazer upload do arquivo para S3 (migração)
+        if (useS3Storage) {
           try {
-            console.log(`Arquivo está no S3, baixando para processamento local...`);
+            console.log(`Migrando arquivo local para S3 - filepath: ${filePath}, userId: ${userId}`);
+            const userIdNum = typeof userId === 'string' ? parseInt(userId) : userId;
             
-            // Criar pasta temporária
-            const tempDir = './uploads/temp';
-            if (!fs.existsSync(tempDir)) {
-              fs.mkdirSync(tempDir, { recursive: true });
-            }
+            // Importar módulo s3 para upload
+            const { uploadFileToS3 } = await import('./s3-service.js');
             
-            // Caminho temporário para download
-            const tempPath = path.join(tempDir, `${Date.now()}-${fileName}`);
-            
-            // Importar serviço S3
-            const { downloadFileFromS3 } = await import('./s3-service.js');
-            
-            // Baixar arquivo do S3
-            const fileBuffer = await downloadFileFromS3(s3Key);
-            
-            // Salvar localmente
-            fs.writeFileSync(tempPath, fileBuffer);
-            
-            console.log(`Arquivo baixado do S3 para: ${tempPath}`);
-            processingFilePath = tempPath;
-          } catch (downloadError) {
-            console.error(`Erro ao baixar arquivo do S3:`, downloadError);
-            // Manter o caminho original em caso de erro
-            console.log(`Usando o caminho original: ${filePath}`);
+            // Fazer upload diretamente com o módulo S3
+            s3Key = await uploadFileToS3(filePath, userIdNum, 'catalogs', 'temp');
+            console.log(`Arquivo migrado para S3 com sucesso. S3 Key: ${s3Key}`);
+          } catch (s3Error) {
+            console.error("Erro ao migrar arquivo para S3, continuando com armazenamento local:", s3Error);
+            s3Key = null; // Garante que o s3Key é nulo em caso de erro
           }
         }
-        
-        console.log(`FileUrl final para o banco: ${fileUrl}`);
-        console.log(`Caminho de processamento efetivo: ${processingFilePath}`);
-        
-        // Criar um novo catálogo no banco de dados
-        const catalog = await storage.createCatalog({
-          userId: typeof userId === 'string' ? parseInt(userId) : userId,
-          fileName: fileName,
-          fileUrl: fileUrl, // URL válido garantido
-          processedStatus: "processing"
-        });
-        
-        // ID do catálogo no banco relacional
-        const catalogId = catalog.id;
-        console.log(`Catálogo criado no banco de dados com ID: ${catalogId}`);
-        
-        // ID do catálogo no Firestore (pode ser o mesmo ou diferente)
-        const firestoreCatalogId = req.body.firestoreCatalogId || catalogId;
-        console.log(`ID do catálogo no Firestore: ${firestoreCatalogId}`);
-        
-        // Salvar o catálogo no Firestore também
+      } else {
+        // Fallback: Criar um caminho de arquivo temporário
+        filePath = `./uploads/temp-${Date.now()}-${fileName}`;
+        console.log(`Nenhum caminho de arquivo encontrado, usando fallback: ${filePath}`);
+      }
+      
+      // Garantir que temos um fileUrl válido
+      const fileUrl = s3Key || filePath;
+      if (!fileUrl) {
+        throw new Error("Não foi possível determinar um URL válido para o arquivo");
+      }
+      
+      // Determinar o caminho de acesso efetivo ao arquivo
+      // Se for S3, precisamos baixar para um caminho local temporário para processamento
+      let processingFilePath = filePath;
+      
+      // Se estiver no S3, vamos baixar para um caminho local temporário
+      if (useS3Storage && s3Key) {
         try {
-          const { createCatalogInFirestore } = await import('./firestore-service');
-          let productsData: any[] = []; 
-          let extractionInfo = "";
-          let imagesUploadedCount = 0; // Contagem de imagens enviadas
+          console.log(`Arquivo está no S3, baixando para processamento local...`);
+          
+          // Criar pasta temporária
+          const tempDir = './uploads/temp';
+          if (!fs.existsSync(tempDir)) {
+            fs.mkdirSync(tempDir, { recursive: true });
+          }
+          
+          // Caminho temporário para download
+          const tempPath = path.join(tempDir, `${Date.now()}-${fileName}`);
+          
+          // Importar serviço S3
+          const { downloadFileFromS3 } = await import('./s3-service.js');
+          
+          // Baixar arquivo do S3
+          const fileBuffer = await downloadFileFromS3(s3Key);
+          
+          // Salvar localmente
+          fs.writeFileSync(tempPath, fileBuffer);
+          
+          console.log(`Arquivo baixado do S3 para: ${tempPath}`);
+          processingFilePath = tempPath;
+        } catch (downloadError) {
+          console.error(`Erro ao baixar arquivo do S3:`, downloadError);
+          // Manter o caminho original em caso de erro
+          console.log(`Usando o caminho original: ${filePath}`);
+        }
+      }
+      
+      console.log(`FileUrl final para o banco: ${fileUrl}`);
+      console.log(`Caminho de processamento efetivo: ${processingFilePath}`);
+      
+      // Criar um novo catálogo no banco de dados
+      const catalog = await storage.createCatalog({
+        userId: typeof userId === 'string' ? parseInt(userId) : userId,
+        fileName: fileName,
+        fileUrl: fileUrl, // URL válido garantido
+        processedStatus: "processing"
+      });
+      
+      // ID do catálogo no banco relacional
+      const catalogId = catalog.id;
+      console.log(`Catálogo criado no banco de dados com ID: ${catalogId}`);
+      
+      // ID do catálogo no Firestore (pode ser o mesmo ou diferente)
+      const firestoreCatalogId = req.body.firestoreCatalogId || catalogId;
+      console.log(`ID do catálogo no Firestore: ${firestoreCatalogId}`);
+      
+      // Salvar o catálogo no Firestore também
+      try {
+        const { createCatalogInFirestore } = await import('./firestore-service');
+        let productsData: any[] = [];
+        let extractedImageColumn: string | null = null;
+        let extractionInfo: string = '';
 
+        if (fileType === 'excel') {
           try {
-            // ======= PROCESSAMENTO BASEADO NO TIPO DE ARQUIVO =======
-            if (fileType === 'xlsx' || fileType === 'xls') {
-              
-              // ** ETAPA 1: Extrair e Fazer Upload das Imagens (Sequencial) **
-              console.log(`---> Iniciando extração/upload SEQUENCIAL de imagens para: ${processingFilePath}`);
-              try {
-                // Chamar a função SEQUENCIAL correta
-                imagesUploadedCount = await extractAndUploadImagesSequentially(processingFilePath, userId, catalogId);
-                console.log(`---> Extração/upload sequencial concluído. ${imagesUploadedCount} imagens enviadas para S3.`);
-              } catch (imageError) {
-                console.error("Erro durante extração/upload sequencial de imagens:", imageError);
-                // Continuar mesmo se falhar
-              }
+            // ** ETAPA 1: Chamar IA para Extrair Dados Textuais E Coluna de Imagem **
+            console.log(`---> Chamando processExcelWithAI para texto e coluna de imagem: ${processingFilePath}`);
+            const aiResult = await processExcelWithAI(processingFilePath);
+            productsData = aiResult.products; // Pega os produtos do resultado
+            extractedImageColumn = aiResult.imageColumn; // Pega a coluna da imagem
+            console.log(`<<< Retorno de processExcelWithAI: ${productsData.length} produtos. Coluna Imagem: ${extractedImageColumn}`);
+            
+            // ** ETAPA 2: Chamar IA para Extrair Dados Textuais (com excelRowNumber) **
+            console.log(`---> Chamando processExcelWithAI para dados textuais: ${processingFilePath}`);
+            productsData = await processExcelWithAI(processingFilePath);
+            console.log(`<<< Retorno de processExcelWithAI: ${productsData.length} produtos (com excelRowNumber).`);
+            
+            extractionInfo = `IA extraiu ${productsData.length} produtos. ${extractedImageColumn?.length || 0} imagens foram processadas.`;
+          } catch (error) {
+            console.error("Erro no processamento de Excel:", error);
+            extractionInfo = "Erro no processamento de Excel: " + (error.message || "Erro desconhecido");
+            productsData = [];
+          }
+        } else if (fileType === 'pdf') {
+          console.log("---> Chamando processamento de PDF...");
+          // Implementar lógica PDF aqui
+          productsData = []; // Placeholder
+          extractionInfo = "Processamento PDF (implementar)";
+        } else if (['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(fileType)) {
+          console.log("---> Chamando processamento de Imagem...");
+          // Mantenha sua lógica de processamento de Imagem aqui
+          // Exemplo: const { processImage } = await import('./image-processor');
+          // productsData = await processImage(processingFilePath, ...);
+          extractionInfo = "Processamento Imagem (implementar)";
+          productsData = [];
+        } else {
+          throw new Error(`Formato de arquivo não suportado: ${fileType}.`);
+        }
 
-              // ** ETAPA 2: Chamar IA para Extrair Dados Textuais **
-              console.log(`---> Chamando processExcelWithAI para dados textuais: ${processingFilePath}`);
-              productsData = await processExcelWithAI(processingFilePath); 
-              console.log(`<<< Retorno de processExcelWithAI: ${productsData.length} produtos.`);
-              extractionInfo = `IA extraiu ${productsData.length} produtos. ${imagesUploadedCount} imagens foram enviadas para S3.`;
-              
-            } else if (fileType === 'pdf') {
-              console.log("---> Chamando processamento de PDF...");
-              // Mantenha sua lógica robusta de processamento de PDF aqui
-              // Exemplo: const { processPdf } = await import('./pdf-processor');
-              // productsData = await processPdf(processingFilePath, ...);
-              extractionInfo = "Processamento PDF (implementar)";
-              productsData = []; 
-            } else if (['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(fileType)) {
-               console.log("---> Chamando processamento de Imagem...");
-               // Mantenha sua lógica de processamento de Imagem aqui
-               // Exemplo: const { processImage } = await import('./image-processor');
-               // productsData = await processImage(processingFilePath, ...);
-               extractionInfo = "Processamento Imagem (implementar)";
-               productsData = [];
-            } else {
-              throw new Error(`Formato de arquivo não suportado: ${fileType}.`);
-            }
+        // ======= FIM DO PROCESSAMENTO =======
+        console.log(`Processamento concluído. Produtos: ${productsData.length}.`);
 
-            // ======= FIM DO PROCESSAMENTO =======
-            console.log(`Processamento concluído. Produtos: ${productsData.length}, Imagens Enviadas: ${imagesUploadedCount}`);
+        // ======= SALVAR PRODUTOS (SEM imageUrl automático) =======
+        if (!Array.isArray(productsData)) productsData = [];
 
-            // ======= REMOVER ETAPA DE MAPEAMENTO =======
-            // Não há mais mapeamento automático por linha ou código aqui
+        // Salvar no Firestore
+        try {
+          const productsToSaveFirestore = productsData.map(p => ({
+            ...p,
+            excelRowNumber: p.excelRowNumber, // Garantir que está sendo passado
+            imageUrl: null, // Definir como null inicialmente
+            userId: userId.toString() || 'unknown_user',
+            catalogId: firestoreCatalogId?.toString() || `unknown-catalog-${catalog?.id || 'new'}`,
+            localCatalogId: catalog?.id || null,
+            createdAt: new Date(),
+            updatedAt: new Date()
+          }));
+          const { saveProductsToFirestore, updateCatalogStatusInFirestore } = await import('./firestore-service');
+          const fsCatalogIdStr = firestoreCatalogId?.toString() || `unknown-catalog-${catalog?.id || 'new'}`;
+          const catalogIdForFirestore: string = fsCatalogIdStr;
+          const userIdStr = userId.toString() || 'unknown_user'; // Garantir que é string
+          const productIds = await saveProductsToFirestore(productsToSaveFirestore, userIdStr, catalogIdForFirestore); 
+          console.log(`${productIds.length} produtos salvos no Firestore.`);
+          await updateCatalogStatusInFirestore(userIdStr, catalogIdForFirestore, "completed", productsData.length);
+        } catch (firestoreError) {
+          console.error("Erro ao salvar produtos no Firestore:", firestoreError);
+        }
 
-            // ======= SALVAR PRODUTOS (SEM imageUrl automático) =======
-            if (!Array.isArray(productsData)) productsData = [];
+        // Salvar no Banco Local (PostgreSQL)
+        const savedLocalProducts = [];
+        const localUserIdNum = typeof userId === 'number' ? userId : parseInt(userId.toString());
+        const localCatalogIdNum = catalog?.id;
 
-            // Salvar no Firestore 
+        if (localCatalogIdNum === undefined || isNaN(localCatalogIdNum)) {
+          console.error("ERRO: ID do catálogo local inválido. Pulando salvamento no PG.");
+        } else {
+          for (const productData of productsData) {
             try {
-              const productsToSaveFirestore = productsData.map(p => ({
-                ...p, 
-                imageUrl: null, // << Definir como null inicialmente
-                userId: userId.toString() || 'unknown_user', 
-                catalogId: firestoreCatalogId?.toString() || `unknown-catalog-${catalog?.id || 'new'}`, 
-                localCatalogId: catalog?.id || null, 
+              const productToSaveLocal = {
+                userId: localUserIdNum,
+                catalogId: localCatalogIdNum,
+                excelRowNumber: productData.excelRowNumber, // <<< Salvar o número da linha!
+                name: productData.name || "Produto S/ Nome",
+                code: productData.code || `CODE-${Date.now()}`,
+                description: productData.description || productData.name || "",
+                price: productData.price || 0,
+                category: productData.category || 'Geral',
+                manufacturer: productData.manufacturer || '',
+                location: productData.location || '',
+                colors: Array.isArray(productData.colors) ? productData.colors : [],
+                materials: Array.isArray(productData.materials) ? productData.materials : [],
+                sizes: Array.isArray(productData.sizes) ? productData.sizes : [],
+                imageUrl: null, // Definir como null inicialmente
+                isEdited: false,
                 createdAt: new Date(),
                 updatedAt: new Date()
-              }));
-              const { saveProductsToFirestore, updateCatalogStatusInFirestore } = await import('./firestore-service');
-              const fsCatalogIdStr = firestoreCatalogId?.toString() || `unknown-catalog-${catalog?.id || 'new'}`; 
-              const catalogIdForFirestore: string = fsCatalogIdStr;
-              // @ts-ignore 
-              const productIds = await saveProductsToFirestore(productsToSaveFirestore, catalogIdForFirestore); 
-              console.log(`${productIds.length} produtos salvos no Firestore.`);
-              // @ts-ignore 
-              await updateCatalogStatusInFirestore(catalogIdForFirestore, "completed", productsData.length);
-            } catch (firestoreError) {
-              console.error("Erro ao salvar produtos no Firestore:", firestoreError);
+              };
+              const savedProduct = await storage.createProduct(productToSaveLocal);
+              savedLocalProducts.push(savedProduct); // Armazenar o produto salvo que CONTERÁ o excelRowNumber
+            } catch (dbError) {
+              console.error('Erro ao salvar produto no banco local PG:', dbError, productData);
             }
+          }
+          console.log(`${savedLocalProducts.length} produtos salvos no banco de dados local PG (com excelRowNumber).`);
 
-            // Salvar no Banco Local (PostgreSQL)
-            const savedLocalProducts = [];
-            const localUserIdNum = typeof userId === 'number' ? userId : parseInt(userId.toString()); 
-            const localCatalogIdNum = catalog?.id; 
+          // *** ETAPA DE ASSOCIAÇÃO DE IMAGENS (POR NÚMERO DE LINHA) ***
+          if (savedLocalProducts.length > 0 && extractedImageColumn) {
+            console.log(`---> Iniciando associação de ${extractedImageColumn} imagens com ${savedLocalProducts.length} produtos POR LINHA DO EXCEL...`);
+            let associatedCount = 0;
+            let notFoundCount = 0;
 
-            if (localCatalogIdNum === undefined || isNaN(localCatalogIdNum)) {
-              console.error("ERRO: ID do catálogo local inválido. Pulando salvamento no PG.");
-            } else {
-              for (const productData of productsData) {
-                try {
-                  const productToSaveLocal = {
-                    userId: localUserIdNum,
-                    catalogId: localCatalogIdNum,
-                    name: productData.name || "Produto S/ Nome",
-                    code: productData.code || `CODE-${Date.now()}`,
-                    description: productData.description || productData.name || "",
-                    price: productData.price || 0,
-                    category: productData.category || 'Geral',
-                    manufacturer: productData.manufacturer || '',
-                    location: productData.location || '',
-                    colors: Array.isArray(productData.colors) ? productData.colors : [],
-                    materials: Array.isArray(productData.materials) ? productData.materials : [],
-                    sizes: Array.isArray(productData.sizes) ? productData.sizes : [],
-                    imageUrl: null, // << Definir como null inicialmente
-                    isEdited: false,
-                    createdAt: new Date(),
-                    updatedAt: new Date()
-                  };
-                  const savedProduct = await storage.createProduct(productToSaveLocal);
-                  savedLocalProducts.push(savedProduct);
-                } catch (dbError) {
-                  console.error('Erro ao salvar produto no banco local PG:', dbError, productData);
-                }
+            // Criar um mapa para acesso rápido às imagens pela linha
+            // Lidar com múltiplas imagens por linha: agrupar por linha
+            const imagesByRowMap = new Map<number, ExtractedImageInfo[]>();
+            for (const imgInfo of extractedImageColumn.split(',')) {
+              if (imgInfo.trim() !== '') {
+                imagesByRowMap.set(parseInt(imgInfo.trim()), []);
               }
-              console.log(`${savedLocalProducts.length} produtos salvos no banco de dados local PG.`);
             }
 
-            // Declarar updatedCatalog fora do if para estar acessível na resposta
-            let updatedCatalog: SharedCatalog | undefined = undefined; 
-            if (localCatalogIdNum) { 
-                updatedCatalog = await storage.updateCatalogStatus(localCatalogIdNum, "completed");
-            }
-
-            // ======= RESPOSTA DE SUCESSO =======
-            return res.status(201).json({
-              message: `Catálogo processado com sucesso (${fileType} via IA).`,
-              catalog: updatedCatalog,
-              extractionInfo,
-              totalProductsSaved: savedLocalProducts.length,
-              sampleProducts: savedLocalProducts.slice(0, 3),
-              firestoreCatalogId
-            });
-
-          } catch (processingError) {
-             // ======= TRATAMENTO DE ERRO DE PROCESSAMENTO =======
-              console.error("Erro durante o processamento do catálogo:", processingError);
-              try {
-                const { updateCatalogStatusInFirestore } = await import('./firestore-service');
-                const fsCatalogId = firestoreCatalogId?.toString() || `unknown-catalog-${catalog?.id || 'error'}`;
-                // *** Passar userId como primeiro argumento ***
-                const userIdStr = userId?.toString() || 'unknown_user'; // Garantir que userId seja string
-                await updateCatalogStatusInFirestore(userIdStr, fsCatalogId, "failed", 0); 
-              } catch (fsError) { console.error("Erro ao atualizar status Firestore para falha:", fsError); }
+            for (const product of savedLocalProducts) {
+              // @ts-ignore - Assumindo que excelRowNumber está presente após salvar
+              const productRow = product.excelRowNumber;
               
-              if (catalog?.id) {
-                  await storage.updateCatalogStatus(catalog.id, "failed");
-              } else {
-                  console.error("Não foi possível atualizar status do catálogo local: ID do catálogo não encontrado.");
+              if (productRow === undefined || productRow === null || isNaN(productRow) || productRow <= 0) {
+                  console.warn(`Produto ID ${product.id} (${product.name}) sem número de linha válido (${productRow}). Pulando associação.`);
+                  continue;
               }
-              return res.status(400).json({
-                message: "Falha ao processar o catálogo",
-                error: processingError instanceof Error ? processingError.message : "Erro desconhecido",
-                catalog: catalog ? { id: catalog.id, fileName: catalog.fileName } : { fileName: fileName }
-              });
+
+              const imagesForThisRow = imagesByRowMap.get(productRow);
+
+              if (imagesForThisRow && imagesForThisRow.length > 0) {
+                const imageToAssociate = imagesForThisRow[0];
+                const shortImageUrl = imageToAssociate.imageUrl.substring(imageToAssociate.imageUrl.length - 40);
+                console.log(`Associando: Produto ID ${product.id} (Linha Excel: ${productRow}, Nome: ${product.name}) ---> Imagem Índice ${imageToAssociate.originalIndex} (Linha Excel: ${imageToAssociate.rowNumber}, ...${shortImageUrl})`);
+                try {
+                  await storage.updateProductImageUrl(product.id, imageToAssociate.imageUrl);
+                  associatedCount++;
+                } catch (updateError) {
+                  console.error(`Erro ao atualizar DB para produto ID ${product.id} com imagem da linha ${productRow}:`, updateError);
+                }
+              } else {
+                console.log(`AVISO: Nenhuma imagem encontrada na lista extraída para a linha ${productRow} do Produto ID ${product.id} (${product.name}).`);
+                notFoundCount++;
+              }
+            }
+            console.log(`---> Associação por linha concluída: ${associatedCount} produtos atualizados com URLs S3. ${notFoundCount} produtos não encontraram imagem correspondente.`);
+          } else {
+            console.log("---> Pulando associação de imagens (sem produtos salvos ou sem informações detalhadas de imagens).");
           }
-        } catch (error) {
-           // ======= TRATAMENTO DE ERRO GERAL (UPLOAD/SETUP INICIAL) =======
-          console.error("Erro geral no upload/setup inicial:", error);
-          return res.status(500).json({
-            message: "Erro no processamento do upload inicial",
-            error: error instanceof Error ? error.message : "Erro desconhecido"
-          });
+          // *************************************
         }
-      } catch (error) {
-         // Log de erro geral da rota principal
-         console.error("!!!! ERRO NO HANDLER PRINCIPAL da ROTA /api/catalogs/upload !!!!", error);
-         // Tenta atualizar status para falha antes de responder
-         try {
-            const catalogId = parseInt(req.body.catalogId || req.params.catalogId) || null;
-            const firestoreCatalogId = req.body.firestoreCatalogId || catalogId;
-            const { updateCatalogStatusInFirestore } = await import('./firestore-service');
-            const fsCatalogId = firestoreCatalogId?.toString() || `unknown-catalog-${catalogId || 'error'}`;
-            // @ts-ignore
-            await updateCatalogStatusInFirestore(fsCatalogId, "failed", 0); 
-            if (catalogId) await storage.updateCatalogStatus(catalogId, "failed");
-         } catch (statusError) { console.error("Erro ao tentar atualizar status para falha:", statusError);} 
 
-         return res.status(500).json({
-           message: "Erro interno fatal no servidor durante o processamento do catálogo.",
-           error: error instanceof Error ? error.message : "Erro desconhecido"
-         });
-      }
-    }
-  );
+        // Declarar updatedCatalog fora do if para estar acessível na resposta
+        let updatedCatalog: SharedCatalog | undefined = undefined; 
+        if (localCatalogIdNum) { 
+            updatedCatalog = await storage.updateCatalogStatus(localCatalogIdNum, "completed");
+        }
 
-  // Rotas para imagens
-  app.get("/api/images/:userId/:catalogId/:filename", (req: Request, res: Response) => {
-    const { userId, catalogId, filename } = req.params;
-    const filePath = path.join("uploads", userId, catalogId, filename);
-    
-    if (fs.existsSync(filePath)) {
-      const contentType = mime.lookup(filePath) || 'application/octet-stream';
-      res.setHeader('Content-Type', contentType);
-      fs.createReadStream(filePath).pipe(res);
-    } else {
-      res.status(404).json({ message: "Imagem não encontrada" });
-    }
-  });
-
-  // Servidor WebSocket
-  const httpServer = createServer(app);
-  const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
-  
-  wss.on('connection', (ws) => {
-    console.log('Cliente WebSocket conectado');
-    
-    ws.on('message', (message) => {
-      try {
-        const data = JSON.parse(message.toString());
-        console.log('Mensagem recebida:', data);
-        
-        // Broadcast para todos os clientes
-        wss.clients.forEach((client) => {
-          if (client !== ws && client.readyState === 1) {
-            client.send(JSON.stringify(data));
-          }
+        // ======= RESPOSTA DE SUCESSO =======
+        return res.status(201).json({
+          message: `Catálogo processado com sucesso (${fileType} via IA).`,
+          catalog: updatedCatalog,
+          extractionInfo: extractionInfo,
+          totalProductsSaved: savedLocalProducts.length,
+          sampleProducts: savedLocalProducts.slice(0, 3),
+          firestoreCatalogId
         });
-      } catch (error) {
-        console.error('Erro ao processar mensagem WebSocket:', error);
+        
+      } catch (processingError) {
+         // ======= TRATAMENTO DE ERRO DE PROCESSAMENTO =======
+          console.error("Erro durante o processamento do catálogo:", processingError);
+          try {
+            const { updateCatalogStatusInFirestore } = await import('./firestore-service');
+            const fsCatalogId = firestoreCatalogId?.toString() || `unknown-catalog-${catalog?.id || 'error'}`;
+            // *** Passar userId como primeiro argumento ***
+            const userIdStr = userId?.toString() || 'unknown_user'; // Garantir que userId seja string
+            await updateCatalogStatusInFirestore(userIdStr, fsCatalogId, "failed", 0); 
+          } catch (fsError) { console.error("Erro ao atualizar status Firestore para falha:", fsError); }
+          
+          if (catalog?.id) {
+              await storage.updateCatalogStatus(catalog.id, "failed");
+              } else {
+              console.error("Não foi possível atualizar status do catálogo local: ID do catálogo não encontrado.");
+          }
+          return res.status(400).json({
+            message: "Falha ao processar o catálogo",
+            error: processingError instanceof Error ? processingError.message : "Erro desconhecido",
+            catalog: catalog ? { id: catalog.id, fileName: catalog.fileName } : { fileName: fileName }
+          });
       }
-    });
-    
-    ws.on('close', () => {
-      console.log('Cliente WebSocket desconectado');
-    });
-  });
+    } catch (error) {
+       // Log de erro geral da rota principal
+       console.error("!!!! ERRO NO HANDLER PRINCIPAL da ROTA /api/catalogs/upload !!!!", error);
+       // Tenta atualizar status para falha antes de responder
+       try {
+          const catalogId = parseInt(req.body.catalogId || req.params.catalogId) || null;
+          const firestoreCatalogId = req.body.firestoreCatalogId || catalogId;
+        const { updateCatalogStatusInFirestore } = await import('./firestore-service');
+          const fsCatalogId = firestoreCatalogId?.toString() || `unknown-catalog-${catalogId || 'error'}`;
+          // @ts-ignore
+          await updateCatalogStatusInFirestore(fsCatalogId, "failed", 0); 
+          if (catalogId) await storage.updateCatalogStatus(catalogId, "failed");
+       } catch (statusError) { console.error("Erro ao tentar atualizar status para falha:", statusError);} 
+      
+      return res.status(500).json({
+         message: "Erro interno fatal no servidor durante o processamento do catálogo.",
+         error: error instanceof Error ? error.message : "Erro desconhecido"
+       });
+    }
+  }
+);
 
-  return httpServer;
+// Rotas para imagens
+app.get("/api/images/:userId/:catalogId/:filename", (req: Request, res: Response) => {
+  const { userId, catalogId, filename } = req.params;
+  const filePath = path.join("uploads", userId, catalogId, filename);
+  
+  if (fs.existsSync(filePath)) {
+    const contentType = mime.lookup(filePath) || 'application/octet-stream';
+    res.setHeader('Content-Type', contentType);
+    fs.createReadStream(filePath).pipe(res);
+  } else {
+    res.status(404).json({ message: "Imagem não encontrada" });
+  }
+});
+
+// Servidor WebSocket
+const httpServer = createServer(app);
+const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
+
+wss.on('connection', (ws) => {
+  console.log('Cliente WebSocket conectado');
+  
+  ws.on('message', (message) => {
+    try {
+      const data = JSON.parse(message.toString());
+      console.log('Mensagem recebida:', data);
+      
+      // Broadcast para todos os clientes
+      wss.clients.forEach((client) => {
+        if (client !== ws && client.readyState === 1) {
+          client.send(JSON.stringify(data));
+        }
+      });
+    } catch (error) {
+      console.error('Erro ao processar mensagem WebSocket:', error);
+    }
+  });
+  
+  ws.on('close', () => {
+    console.log('Cliente WebSocket desconectado');
+  });
+});
+
+return httpServer;
 }

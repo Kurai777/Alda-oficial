@@ -31,11 +31,28 @@ router.get('/verify-product-image/:productId', async (req, res) => {
     res.json(result);
     
   } catch (error) {
-    console.error('Erro ao verificar imagem de produto:', error);
-    res.status(500).json({
-      status: 'error',
-      error: error.message || 'Erro interno ao verificar imagem'
-    });
+    console.error('Erro GERAL na rota /verify-product-image/:productId:', error);
+    
+    let errorMessage = 'Erro interno ao verificar imagem';
+    // Log adicional para detalhes do erro
+    if (error instanceof Error) {
+      errorMessage = error.message;
+      console.error('Tipo do Erro:', error.name);
+      console.error('Mensagem do Erro:', error.message);
+      console.error('Stack do Erro:', error.stack);
+    } else {
+      console.error('Erro capturado não é instância de Error:', error);
+    }
+    
+    // Tenta enviar um JSON de erro mesmo assim, mas pode ser tarde demais
+    if (!res.headersSent) {
+      res.status(500).json({
+        status: 'error',
+        error: errorMessage
+      });
+    } else {
+      console.error('Headers já enviados, não foi possível enviar JSON de erro para /verify-product-image.');
+    }
   }
 });
 

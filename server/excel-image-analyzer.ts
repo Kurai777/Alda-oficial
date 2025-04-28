@@ -173,9 +173,10 @@ export async function findImageFile(filename: string): Promise<string | null> {
   try {
     // Verificar se o nome do arquivo tem formato válido
     if (!filename || typeof filename !== 'string') {
-      console.error(`Nome de arquivo inválido: ${filename}`);
+      console.error(`[findImageFile] Nome de arquivo inválido: ${filename}`);
       return null;
     }
+    console.log(`[findImageFile] Procurando por: ${filename}`);
     
     // Lista de diretórios onde procurar
     const directories = [
@@ -191,17 +192,21 @@ export async function findImageFile(filename: string): Promise<string | null> {
     
     // Primeiro, tentar match exato nos diretórios de primeiro nível
     for (const dir of directories) {
+      console.log(`[findImageFile] Verificando diretório direto: ${dir}`);
       if (await existsAsync(dir)) {
         const exactPath = path.join(dir, filename);
+        console.log(`[findImageFile] Verificando caminho exato: ${exactPath}`);
         if (await existsAsync(exactPath)) {
-          console.log(`Imagem encontrada (match exato): ${exactPath}`);
+          console.log(`[findImageFile] Imagem encontrada (match exato direto): ${exactPath}`);
           return exactPath;
         }
+      } else {
+        console.log(`[findImageFile] Diretório não existe: ${dir}`);
       }
     }
     
     // Procurar recursivamente em todos os subdiretórios
-    console.log(`Procurando em todo o diretório uploads...`);
+    console.log(`[findImageFile] Procurando recursivamente em /uploads para ${filename}...`);
     
     // Começar do diretório de uploads
     const uploadsDir = path.join(process.cwd(), 'uploads');
@@ -210,14 +215,14 @@ export async function findImageFile(filename: string): Promise<string | null> {
     const foundFile = await searchFileRecursively(uploadsDir, filename);
     
     if (foundFile) {
-      console.log(`Imagem encontrada (match exato) em uploads: ${foundFile}`);
+      console.log(`[findImageFile] Imagem encontrada (recursivo): ${foundFile}`);
       return foundFile;
     }
     
-    console.log(`Imagem não encontrada: ${filename}`);
+    console.log(`[findImageFile] Imagem NÃO encontrada: ${filename}`);
     return null;
   } catch (error) {
-    console.error(`Erro ao procurar arquivo de imagem:`, error);
+    console.error(`[findImageFile] Erro CRÍTICO ao procurar arquivo de imagem ${filename}:`, error);
     return null;
   }
 }
@@ -228,12 +233,21 @@ export async function findImageFile(filename: string): Promise<string | null> {
 async function searchFileRecursively(dir: string, filename: string): Promise<string | null> {
   try {
     // Verificar se o diretório existe
+    console.log(`[searchFileRecursively] Verificando diretório: ${dir}`);
     if (!await existsAsync(dir)) {
+       console.log(`[searchFileRecursively] Diretório não existe: ${dir}`);
       return null;
     }
     
     // Listar arquivos e subdiretórios
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+      console.log(`[searchFileRecursively] Encontradas ${entries.length} entradas em ${dir}`);
+    } catch (readDirError) {
+      console.error(`[searchFileRecursively] Erro ao ler diretório ${dir}:`, readDirError);
+      return null; // Retorna null se não puder ler o diretório
+    }
     
     // Verificar arquivos neste diretório primeiro
     for (const entry of entries) {

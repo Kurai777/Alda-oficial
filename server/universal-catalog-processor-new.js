@@ -141,8 +141,8 @@ function isIgnorableLine(row, columnMapping) {
   if (significantFields < 2) {
     reason = 'Poucos campos significativos';
     console.log(`Ignorando linha (${reason}):`, JSON.stringify(row));
-    return true;
-  }
+        return true;
+      }
 
   // 2. Colunas essenciais (Nome E Código) parecem cabeçalho/keyword?
   const nameLooksBad = !nameVal || nameVal.length < 2 || looksLikeHeaderOrKeyword(nameVal);
@@ -159,8 +159,8 @@ function isIgnorableLine(row, columnMapping) {
   if (nameLooksBad && !codeVal) {
       reason = `Nome inválido ('${nameVal}') e Código ausente`;
       console.log(`Ignorando linha (${reason}):`, JSON.stringify(row));
-      return true;
-  }
+      return true; 
+    }
    if (codeLooksBad && !nameVal) {
       reason = `Código inválido ('${codeVal}') e Nome ausente`;
       console.log(`Ignorando linha (${reason}):`, JSON.stringify(row));
@@ -171,8 +171,8 @@ function isIgnorableLine(row, columnMapping) {
   if (priceIsPresent && nameLooksBad && codeLooksBad) {
        reason = `Preço presente mas Nome ('${nameVal}') e Código ('${codeVal}') inválidos (provável total)`;
        console.log(`Ignorando linha (${reason}):`, JSON.stringify(row));
-       return true;
-  }
+      return true;
+    }
 
   // 5. Verificar se *todas* as colunas mapeadas contêm keywords (forte indício de cabeçalho)
   let mappedColsAreKeywords = true;
@@ -194,7 +194,7 @@ function isIgnorableLine(row, columnMapping) {
   }
 
   // Se passou por tudo, provavelmente é uma linha de produto válida
-  return false; 
+  return false;
 }
 
 /**
@@ -458,7 +458,7 @@ export async function processExcelUniversal(filePath, userId, catalogId) {
     
     if (!rawData || rawData.length === 0) throw new Error('Planilha vazia ou inválida');
     console.log(`Extraídos ${rawData.length} registros da planilha`);
-
+    
     const columnMapping = detectColumnMapping(rawData);
     console.log("\nMapeamento de colunas detectado:", columnMapping);
 
@@ -537,7 +537,7 @@ export async function processExcelUniversal(filePath, userId, catalogId) {
          productCode = `AUTOGEN-${rowNum}-${Date.now().toString().slice(-5)}`; 
          console.log(`Código final gerado: \"${productCode}\"`);
       }
-
+      
       const category = inferCategory(potentialName, potentialDescription);
       const materials = extractMaterials(potentialDescription || potentialName);
       
@@ -569,7 +569,7 @@ export async function processExcelUniversal(filePath, userId, catalogId) {
     if (products.length === 0 && rawData.length > 0) {
         console.warn("ATENÇÃO: NENHUM produto válido foi extraído da planilha. Verifique o arquivo ou a lógica de detecção/validação.");
     }
-
+    
     return products;
     
   } catch (error) {

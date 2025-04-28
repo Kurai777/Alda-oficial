@@ -7,232 +7,90 @@
  */
 
 import { useState, useEffect } from 'react';
-import { Loader2, ImageOff, Image as ImageIcon } from 'lucide-react';
+import { Loader2, ImageOff } from 'lucide-react';
 
 interface ProductImageProps {
-  productId: number;
-  imageUrl?: string; // URL da imagem se já disponível
+  productId: number; // Mantido caso seja útil para debug ou alt text
+  imageUrl?: string; // URL da imagem (espera-se URL do S3)
   altText?: string;
   className?: string;
   onLoad?: () => void;
   onError?: () => void;
   width?: number | string;
   height?: number | string;
-  disableVerification?: boolean; // Opção para desativar verificação (usar URL diretamente)
-  forceCacheBusting?: boolean; // Opção para forçar cache busting (evitar cache do navegador)
+  // As props disableVerification e forceCacheBusting não são mais necessárias
 }
 
 export default function ImageWithVerification({
-  productId,
+  productId, // productId mantido para logs
   imageUrl: initialImageUrl,
-  altText = "Imagem do produto",
+  altText = `Imagem produto ${productId}`,
   className = "",
   onLoad,
   onError,
   width,
   height,
-  disableVerification = false,
-  forceCacheBusting = false
 }: ProductImageProps) {
-  const [imageUrl, setImageUrl] = useState<string | null>(initialImageUrl || null);
-  const [loading, setLoading] = useState(!initialImageUrl);
-  const [error, setError] = useState(false);
-  const [isShared, setIsShared] = useState(false);
-  
-  // Efeito para verificar a imagem ao montar o componente
+  const [currentImageUrl, setCurrentImageUrl] = useState<string | null>(initialImageUrl || null);
+  const [loading, setLoading] = useState<boolean>(true); // Começa carregando
+  const [error, setError] = useState<boolean>(false);
+
   useEffect(() => {
-    // Se uma URL foi fornecida e a verificação está desativada, usar diretamente
-    if ((initialImageUrl && disableVerification) || !productId) {
-      setLoading(false);
-      return;
-    }
-    
-    // Se temos uma nova URL inicial, use-a
-    if (initialImageUrl && initialImageUrl !== imageUrl) {
-      setImageUrl(initialImageUrl);
-      setLoading(false);
-      return;
-    }
-    
-    let isMounted = true;
-    const controller = new AbortController();
-    
-    async function verifyImage() {
-      try {
-        if (!isMounted) return;
-        setLoading(true);
-        setError(false);
-        
-        // Se já temos uma URL e não é uma URL relativa, podemos usá-la diretamente
-        if (initialImageUrl && (initialImageUrl.startsWith('http') || initialImageUrl.startsWith('data:'))) {
-          if (isMounted) {
-            setImageUrl(initialImageUrl);
-            setLoading(false);
-          }
-          return;
-        }
-        
-        // Verificar a disponibilidade da imagem
-        const response = await fetch(`/api/verify-product-image/${productId}`, {
-          method: 'GET',
-          signal: controller.signal
-        });
-        
-        if (!isMounted) return;
-        
-        if (response.ok) {
-          const data = await response.json();
-          
-          if (data.hasImage) {
-            // Se a imagem existe, verificar se é compartilhada
-            if (data.isShared) {
-              setIsShared(true);
-              
-              // Criar uma cópia única para este produto
-              try {
-                const uniqueResponse = await fetch(`/api/create-unique-image/${productId}`, {
-                  method: 'POST',
-                  signal: controller.signal
-                });
-                
-                if (!isMounted) return;
-                
-                if (uniqueResponse.ok) {
-                  const uniqueData = await uniqueResponse.json();
-                  if (uniqueData.success) {
-                    // Usar a URL única criada com cache busting
-                    setImageUrl(`/api/product-image/${productId}?t=${Date.now()}`);
-                  } else {
-                    // Mesmo com erro, usar a URL original
-                    setImageUrl(initialImageUrl || `/api/product-image/${productId}`);
-                  }
-                } else {
-                  setImageUrl(initialImageUrl || `/api/product-image/${productId}`);
-                }
-              } catch (err) {
-                console.error(`Erro ao criar imagem única para produto ${productId}:`, err);
-                if (isMounted) {
-                  setImageUrl(initialImageUrl || `/api/product-image/${productId}`);
-                }
-              }
-            } else {
-              // Imagem não compartilhada, usar diretamente
-              setImageUrl(initialImageUrl || `/api/product-image/${productId}`);
-            }
-          } else {
-            // Imagem não disponível, verificar se temos uma URL alternativa
-            if (initialImageUrl) {
-              setImageUrl(initialImageUrl);
-            } else {
-              setImageUrl(null);
-              setError(true);
-            }
-          }
-        } else {
-          // Erro na requisição, verificar se temos uma URL alternativa
-          if (initialImageUrl) {
-            setImageUrl(initialImageUrl);
-          } else {
-            setImageUrl(null);
-            setError(true);
-          }
-        }
-      } catch (err) {
-        console.error(`Erro ao verificar imagem para produto ${productId}:`, err);
-        
-        // Em caso de erro, usar a URL inicial se disponível
-        if (isMounted) {
-          if (initialImageUrl) {
-            setImageUrl(initialImageUrl);
-          } else {
-            setImageUrl(null);
-            setError(true);
-          }
-        }
-      } finally {
-        if (isMounted) {
-          setLoading(false);
-        }
-      }
-    }
-    
-    verifyImage();
-    
-    return () => {
-      isMounted = false;
-      // Usar try-catch apenas se absolutamente necessário para o abortar
-    controller.abort();
-    };
-  }, [productId, initialImageUrl, disableVerification]);
-  
-  // Quando a imagem é carregada com sucesso
+    // Resetar estados quando a URL inicial mudar
+    setCurrentImageUrl(initialImageUrl || null);
+    setLoading(!!initialImageUrl); // Carrega se tiver URL inicial
+    setError(false);
+  }, [initialImageUrl]);
+
   const handleImageLoad = () => {
+    // console.log(`Imagem carregada para produto ${productId}: ${currentImageUrl}`);
+    setLoading(false);
+    setError(false);
     onLoad?.();
   };
-  
-  // Quando ocorre um erro ao carregar a imagem
+
   const handleImageError = () => {
+    console.error(`Erro ao carregar imagem para produto ${productId}: ${currentImageUrl}`);
+    setLoading(false);
     setError(true);
     onError?.();
   };
-  
-  // Renderização do estado de carregamento
-  if (loading) {
-    return (
+
+  // Não exibir nada ou loader se não houver URL inicial (ou enquanto determina)
+  if (!currentImageUrl && loading) {
+     return (
       <div className={`flex items-center justify-center bg-gray-100 ${className}`} style={{ width, height }}>
         <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
       </div>
     );
   }
-  
-  // Renderização do estado de erro
-  if (error || !imageUrl) {
-    // Determinar o placeholder com base na categoria (futuro)
+
+  // Exibir placeholder se houve erro ou não há URL
+  if (error || !currentImageUrl) {
     return (
-      <div className={`flex flex-col items-center justify-center bg-gray-100 ${className}`} style={{ width, height }}>
+      <div className={`flex flex-col items-center justify-center bg-gray-100 text-center ${className}`} style={{ width, height }}>
         <ImageOff className="h-10 w-10 mb-2 text-gray-400" />
         <span className="text-xs text-gray-500">Imagem indisponível</span>
       </div>
     );
   }
-  
+
   // Renderização da imagem
-  // Adicionar cache busting à URL da imagem se necessário
-  let finalImageUrl = imageUrl;
-  
-  // Verifica se a URL é relativa e não tem protocolo (http://, https://)
-  if (imageUrl && !imageUrl.startsWith('http') && !imageUrl.startsWith('data:')) {
-    // Garante que a URL começa com / para caminhos absolutos no servidor
-    finalImageUrl = imageUrl.startsWith('/') ? imageUrl : `/${imageUrl}`;
-    
-    // Remova possíveis duplas barras, como //uploads
-    finalImageUrl = finalImageUrl.replace('//', '/');
-  }
-  
-  // Adiciona cache busting
-  if (forceCacheBusting && finalImageUrl) {
-    // Adicionar ou atualizar parâmetro de timestamp para evitar cache do navegador
-    finalImageUrl = finalImageUrl.includes('?') 
-      ? `${finalImageUrl}&t=${Date.now()}` 
-      : `${finalImageUrl}?t=${Date.now()}`;
-  }
-  
-  console.log(`Carregando imagem para produto ${productId}: ${finalImageUrl}`);
-  
+  // Adicionar timestamp simples para cache busting (pode ser removido se não necessário)
+  const finalImageUrl = `${currentImageUrl}?t=${Date.now()}`;
+  // console.log(`Renderizando imagem para produto ${productId}: ${finalImageUrl}`);
+
   return (
     <div className={`relative ${className}`}>
-      {isShared && (
-        <div className="absolute top-1 right-1 bg-yellow-400 text-xs px-1 py-0.5 rounded-sm">
-          Única
-        </div>
-      )}
+      {/* Remover indicador de imagem "Única" pois a lógica foi removida */}
       <img
-        src={finalImageUrl}
+        key={finalImageUrl} // Adicionar key para forçar re-render se URL mudar com timestamp
+        src={finalImageUrl} 
         alt={altText}
-        className={className}
+        className={className} // Aplicar a classe aqui
         onLoad={handleImageLoad}
         onError={handleImageError}
-        style={{ width, height }}
+        style={{ width, height, objectFit: 'contain' }} // Usar objectFit para evitar distorção
       />
     </div>
   );

@@ -717,17 +717,18 @@ export class DatabaseStorage implements IStorage {
       
       if (catalogId) {
         console.log(`Filtrando por catalogId=${catalogId}`);
-        const result = await db.select().from(products).where(
-          and(
-            eq(products.userId, parsedUserId),
-            eq(products.catalogId, catalogId)
-          )
+        const query = db.select().from(products).where(
+          and(eq(products.userId, parsedUserId), eq(products.catalogId, catalogId))
         );
+        console.log(`Query SQL (aproximada): ${query.toSQL ? query.toSQL().sql : 'Não disponível'}`);
+        const result = await query;
         console.log(`Encontrados ${result.length} produtos com catalogId=${catalogId}`);
         return result;
       } else {
         console.log(`Retornando todos os produtos do usuário ${parsedUserId}`);
-        const result = await db.select().from(products).where(eq(products.userId, parsedUserId));
+        const query = db.select().from(products).where(eq(products.userId, parsedUserId));
+        console.log(`Query SQL (aproximada): ${query.toSQL ? query.toSQL().sql : 'Não disponível'}`);
+        const result = await query;
         console.log(`Encontrados ${result.length} produtos`);
         return result;
       }

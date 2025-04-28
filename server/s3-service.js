@@ -188,16 +188,15 @@ export async function uploadBufferToS3(buffer, filename, userId, category, subId
       ContentType: String(contentType)
     };
     
-    // Remoção da propriedade ACL que pode causar problemas
-    // ACL: 'private' é agora o padrão no S3
-    
     const command = new PutObjectCommand(params);
     
     console.log(`Enviando arquivo para S3: ${s3Key} (${formatBytes(buffer.length)})`);
     await s3Client.send(command);
     console.log(`Upload concluído para: ${s3Key}`);
     
-    return s3Key;
+    // Construir a URL pública completa
+    const publicUrl = `https://${S3_BUCKET}.s3.${getNormalizedRegion()}.amazonaws.com/${s3Key}`;
+    return publicUrl; // Retorna a URL completa
   } catch (error) {
     console.error('Erro ao fazer upload para S3:', error, error.stack);
     throw error;

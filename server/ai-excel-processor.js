@@ -21,6 +21,7 @@ Instruções:
     *   \`description\`: A descrição completa do produto. Se não houver, use o nome.
     *   \`manufacturer\`: O fabricante ou marca, se disponível.
     *   \`location\`: A localização física (ex: "2º Piso", "Depósito"), se disponível.
+    *   \`imageColumn\`: A letra da coluna que contém as imagens (ex: \"D\"). Se não houver, retorne null.
 4.  **Formato de Saída:** Retorne os dados extraídos como um objeto JSON contendo uma única chave "products" cujo valor é um array JSON. Cada objeto no array deve representar um produto e conter *todos* os campos extraídos na etapa 3 (incluindo excelRowNumber).
     Exemplo de Saída:
     { "products": [ { "excelRowNumber": 3, "name": "Sofá Sleep", "code": "SLE1823313", "price": 2269100, "description": "Tecido 3/83\\n3 mod de 1.00m\\nc/ braço de 8cm", "manufacturer": "Enobli", "location": "2º Piso" }, ... ] }
@@ -31,7 +32,7 @@ Instruções:
  * Processa um arquivo Excel usando IA para extrair produtos.
  * @param {string} filePath Caminho para o arquivo Excel.
  * @param {string} [userPrompt] Prompt customizado do usuário (opcional).
- * @returns {Promise<Array<object>>} Um array de objetos de produto extraídos.
+ * @returns {Promise<{products: Array<object>, imageColumn: string | null}>} Um objeto contendo a lista de produtos extraídos e a coluna de imagem identificada.
  */
 export async function processExcelWithAI(filePath, userPrompt = null) {
   console.log(`\n=== INICIANDO PROCESSAMENTO EXCEL COM IA ===`);
@@ -50,7 +51,7 @@ export async function processExcelWithAI(filePath, userPrompt = null) {
     const rawData = XLSX.utils.sheet_to_json(sheet, { header: 'A', defval: null }).slice(0, MAX_ROWS_TO_SEND);
     if (!rawData || rawData.length === 0) {
       console.log(`Planilha vazia ou sem dados nas primeiras ${MAX_ROWS_TO_SEND} linhas.`);
-      return [];
+      return { products: [], imageColumn: null };
     }
 
     // Adicionar o número da linha original aos dados brutos enviados para a IA
@@ -90,6 +91,7 @@ export async function processExcelWithAI(filePath, userPrompt = null) {
 
     // Tentar parsear o JSON da resposta
     let extractedProducts = [];
+    let identifiedImageColumn = null; // Valor padrão
     try {
       const jsonResponse = JSON.parse(aiResponseContent);
 
@@ -114,6 +116,9 @@ export async function processExcelWithAI(filePath, userPrompt = null) {
         console.log("Amostra da IA (com excelRowNumber?):", JSON.stringify(extractedProducts[0], null, 2));
       }
 
+      identifiedImageColumn = jsonResponse.imageColumn || null; // Extrai a coluna da imagem
+      console.log(`IA identificou a coluna de imagens como: ${identifiedImageColumn}`);
+
     } catch (parseError) {
       console.error("Erro ao parsear JSON da resposta da IA:", parseError);
       console.error("Conteúdo recebido da IA:", aiResponseContent);
@@ -134,14 +139,15 @@ export async function processExcelWithAI(filePath, userPrompt = null) {
         category: p.category || '', 
         materials: p.materials || [],
         colors: p.colors || [],
-        isEdited: false
+        isEdited: false,
+        imageColumn: p.imageColumn || null
       }));
 
     console.log(`Total de produtos válidos após limpeza: ${validProducts.length}`);
-    return validProducts;
+    return { products: validProducts, imageColumn: identifiedImageColumn };
 
   } catch (error) {
     console.error('Erro CRÍTICO durante o processamento Excel com IA:', error);
-    return [];
+    return { products: [], imageColumn: null };
   }
 }
