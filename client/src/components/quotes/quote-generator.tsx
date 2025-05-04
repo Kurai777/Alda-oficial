@@ -7,10 +7,13 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
-import { X, FileText, PaintBucket, Image } from "lucide-react";
+import { X, FileText, PaintBucket, Image, Plus, Minus } from "lucide-react";
 import { Product } from "@shared/schema";
 import { useQueryClient } from "@tanstack/react-query";
 import jsPDF from "jspdf";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Checkbox } from "@/components/ui/checkbox";
 
 interface QuoteItem {
   product: Product;
@@ -34,13 +37,24 @@ export default function QuoteGenerator({ items = [], onClearItems }: QuoteGenera
   const [isGenerating, setIsGenerating] = useState(false);
   const [isMoodboardGenerating, setIsMoodboardGenerating] = useState(false);
   const [isRenderGenerating, setIsRenderGenerating] = useState(false);
+  
+  // Estados para condições de pagamento
+  const [paymentInstallments, setPaymentInstallments] = useState<string>("à vista");
+  const [paymentMethod, setPaymentMethod] = useState<string>("boleto");
+  const [applyCashDiscount, setApplyCashDiscount] = useState<boolean>(true);
+  
   const { toast } = useToast();
   const { user } = useAuth();
   const queryClient = useQueryClient();
 
   // Update quote items when items prop changes
   useEffect(() => {
-    setQuoteItems(items);
+    // Garantir que todos os itens tenham uma quantidade definida
+    const itemsWithQuantity = items.map(item => ({
+      ...item,
+      quantity: item.quantity || 1
+    }));
+    setQuoteItems(itemsWithQuantity);
   }, [items]);
 
   const handleRemoveItem = (index: number) => {
@@ -48,9 +62,30 @@ export default function QuoteGenerator({ items = [], onClearItems }: QuoteGenera
     newItems.splice(index, 1);
     setQuoteItems(newItems);
   };
+  
+  const handleUpdateQuantity = (index: number, newQuantity: number) => {
+    if (newQuantity < 1) return; // Não permitir quantidades menores que 1
+    
+    const newItems = [...quoteItems];
+    newItems[index] = {
+      ...newItems[index],
+      quantity: newQuantity
+    };
+    setQuoteItems(newItems);
+  };
 
   const getTotalPrice = () => {
     return quoteItems.reduce((total, item) => total + (item.product.price * item.quantity), 0);
+  };
+  
+  // Calcular valor final com desconto à vista (10%)
+  const getFinalPrice = () => {
+    const total = getTotalPrice();
+    // Aplicar desconto de 10% se for pagamento à vista e o desconto estiver ativado
+    if (paymentInstallments === "à vista" && applyCashDiscount) {
+      return Math.round(total * 0.9); // 10% de desconto
+    }
+    return total;
   };
 
   const formatPrice = (price: number) => {
@@ -120,6 +155,11 @@ export default function QuoteGenerator({ items = [], onClearItems }: QuoteGenera
           quantity: item.quantity || 1 // Garantir que sempre tem uma quantidade
         })),
         totalPrice: getTotalPrice(),
+        finalPrice: getFinalPrice(),
+        paymentInstallments,
+        paymentMethod,
+        applyCashDiscount,
+        discountPercentage: (paymentInstallments === "à vista" && applyCashDiscount) ? 10 : 0,
       };
       
       // --- MODIFICADO: Chamar API Backend para gerar PDF ---
@@ -336,6 +376,35 @@ export default function QuoteGenerator({ items = [], onClearItems }: QuoteGenera
                             {formatPrice(item.product.price)}
                           </span>
                         </div>
+                        <div className="flex items-center justify-between mt-2 pt-2 border-t border-gray-100">
+                          <div className="flex items-center gap-1">
+                            <Label className="text-xs text-gray-500">Quantidade:</Label>
+                            <div className="flex items-center border rounded-md">
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="h-7 w-7"
+                                onClick={() => handleUpdateQuantity(index, Math.max(1, (item.quantity || 1) - 1))}
+                              >
+                                <Minus className="h-3 w-3" />
+                              </Button>
+                              <span className="w-8 text-center text-sm">{item.quantity || 1}</span>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="h-7 w-7"
+                                onClick={() => handleUpdateQuantity(index, (item.quantity || 1) + 1)}
+                              >
+                                <Plus className="h-3 w-3" />
+                              </Button>
+                            </div>
+                          </div>
+                          <span className="font-medium text-sm">
+                            Total: {formatPrice(item.product.price * (item.quantity || 1))}
+                          </span>
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -407,6 +476,82 @@ export default function QuoteGenerator({ items = [], onClearItems }: QuoteGenera
                     value={notes}
                     onChange={(e) => setNotes(e.target.value)}
                   />
+                </div>
+                
+                <div className="mt-5 space-y-4">
+                  <div>
+                    <Label className="text-xs text-gray-500 mb-1">Condições de Pagamento</Label>
+                    <Select
+                      value={paymentInstallments}
+                      onValueChange={setPaymentInstallments}
+                    >
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder="Selecione a condição" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="à vista">À vista</SelectItem>
+                        <SelectItem value="entrada + 1x">Entrada + 1x</SelectItem>
+                        <SelectItem value="entrada + 2x">Entrada + 2x</SelectItem>
+                        <SelectItem value="entrada + 3x">Entrada + 3x</SelectItem>
+                        <SelectItem value="entrada + 4x">Entrada + 4x</SelectItem>
+                        <SelectItem value="entrada + 5x">Entrada + 5x</SelectItem>
+                        <SelectItem value="5x sem entrada">5x sem entrada</SelectItem>
+                        <SelectItem value="10x sem entrada">10x sem entrada</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  
+                  <div>
+                    <Label className="text-xs text-gray-500 mb-1">Método de Pagamento</Label>
+                    <RadioGroup 
+                      value={paymentMethod}
+                      onValueChange={setPaymentMethod}
+                      className="flex flex-col space-y-1"
+                    >
+                      <div className="flex items-center space-x-2">
+                        <RadioGroupItem value="boleto" id="boleto" />
+                        <Label htmlFor="boleto">Boleto</Label>
+                      </div>
+                      <div className="flex items-center space-x-2">
+                        <RadioGroupItem value="cartao" id="cartao" />
+                        <Label htmlFor="cartao">Cartão de Crédito</Label>
+                      </div>
+                      <div className="flex items-center space-x-2">
+                        <RadioGroupItem value="cheque" id="cheque" />
+                        <Label htmlFor="cheque">Cheque</Label>
+                      </div>
+                    </RadioGroup>
+                  </div>
+                  
+                  {paymentInstallments === "à vista" && (
+                    <div className="flex items-center space-x-2">
+                      <Checkbox 
+                        id="cash-discount"
+                        checked={applyCashDiscount}
+                        onCheckedChange={(checked) => setApplyCashDiscount(checked as boolean)}
+                      />
+                      <Label htmlFor="cash-discount" className="text-sm">
+                        Aplicar desconto de 10% para pagamento à vista
+                      </Label>
+                    </div>
+                  )}
+                  
+                  {quoteItems.length > 0 && paymentInstallments === "à vista" && applyCashDiscount && (
+                    <div className="p-2 bg-green-50 border border-green-100 rounded-md">
+                      <div className="flex justify-between items-center">
+                        <span className="text-sm text-gray-700">Subtotal:</span>
+                        <span className="text-sm font-medium">{formatPrice(getTotalPrice())}</span>
+                      </div>
+                      <div className="flex justify-between items-center mt-1">
+                        <span className="text-sm text-gray-700">Desconto (10%):</span>
+                        <span className="text-sm font-medium text-green-600">-{formatPrice(getTotalPrice() * 0.1)}</span>
+                      </div>
+                      <div className="flex justify-between items-center mt-1 pt-1 border-t border-green-100">
+                        <span className="text-sm font-medium text-gray-700">Total com desconto:</span>
+                        <span className="text-sm font-bold">{formatPrice(getFinalPrice())}</span>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
               
