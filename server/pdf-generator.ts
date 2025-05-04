@@ -445,6 +445,55 @@ export async function generateQuotePdfWithPuppeteer(quoteData: QuoteDataInput, c
   console.log("Lançando Puppeteer...");
   let browser;
   try {
+    // Função para localizar o binário do Chromium no sistema
+    const findChromiumExecutable = () => {
+      const { execSync } = require('child_process');
+      try {
+        // Tenta encontrar o caminho do chromium usando 'which'
+        const chromiumPath = execSync('which chromium').toString().trim();
+        console.log("Caminho do Chromium detectado:", chromiumPath);
+        
+        if (require('fs').existsSync(chromiumPath)) {
+          return chromiumPath;
+        }
+      } catch (err) {
+        console.error("Erro ao localizar chromium com 'which':", err.message);
+      }
+      
+      // Caminhos comuns do Chromium em ambientes Replit/Nix
+      const possiblePaths = [
+        '/nix/store/0s8gfj0rrdgw5pl1v72cf0zk8qbjl09q-chromium-115.0.5790.170/bin/chromium',
+        '/usr/bin/chromium',
+        '/usr/bin/chromium-browser',
+        '/nix/store/*/chromium*/bin/chromium'
+      ];
+      
+      // Verificar caminhos conhecidos
+      for (const path of possiblePaths) {
+        if (path.includes('*')) {
+          try {
+            // Se o caminho contém wildcards, usar glob
+            const matches = execSync(`ls ${path} 2>/dev/null || echo ""`).toString().trim().split('\n');
+            if (matches[0]) {
+              console.log("Chromium encontrado via glob:", matches[0]);
+              return matches[0];
+            }
+          } catch (e) {
+            // Ignorar erros de glob
+          }
+        } else if (require('fs').existsSync(path)) {
+          console.log("Chromium encontrado via caminho fixo:", path);
+          return path;
+        }
+      }
+      
+      console.log("Nenhum executável do Chromium encontrado, usando undefined");
+      return undefined;
+    };
+    
+    const chromiumPath = findChromiumExecutable();
+    console.log("Caminho do Chromium a ser usado:", chromiumPath);
+
     // Flags adicionais para melhorar compatibilidade em ambiente Replit
     const puppeteerArgs = [
       '--no-sandbox',
@@ -453,14 +502,19 @@ export async function generateQuotePdfWithPuppeteer(quoteData: QuoteDataInput, c
       '--single-process',
       '--no-zygote',
       '--disable-gpu',
-      '--disable-accelerated-2d-canvas'
+      '--disable-accelerated-2d-canvas',
+      '--disable-software-rasterizer'
     ]; 
-    console.log("Args Puppeteer:", puppeteerArgs);
+    
+    console.log("Args Puppeteer:", puppeteerArgs.join(' '));
+    
+    // Configuração específica para ambiente Replit
     browser = await puppeteer.launch({ 
-        headless: true, // Modo headless padrão para compatibilidade
+        headless: true,
         args: puppeteerArgs,
-        timeout: 30000, // Aumentar timeout para 30 segundos
-        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined 
+        timeout: 60000, // Timeout mais alto (60 segundos)
+        executablePath: chromiumPath,
+        ignoreDefaultArgs: ['--disable-extensions']
     });
     console.log("Navegador lançado.");
     const page = await browser.newPage();
