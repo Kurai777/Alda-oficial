@@ -206,7 +206,7 @@ export async function registerRoutes(app: Express): Promise<void> {
   // NOVAS ROTAS DE AUTENTICAÇÃO (SESSÃO + BCRYPT)
   // ========================================
 
-  // Registro de Usuário
+  // Registro de Usuário (rota original)
   app.post("/backend/auth/register", async (req: Request, res: Response) => {
     try {
       const { email, password, name, companyName } = req.body;
@@ -373,7 +373,129 @@ export async function registerRoutes(app: Express): Promise<void> {
   });
   // --- FIM DA ROTA PUT --- 
 
-  // Logout de Usuário
+  // ===================================================
+  // ADICIONAR ROTAS COMPATÍVEIS COM O CLIENTE (/api/...)
+  // ===================================================
+
+  // Registro de Usuário (rota compatível)
+  app.post("/api/register", async (req: Request, res: Response) => {
+    try {
+      const { email, password, name, companyName } = req.body;
+
+      if (!email || !password || !name) {
+        return res.status(400).json({ message: "Email, senha e nome são obrigatórios" });
+      }
+
+      // Hash da senha
+      const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
+
+      // Criar usuário no banco de dados
+      const user = await storage.createUser({
+        email,
+        password: hashedPassword,
+        name,
+        companyName: companyName || "Empresa Padrão",
+      });
+
+      // Iniciar sessão automaticamente após registro
+      req.session.userId = user.id;
+      console.log(`Usuário ${user.id} registrado e sessão iniciada via /api/register.`);
+
+      return res.status(201).json({
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        companyName: user.companyName
+      });
+    } catch (error) {
+      console.error("Erro ao registrar usuário via /api/register:", error);
+      return res.status(500).json({ message: "Erro interno ao registrar usuário" });
+    }
+  });
+
+  // Login de Usuário (rota compatível)
+  app.post("/api/login", async (req: Request, res: Response) => {
+    try {
+      const { email, password } = req.body;
+
+      if (!email || !password) {
+        return res.status(400).json({ message: "Email e senha são obrigatórios" });
+      }
+
+      // Buscar usuário pelo email
+      const user = await storage.getUserByEmail(email);
+      if (!user) {
+        console.log(`Tentativa de login falhou: Email ${email} não encontrado.`);
+        return res.status(401).json({ message: "Credenciais inválidas" });
+      }
+
+      const isPasswordValid = await bcrypt.compare(password, user.password);
+      if (!isPasswordValid) {
+        console.log(`Tentativa de login falhou: Senha incorreta para ${email}.`);
+        return res.status(401).json({ message: "Credenciais inválidas" });
+      }
+      
+      // Iniciar sessão
+      req.session.userId = user.id;
+      console.log(`Usuário ${user.id} logado e sessão iniciada via /api/login.`);
+
+      return res.status(200).json({
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        companyName: user.companyName
+      });
+    } catch (error) {
+      console.error("Erro ao fazer login via /api/login:", error);
+      return res.status(500).json({ message: "Erro interno durante o login" });
+    }
+  });
+
+  // Obter Usuário Logado (rota compatível)
+  app.get("/api/user", async (req: Request, res: Response) => {
+    if (!req.session || !req.session.userId) {
+      return res.status(401).json({ message: "Usuário não autenticado" });
+    }
+    
+    try {
+      const user = await storage.getUser(req.session.userId);
+      if (!user) {
+        console.error(`Sessão válida (userId: ${req.session.userId}) mas usuário não encontrado no DB.`);
+        req.session.destroy(() => {});
+        return res.status(401).json({ message: "Usuário da sessão não encontrado." });
+      }
+
+      console.log(`Usuário ${user.id} autenticado via sessão em /api/user.`);
+      return res.status(200).json({
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        companyName: user.companyName
+      });
+    } catch (error) {
+      console.error("Erro ao obter usuário (/api/user):", error);
+      return res.status(500).json({ message: "Erro ao obter dados do usuário" });
+    }
+  });
+
+  // Logout de Usuário (rota compatível)
+  app.post("/api/logout", (req: Request, res: Response) => {
+    if (req.session) {
+      console.log(`Deslogando usuário ${req.session.userId} via /api/logout`);
+      req.session.destroy((err) => {
+        if (err) {
+          console.error("Erro ao destruir sessão:", err);
+          return res.status(500).json({ message: "Erro ao encerrar sessão" });
+        }
+        res.clearCookie('connect.sid');
+        return res.status(200).json({ message: "Logout realizado com sucesso" });
+      });
+    } else {
+      return res.status(200).json({ message: "Nenhuma sessão ativa para encerrar" });
+    }
+  });
+
+  // Logout de Usuário (rota original)
   app.post("/backend/auth/logout", (req: Request, res: Response) => {
     if (req.session) {
       console.log(`Deslogando usuário ${req.session.userId}`);
