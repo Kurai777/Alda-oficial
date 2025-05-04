@@ -2,14 +2,14 @@ import { PDFDocument, StandardFonts, rgb, PDFFont, PDFPage } from 'pdf-lib';
 import { Product, User } from '@shared/schema'; // Importar User
 import { downloadFileFromS3 } from './s3-service'; 
 import { storage } from './storage'; // Para buscar descrição do produto
-import fs from 'fs/promises';
-import * as fsSync from 'fs'; // fs síncrono para verificações de existência de arquivos
+import * as fs from 'fs'; // Usar fs normal para ter acesso às funções sync
 import path from 'path';
 import handlebars from 'handlebars';
 import puppeteer from 'puppeteer';
 import { execSync } from 'child_process'; // Para comandos do sistema
 import htmlPdf from 'html-pdf'; // Alternativa leve ao Puppeteer
 import { promisify } from 'util';
+import { promises as fsPromises } from 'fs'; // Versão promise do fs
 
 // Helper para converter imagem do S3 para base64 para incluir no HTML
 async function getBase64ImageFromS3(imageUrl: string | null): Promise<string | null> {
@@ -453,8 +453,8 @@ export async function generateQuotePdfWithPuppeteer(quoteData: QuoteDataInput, c
   try {
     const templatePath = path.join(process.cwd(), 'server', 'templates', 'quote-template.hbs');
     console.log(`Carregando template de: ${templatePath}`);
-    // Usar a versão de promessa do fs.readFile
-    const fileContent = await fs.readFile(templatePath, { encoding: 'utf-8' });
+    // Usar a versão correta de fs.promises
+    const fileContent = await fsPromises.readFile(templatePath, 'utf-8');
     templateHtml = fileContent;
     console.log("Template HTML carregado com sucesso.");
   } catch (err) {
@@ -496,25 +496,75 @@ export async function generateQuotePdfWithPuppeteer(quoteData: QuoteDataInput, c
 
   let itemsWithDetails: any[] = [];
   try {
-      console.log(`Buscando detalhes para ${quoteData.items.length} itens...`);
+      console.log(`🔍 Buscando detalhes para ${quoteData.items.length} itens...`);
       itemsWithDetails = await Promise.all(quoteData.items.map(async (item, index) => {
         console.log(`  Item ${index + 1}: Buscando produto ID ${item.productId}`);
         const productDetails = await storage.getProduct(item.productId);
-        console.log(`  Item ${index + 1}: Detalhes ${productDetails ? 'encontrados' : 'NÃO encontrados'}`);
-        const imageBase64 = await getBase64ImageFromS3(productDetails?.imageUrl || null);
-        console.log(`  Item ${index + 1}: Imagem ${imageBase64 ? 'processada' : 'não encontrada/falhou'}`);
+        console.log(`  Item ${index + 1}: Detalhes ${productDetails ? 'encontrados ✓' : 'NÃO encontrados ✗'}`);
+        
+        // MÚLTIPLAS ESTRATÉGIAS PARA OBTER IMAGENS
+        let imageBase64 = null;
+        
+        // Estratégia 1: Usar a URL do produto do banco de dados
+        if (productDetails?.imageUrl) {
+          console.log(`  Item ${index + 1}: Tentando imageUrl do produto: ${productDetails.imageUrl}`);
+          imageBase64 = await getBase64ImageFromS3(productDetails.imageUrl);
+        }
+        
+        // Estratégia 2: Tentar buscar pelo código do produto
+        if (!imageBase64 && item.productCode) {
+          const codeImageUrl = `/api/images/products/by-code/${item.productCode}`;
+          console.log(`  Item ${index + 1}: Tentando URL por código: ${codeImageUrl}`);
+          imageBase64 = await getBase64ImageFromS3(codeImageUrl);
+        }
+        
+        // Estratégia 3: Tentar usar o ID do produto para construir um caminho alternativo
+        if (!imageBase64 && productDetails?.id) {
+          const idImageUrl = `/uploads/products/${productDetails.id}.jpg`;
+          console.log(`  Item ${index + 1}: Tentando URL por ID: ${idImageUrl}`);
+          imageBase64 = await getBase64ImageFromS3(idImageUrl);
+        }
+        
+        // Estratégia 4: Verificar se tem imagem secundária em additionalImages (se existir)
+        if (!imageBase64 && productDetails && 'additionalImages' in productDetails && 
+            Array.isArray((productDetails as any).additionalImages) && 
+            (productDetails as any).additionalImages.length > 0) {
+          console.log(`  Item ${index + 1}: Tentando imagem adicional`);
+          imageBase64 = await getBase64ImageFromS3((productDetails as any).additionalImages[0]);
+        }
+        
+        // Estratégia 5: Usar imagem de placeholder caso nenhuma das opções acima funcione
+        if (!imageBase64) {
+          const placeholderUrl = 'https://via.placeholder.com/150?text=Sem+Imagem';
+          console.log(`  Item ${index + 1}: Usando imagem de placeholder`);
+          try {
+            const response = await fetch(placeholderUrl);
+            if (response.ok) {
+              const buffer = await response.arrayBuffer();
+              imageBase64 = `data:image/png;base64,${Buffer.from(buffer).toString('base64')}`;
+            }
+          } catch (placeholderError) {
+            console.error(`Erro ao buscar placeholder: ${placeholderError}`);
+          }
+        }
+        
+        console.log(`  Item ${index + 1}: Status final da imagem: ${imageBase64 ? '✅ SUCESSO' : '❌ FALHA'}`);
+        
         return {
           ...item,
           description: productDetails?.description || '-', 
           imageBase64: imageBase64,
           productCode: item.productCode || '-', // Garantir que não é null
-          color: item.color || '-' // Garantir que não é null/undefined
+          color: item.color || '-', // Garantir que não é null/undefined
+          // Adicionar mais informações que podem ser úteis no template
+          category: productDetails?.category || null,
+          manufacturer: productDetails?.manufacturer || null
         };
       }));
-      console.log("Detalhes de todos os itens processados.");
+      console.log("✅ Detalhes de todos os itens processados.");
   } catch (err) {
-      console.error("Erro ao buscar detalhes dos produtos:", err);
-      throw new Error("Falha ao buscar informações dos produtos.");
+      console.error("❌ Erro ao buscar detalhes dos produtos:", err);
+      throw new Error("Falha ao buscar informações dos produtos para o PDF.");
   }
   
   const templateData: TemplateData = {
@@ -632,7 +682,8 @@ export async function generateQuotePdfWithHtmlPdf(quoteData: QuoteDataInput, com
   try {
     const templatePath = path.join(process.cwd(), 'server', 'templates', 'quote-template.hbs');
     console.log(`Carregando template de: ${templatePath}`);
-    const fileContent = await fs.readFile(templatePath, { encoding: 'utf-8' });
+    // Usar a versão correta de fs.promises
+    const fileContent = await fsPromises.readFile(templatePath, 'utf-8');
     templateHtml = fileContent;
     console.log("Template HTML carregado com sucesso.");
   } catch (err) {
@@ -671,25 +722,75 @@ export async function generateQuotePdfWithHtmlPdf(quoteData: QuoteDataInput, com
 
   let itemsWithDetails: any[] = [];
   try {
-      console.log(`Buscando detalhes para ${quoteData.items.length} itens...`);
+      console.log(`🔍 Buscando detalhes para ${quoteData.items.length} itens...`);
       itemsWithDetails = await Promise.all(quoteData.items.map(async (item, index) => {
         console.log(`  Item ${index + 1}: Buscando produto ID ${item.productId}`);
         const productDetails = await storage.getProduct(item.productId);
-        console.log(`  Item ${index + 1}: Detalhes ${productDetails ? 'encontrados' : 'NÃO encontrados'}`);
-        const imageBase64 = await getBase64ImageFromS3(productDetails?.imageUrl || null);
-        console.log(`  Item ${index + 1}: Imagem ${imageBase64 ? 'processada' : 'não encontrada/falhou'}`);
+        console.log(`  Item ${index + 1}: Detalhes ${productDetails ? 'encontrados ✓' : 'NÃO encontrados ✗'}`);
+        
+        // MÚLTIPLAS ESTRATÉGIAS PARA OBTER IMAGENS
+        let imageBase64 = null;
+        
+        // Estratégia 1: Usar a URL do produto do banco de dados
+        if (productDetails?.imageUrl) {
+          console.log(`  Item ${index + 1}: Tentando imageUrl do produto: ${productDetails.imageUrl}`);
+          imageBase64 = await getBase64ImageFromS3(productDetails.imageUrl);
+        }
+        
+        // Estratégia 2: Tentar buscar pelo código do produto
+        if (!imageBase64 && item.productCode) {
+          const codeImageUrl = `/api/images/products/by-code/${item.productCode}`;
+          console.log(`  Item ${index + 1}: Tentando URL por código: ${codeImageUrl}`);
+          imageBase64 = await getBase64ImageFromS3(codeImageUrl);
+        }
+        
+        // Estratégia 3: Tentar usar o ID do produto para construir um caminho alternativo
+        if (!imageBase64 && productDetails?.id) {
+          const idImageUrl = `/uploads/products/${productDetails.id}.jpg`;
+          console.log(`  Item ${index + 1}: Tentando URL por ID: ${idImageUrl}`);
+          imageBase64 = await getBase64ImageFromS3(idImageUrl);
+        }
+        
+        // Estratégia 4: Verificar se tem imagem secundária em additionalImages (se existir)
+        if (!imageBase64 && productDetails && 'additionalImages' in productDetails && 
+            Array.isArray((productDetails as any).additionalImages) && 
+            (productDetails as any).additionalImages.length > 0) {
+          console.log(`  Item ${index + 1}: Tentando imagem adicional`);
+          imageBase64 = await getBase64ImageFromS3((productDetails as any).additionalImages[0]);
+        }
+        
+        // Estratégia 5: Usar imagem de placeholder caso nenhuma das opções acima funcione
+        if (!imageBase64) {
+          const placeholderUrl = 'https://via.placeholder.com/150?text=Sem+Imagem';
+          console.log(`  Item ${index + 1}: Usando imagem de placeholder`);
+          try {
+            const response = await fetch(placeholderUrl);
+            if (response.ok) {
+              const buffer = await response.arrayBuffer();
+              imageBase64 = `data:image/png;base64,${Buffer.from(buffer).toString('base64')}`;
+            }
+          } catch (placeholderError) {
+            console.error(`Erro ao buscar placeholder: ${placeholderError}`);
+          }
+        }
+        
+        console.log(`  Item ${index + 1}: Status final da imagem: ${imageBase64 ? '✅ SUCESSO' : '❌ FALHA'}`);
+        
         return {
           ...item,
           description: productDetails?.description || '-', 
           imageBase64: imageBase64,
           productCode: item.productCode || '-',
-          color: item.color || '-'
+          color: item.color || '-',
+          // Adicionar mais informações que podem ser úteis no template
+          category: productDetails?.category || null,
+          manufacturer: productDetails?.manufacturer || null
         };
       }));
-      console.log("Detalhes de todos os itens processados.");
+      console.log("✅ Detalhes de todos os itens processados.");
   } catch (err) {
-      console.error("Erro ao buscar detalhes dos produtos:", err);
-      throw new Error("Falha ao buscar informações dos produtos.");
+      console.error("❌ Erro ao buscar detalhes dos produtos:", err);
+      throw new Error("Falha ao buscar informações dos produtos para o PDF.");
   }
   
   const templateData: TemplateData = {
