@@ -1042,5 +1042,65 @@ export async function registerRoutes(app: Express): Promise<void> {
     // ...
   });
   
+  // ========================================
+  // ROTA DE UPLOAD DE CATÁLOGO (compatibilidade com cliente)
+  // ========================================
+  app.post("/backend/catalogs/upload", upload.single('file'), async (req: Request, res: Response) => {
+    try {
+      console.log("Processando upload de catálogo via rota /backend/catalogs/upload...");
+      
+      if (!req.file) {
+        return res.status(400).json({ message: "Nenhum arquivo enviado" });
+      }
+      
+      // Extrair informações do arquivo
+      const file = req.file;
+      const filePath = file.path;
+      const fileName = file.originalname;
+      const fileType = fileName.split('.').pop()?.toLowerCase() || '';
+      
+      console.log(`Arquivo recebido: ${fileName} (${fileType}), salvo em: ${filePath}`);
+      
+      // Verificar quem está fazendo o upload (obter o ID do usuário)
+      const userId = req.body.userId || req.session.userId || 1;
+      console.log(`Upload realizado pelo usuário: ${userId}`);
+      
+      // Criar um novo catálogo no banco de dados
+      const catalog = await storage.createCatalog({
+        userId: typeof userId === 'string' ? parseInt(userId) : userId,
+        name: req.body.name || fileName,
+        description: req.body.description || `Catálogo importado de ${fileName}`,
+        createdAt: new Date(),
+        status: "processing",
+        fileUrl: filePath,
+        fileName: fileName,
+        // Se estiver usando S3, o campo s3Key já estará preenchido pelo middleware multer-s3
+        s3Key: (file as any).s3Key || null
+      });
+      
+      // ID do catálogo no banco relacional
+      const catalogId = catalog.id;
+      console.log(`Catálogo criado no banco de dados com ID: ${catalogId}`);
+      
+      // Retornar resposta de sucesso
+      res.status(200).json({
+        message: "Catálogo enviado com sucesso",
+        catalogId,
+        status: "processing"
+      });
+      
+      // Disparar processamento em background (não bloquear a resposta)
+      // Esta parte deve ser implementada de acordo com a lógica de processamento
+      // específica do seu aplicativo
+      
+    } catch (error) {
+      console.error("Erro ao processar upload de catálogo:", error);
+      res.status(500).json({
+        message: "Erro ao processar o arquivo",
+        error: (error as Error).message
+      });
+    }
+  });
+  
   console.log("Rotas da API configuradas no app com prefixo /backend.");
 }
