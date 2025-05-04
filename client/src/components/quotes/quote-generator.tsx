@@ -164,49 +164,21 @@ export default function QuoteGenerator({ items = [], onClearItems }: QuoteGenera
                             : 0,
       };
       
-      // --- MODIFICADO: Chamar API Backend para gerar PDF ---
-      console.log("Enviando dados para API gerar PDF (Puppeteer)...");
-      // MUDAR ROTA PARA USAR A VERSÃO PUPPETEER
-      const response = await apiRequest("POST", "/api/quotes/generate-pdf-puppeteer", quoteData, {
-        responseType: 'blob' // Indicar que esperamos um Blob como resposta
-      });
-
-      // Verificar se a resposta é um Blob (PDF)
-      if (!(response instanceof Blob)) {
-        // Tentar ler como JSON para pegar mensagem de erro do backend
-        let errorMessage = "Erro desconhecido ao gerar PDF.";
-        try {
-            // Se a resposta não for um blob, pode ser um JSON de erro
-            // Precisamos ler o blob como texto para ver o erro
-            const errorText = await response.text(); 
-            const errorJson = JSON.parse(errorText);
-            errorMessage = errorJson.message || errorMessage;
-        } catch (parseError) {
-            console.error("Não foi possível parsear resposta de erro como JSON", parseError);
-            // Se não for JSON, usar o statusText se disponível
-            // A API `apiRequest` pode precisar ser ajustada para expor statusText
-             errorMessage = `Erro ${response.status || 'desconhecido'} ao gerar PDF.`; 
-        }
-         throw new Error(errorMessage);
+      // --- MODIFICADO: Chamar API Backend para gerar PDF (versão simplificada) ---
+      console.log("Enviando dados para API gerar PDF simples...");
+      const response = await apiRequest("POST", "/api/pdf/generate", quoteData);
+      
+      // Verificar se a resposta é válida (não é mais um Blob, mas um JSON com URL)
+      if (!response || !response.url) {
+        throw new Error("Erro ao gerar PDF: Resposta inválida do servidor");
       }
-
-      // Criar URL temporária para o Blob (PDF)
-      const fileURL = window.URL.createObjectURL(response);
-      // Criar link temporário para download
-      const link = document.createElement('a');
-      link.href = fileURL;
-      const fileName = `Orcamento_${clientName.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.pdf`;
-      link.setAttribute('download', fileName);
-      document.body.appendChild(link);
       
-      // Simular clique no link para iniciar download
-      link.click();
+      console.log("PDF gerado com sucesso, URL:", response.url);
       
-      // Limpar link e URL temporários
-      link.parentNode?.removeChild(link);
-      window.URL.revokeObjectURL(fileURL);
+      // Abrir o PDF em uma nova aba (link direto para o arquivo no S3)
+      window.open(response.url, '_blank');
       
-      console.log("PDF recebido e download iniciado.");
+      console.log("PDF aberto em nova aba.");
       // --- FIM DA MODIFICAÇÃO ---
       
       // Manter lógica de salvar orçamento no banco (talvez fazer ANTES de gerar PDF?)
