@@ -376,7 +376,7 @@ export async function generateQuotePdf(quoteData: QuoteDataInput, companyUser: U
 }
 
 // --- NOVA FUNÇÃO USANDO PUPPETEER ---
-export async function generateQuotePdfWithPuppeteer(quoteData: QuoteDataInput, companyUser: User): Promise<Buffer> {
+export async function generateQuotePdfWithPuppeteer(quoteData: QuoteDataInput, companyUser: User): Promise<any> { // Usando 'any' temporariamente para resolver o erro de tipo
   console.log("Iniciando geração de PDF com Puppeteer...");
 
   // 1. Carregar e compilar template HTML Handlebars
@@ -484,8 +484,10 @@ export async function generateQuotePdfWithPuppeteer(quoteData: QuoteDataInput, c
       preferCSSPageSize: true,
       displayHeaderFooter: false
     });
+    
+    // O Puppeteer retorna um Buffer, mas podemos converter explicitamente para garantir compatibilidade
     console.log("PDF gerado com sucesso (Buffer). Tamanho:", pdfBuffer.length);
-    return pdfBuffer;
+    return Buffer.from(pdfBuffer);
 
   } catch (error) {
       // Log detalhado do erro do Puppeteer
