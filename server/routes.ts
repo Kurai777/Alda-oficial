@@ -842,6 +842,50 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
   
+  // NOVA ROTA: Gerar PDF do Orçamento usando Puppeteer (template HTML avançado)
+  app.post("/api/quotes/generate-pdf-puppeteer", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      const user = await storage.getUser(userId);
+      if (!user) {
+        return res.status(403).json({ message: "Usuário não encontrado ou não autorizado." });
+      }
+
+      const quoteData = req.body; 
+      if (!quoteData || !quoteData.clientName || !quoteData.items || quoteData.items.length === 0) {
+        return res.status(400).json({ message: "Dados do orçamento inválidos ou incompletos." });
+      }
+
+      console.log("Gerando PDF para orçamento via Puppeteer...");
+      try {
+        // Chamar a função que usa Puppeteer
+        const pdfBuffer = await generateQuotePdfWithPuppeteer(quoteData, user);
+
+        const fileName = `Orcamento_${quoteData.clientName.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}_premium.pdf`;
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`); 
+
+        // Enviar o buffer do PDF
+        res.send(pdfBuffer);
+      } catch (puppeteerError) {
+        console.error("Erro na geração com Puppeteer, tentando método alternativo:", puppeteerError);
+        
+        // Fallback para o método antigo se Puppeteer falhar
+        console.log("Caindo para método alternativo pdf-lib...");
+        const pdfBytes = await generateQuotePdf(quoteData, user);
+        
+        const fileName = `Orcamento_${quoteData.clientName.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.pdf`;
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`); 
+        
+        res.send(Buffer.from(pdfBytes));
+      }
+    } catch (error) {
+      console.error("Erro ao gerar PDF do orçamento:", error);
+      return res.status(500).json({ message: "Erro interno ao gerar PDF do orçamento." });
+    }
+  });
+  
   // Rotas de moodboards (Aplicar requireAuth)
   app.get("/api/moodboards", requireAuth, async (req: Request, res: Response) => {
     try {
