@@ -1055,11 +1055,26 @@ export async function registerRoutes(app: Express): Promise<void> {
       
       // Extrair informações do arquivo
       const file = req.file;
-      const filePath = file.path;
       const fileName = file.originalname;
       const fileType = fileName.split('.').pop()?.toLowerCase() || '';
       
-      console.log(`Arquivo recebido: ${fileName} (${fileType}), salvo em: ${filePath}`);
+      // Detectar se está usando S3 ou armazenamento local
+      const isS3File = (file as any).location !== undefined || (file as any).key !== undefined;
+      
+      // Obter o caminho ou a URL do arquivo
+      let fileUrl = '';
+      let s3Key = null;
+      
+      if (isS3File) {
+        // Para multer-s3, a URL está em location e a chave em key
+        fileUrl = (file as any).location || '';
+        s3Key = (file as any).key || '';
+        console.log(`Arquivo S3 recebido: ${fileName} (${fileType}), URL S3: ${fileUrl}, Key: ${s3Key}`);
+      } else {
+        // Para armazenamento local, a caminho está em path
+        fileUrl = file.path || '';
+        console.log(`Arquivo local recebido: ${fileName} (${fileType}), caminho: ${fileUrl}`);
+      }
       
       // Verificar quem está fazendo o upload (obter o ID do usuário)
       const userId = req.body.userId || req.session.userId || 1;
@@ -1072,10 +1087,9 @@ export async function registerRoutes(app: Express): Promise<void> {
         description: req.body.description || `Catálogo importado de ${fileName}`,
         createdAt: new Date(),
         status: "processing",
-        fileUrl: filePath,
+        fileUrl: fileUrl, // Agora sempre terá um valor
         fileName: fileName,
-        // Se estiver usando S3, o campo s3Key já estará preenchido pelo middleware multer-s3
-        s3Key: (file as any).s3Key || null
+        s3Key: s3Key
       });
       
       // ID do catálogo no banco relacional
