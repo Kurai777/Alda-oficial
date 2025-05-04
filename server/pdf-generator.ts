@@ -21,8 +21,19 @@ async function getBase64ImageFromS3(imageUrl: string | null): Promise<string | n
   try {
     if (imageUrl.includes('amazonaws.com') || imageUrl.includes('/api/s3-images/')) {
       console.log(`Detectada imagem S3: ${imageUrl}`);
-      const urlParts = new URL(imageUrl);
-      const s3Key = decodeURIComponent(urlParts.pathname.substring(1)); 
+      let s3Key;
+      
+      if (imageUrl.includes('amazonaws.com')) {
+        const urlParts = new URL(imageUrl);
+        // Extrai a chave de forma diferente para alanis.replit.app ou amazonaws.com
+        // Remove o bucket name da URL 
+        const pathWithoutBucket = urlParts.pathname.split('/').slice(1).join('/');
+        s3Key = decodeURIComponent(pathWithoutBucket);
+      } else {
+        // Para API local de imagens
+        s3Key = imageUrl.split('/api/s3-images/')[1];
+      }
+      
       console.log(`Chave S3 extraída: ${s3Key}`);
       
       const imageUint8Array = await downloadFileFromS3(s3Key); 
