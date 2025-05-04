@@ -122,6 +122,20 @@ async function drawWrappedText(page: PDFPage, text: string, options: { x: number
   return currentY;
 }
 
+// Função utilitária para formatação de preço (centavos para R$)
+function formatBRLPrice(priceInCents: number): string {
+  try {
+    return new Intl.NumberFormat('pt-BR', {
+      style: 'currency',
+      currency: 'BRL',
+      minimumFractionDigits: 2
+    }).format(priceInCents / 100);
+  } catch (err) {
+    console.error('Erro ao formatar preço:', err);
+    return 'R$ ???';
+  }
+}
+
 // Função principal para gerar o PDF
 export async function generateQuotePdf(quoteData: QuoteDataInput, companyUser: User): Promise<Uint8Array> {
   // LOG para verificar dados recebidos da empresa
@@ -265,7 +279,7 @@ export async function generateQuotePdf(quoteData: QuoteDataInput, companyUser: U
     const code = sanitizeWinAnsi(item.productCode);
     const name = sanitizeWinAnsi(item.productName);
     const color = sanitizeWinAnsi(item.color);
-    const priceText = formatPrice(item.price);
+    const priceText = formatBRLPrice(item.price);
 
     // Calcular altura necessária para descrição (aproximação)
     const descLines = Math.ceil(helveticaFont.widthOfTextAtSize(description, 9) / colWidths.desc) + description.split('\n').length -1;
@@ -382,6 +396,27 @@ export async function generateQuotePdfWithPuppeteer(quoteData: QuoteDataInput, c
     console.error("Erro ao carregar template HTML:", err);
     throw new Error("Falha ao carregar template do orçamento.");
   }
+  
+  // Registrar helper de formatação de preço
+  handlebars.registerHelper('formatPrice', function(price: number) {
+    // Formatar o preço como R$ XX.XXX,XX
+    try {
+      // Converte para centavos
+      const priceInCents = typeof price === 'number' ? price : parseInt(price);
+      if (isNaN(priceInCents)) return 'Preço inválido';
+      
+      // Formato brasileiro: R$ XX.XXX,XX
+      return new Intl.NumberFormat('pt-BR', {
+        style: 'currency',
+        currency: 'BRL',
+        minimumFractionDigits: 2
+      }).format(priceInCents / 100);
+    } catch (err) {
+      console.error('Erro ao formatar preço:', err);
+      return 'ERRO';
+    }
+  });
+  
   const template = handlebars.compile(templateHtml);
 
   // 2. Preparar dados completos para o template
