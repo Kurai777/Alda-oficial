@@ -12,7 +12,7 @@ import { promisify } from 'util';
 import { promises as fsPromises } from 'fs'; // Versão promise do fs
 
 // Helper para converter imagem do S3 para base64 para incluir no HTML
-async function getBase64ImageFromS3(imageUrl: string | null): Promise<string | null> {
+export async function getBase64ImageFromS3(imageUrl: string | null): Promise<string | null> {
   if (!imageUrl) return null;
   
   console.log(`🔍 Processando imagem: ${imageUrl}`);

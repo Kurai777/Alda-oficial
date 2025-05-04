@@ -829,7 +829,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
   
-  // ROTA PRINCIPAL PARA GERAR PDF (Sistema de três camadas de fallback)
+  // ROTA PRINCIPAL PARA GERAR PDF
   app.post("/api/quotes/generate-pdf", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = req.session.userId!;
@@ -845,43 +845,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       let pdfBytes: Uint8Array | Buffer;
       let fileName = `Orcamento_${quoteData.clientName.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.pdf`;
-      let generatorMethod = '';
+      let generatorMethod = 'pdf-lib';
       
-      // Sistema de três camadas de fallback: Puppeteer → html-pdf → pdf-lib
+      // Usando diretamente o método mais básico e confiável para garantir a geração do PDF
+      console.log("🔍 Gerando PDF via pdf-lib (método simples)...");
       
-      // Método 1: Tentar gerar com Puppeteer (melhor qualidade, mas menos confiável no Replit)
-      try {
-        console.log("🔍 Tentando gerar PDF via Puppeteer (método premium)...");
-        // Usar a versão corrigida do gerador
-        const { generateQuotePdfWithPuppeteer } = await import('./pdf-generator-fix');
-        pdfBytes = await generateQuotePdfWithPuppeteer(quoteData, user);
-        fileName = fileName.replace('.pdf', '_premium.pdf'); // Adicionar sufixo se Puppeteer funcionou
-        console.log("✅ PDF gerado com sucesso via Puppeteer!");
-        generatorMethod = 'puppeteer';
-      } catch (puppeteerError) {
-        console.error("❌ Erro com Puppeteer:", puppeteerError);
-        
-        // Método 2: Tentar com PhantomJS (método intermediário)
-        try {
-          console.log("🔍 Tentando gerar PDF via PhantomJS (método secundário)...");
-          // Usar a versão corrigida do gerador
-          const { generateQuotePdfWithHtmlPdf } = await import('./pdf-generator-fix');
-          pdfBytes = await generateQuotePdfWithHtmlPdf(quoteData, user);
-          fileName = fileName.replace('.pdf', '_html-pdf.pdf');
-          console.log("✅ PDF gerado com sucesso via PhantomJS (html-pdf)!");
-          generatorMethod = 'html-pdf';
-        } catch (phantomError) {
-          console.error("❌ Erro com PhantomJS:", phantomError);
-          
-          // Método 3: Último recurso - pdf-lib (básico mas mais confiável)
-          console.log("🔍 Tentando gerar PDF via pdf-lib (método básico/fallback)...");
-          // Usar a versão corrigida do gerador
-          const { generateQuotePdf } = await import('./pdf-generator-fix');
-          pdfBytes = await generateQuotePdf(quoteData, user);
-          console.log("✅ PDF gerado com sucesso via pdf-lib!");
-          generatorMethod = 'pdf-lib';
-        }
-      }
+      // Importar função do módulo original que já está funcionando
+      const { generateQuotePdf } = await import('./pdf-generator');
+      pdfBytes = await generateQuotePdf(quoteData, user);
+      console.log("✅ PDF gerado com sucesso via pdf-lib!");
 
       console.log(`📋 PDF final gerado com método: ${generatorMethod}`);
 

@@ -339,7 +339,7 @@ export default function QuoteGenerator({ items = [], onClearItems }: QuoteGenera
                   {quoteItems.map((item, index) => (
                     <div key={`${item.product.id}-${index}`} className="flex gap-4 pb-4 border-b border-gray-100">
                       <img 
-                        src={item.product.imageUrl} 
+                        src={item.product.imageUrl || 'https://via.placeholder.com/64?text=Sem+Imagem'}
                         alt={item.product.name} 
                         className="w-16 h-16 object-cover rounded-md"
                         onError={(e) => {
