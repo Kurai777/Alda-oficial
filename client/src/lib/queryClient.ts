@@ -1,9 +1,29 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
 
-async function throwIfResNotOk(res: Response) {
+async function throwIfResNotOk(res: Response, responseType: 'json' | 'blob' | 'text' = 'json') {
   if (!res.ok) {
-    const text = (await res.text()) || res.statusText;
-    throw new Error(`${res.status}: ${text}`);
+    // Como não podemos clonar a resposta em todos os navegadores, 
+    // vamos verificar o tipo esperado antes de tentar ler o corpo
+    if (responseType === 'blob') {
+      // Para blob, apenas use o statusText
+      throw new Error(`${res.status}: ${res.statusText || 'Erro ao processar requisição'}`);
+    } else {
+      // Para outros tipos, tente ler o corpo da resposta
+      try {
+        const text = (await res.text()) || res.statusText;
+        // Tente ver se é JSON para extrair a mensagem
+        try {
+          const json = JSON.parse(text);
+          throw new Error(json.message || `${res.status}: ${text}`);
+        } catch (e) {
+          // Não é JSON válido, retornar texto como está
+          throw new Error(`${res.status}: ${text}`);
+        }
+      } catch (err) {
+        // Se falhar ao ler o texto (ex: corpo vazio)
+        throw new Error(`${res.status}: ${res.statusText || 'Erro ao processar requisição'}`);
+      }
+    }
   }
 }
 
@@ -27,11 +47,11 @@ export async function apiRequest(
   };
 
   const res = await fetch(url, fetchOptions);
+  const responseType = options?.responseType || 'json';
 
-  await throwIfResNotOk(res);
+  await throwIfResNotOk(res, responseType);
 
   // Processar resposta com base nas opções
-  const responseType = options?.responseType || 'json'; // Default para json
 
   if (responseType === 'blob') {
     console.log("apiRequest: Retornando Blob");
@@ -68,7 +88,7 @@ export const getQueryFn: <T>(options: {
       return null;
     }
 
-    await throwIfResNotOk(res);
+    await throwIfResNotOk(res, 'json');
     return await res.json();
   };
 
