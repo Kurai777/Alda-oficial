@@ -316,7 +316,7 @@ export async function generateQuotePdf(quoteData: QuoteDataInput, companyUser: U
   // --- Total --- (Restaurando)
   yPos -= 10; // Espaço antes do total
   page.setFont(helveticaBoldFont); page.setFontSize(12);
-  const totalText = `TOTAL DO ORÇAMENTO: ${formatPrice(quoteData.totalPrice)}`;
+  const totalText = `TOTAL DO ORÇAMENTO: ${formatBRLPrice(quoteData.totalPrice)}`;
   // Usar posição X fixa aproximada para evitar erro de widthOfTextAtSize
   page.drawText(totalText, { x: width - margin - 150, y: yPos }); 
   yPos -= 25;
