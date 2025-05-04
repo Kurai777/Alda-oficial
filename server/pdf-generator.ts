@@ -3,9 +3,11 @@ import { Product, User } from '@shared/schema'; // Importar User
 import { downloadFileFromS3 } from './s3-service'; 
 import { storage } from './storage'; // Para buscar descrição do produto
 import fs from 'fs/promises';
+import * as fsSync from 'fs'; // fs síncrono para verificações de existência de arquivos
 import path from 'path';
 import handlebars from 'handlebars';
 import puppeteer from 'puppeteer';
+import { execSync } from 'child_process'; // Para comandos do sistema
 
 // Helper para converter imagem do S3 para base64 para incluir no HTML
 async function getBase64ImageFromS3(imageUrl: string | null): Promise<string | null> {
@@ -390,7 +392,9 @@ export async function generateQuotePdfWithPuppeteer(quoteData: QuoteDataInput, c
   try {
     const templatePath = path.join(process.cwd(), 'server', 'templates', 'quote-template.hbs');
     console.log(`Carregando template de: ${templatePath}`);
-    templateHtml = await fs.readFile(templatePath, 'utf-8');
+    // Usar a versão de promessa do fs.readFile
+    const fileContent = await fs.readFile(templatePath, { encoding: 'utf-8' });
+    templateHtml = fileContent;
     console.log("Template HTML carregado com sucesso.");
   } catch (err) {
     console.error("Erro ao carregar template HTML:", err);
@@ -482,17 +486,17 @@ export async function generateQuotePdfWithPuppeteer(quoteData: QuoteDataInput, c
   try {
     // Função para localizar o binário do Chromium no sistema
     const findChromiumExecutable = () => {
-      const { execSync } = require('child_process');
       try {
         // Tenta encontrar o caminho do chromium usando 'which'
         const chromiumPath = execSync('which chromium').toString().trim();
         console.log("Caminho do Chromium detectado:", chromiumPath);
         
-        if (require('fs').existsSync(chromiumPath)) {
+        if (fsSync.existsSync(chromiumPath)) {
           return chromiumPath;
         }
       } catch (err) {
-        console.error("Erro ao localizar chromium com 'which':", err.message);
+        console.error("Erro ao localizar chromium com 'which':", 
+            err instanceof Error ? err.message : String(err));
       }
       
       // Caminhos comuns do Chromium em ambientes Replit/Nix
@@ -516,7 +520,7 @@ export async function generateQuotePdfWithPuppeteer(quoteData: QuoteDataInput, c
           } catch (e) {
             // Ignorar erros de glob
           }
-        } else if (require('fs').existsSync(path)) {
+        } else if (fsSync.existsSync(path)) {
           console.log("Chromium encontrado via caminho fixo:", path);
           return path;
         }
