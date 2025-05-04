@@ -675,7 +675,7 @@ export async function generateQuotePdfWithHtmlPdf(quoteData: QuoteDataInput, com
       
       // Usar html-pdf com Promise
       return new Promise<Buffer>((resolve, reject) => {
-          htmlPdf.create(htmlContent, pdfOptions).toBuffer((err, buffer) => {
+          htmlPdf.create(htmlContent, pdfOptions).toBuffer((err: Error | null, buffer: Buffer) => {
               if (err) {
                   console.error("Erro ao gerar PDF com PhantomJS:", err);
                   reject(new Error(`Falha ao gerar PDF com PhantomJS: ${err.message}`));

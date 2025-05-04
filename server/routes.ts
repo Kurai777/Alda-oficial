@@ -811,7 +811,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
   
-  // ROTA PRINCIPAL PARA GERAR PDF (Tenta Puppeteer, fallback para pdf-lib)
+  // ROTA PRINCIPAL PARA GERAR PDF (Sistema de três camadas de fallback)
   app.post("/api/quotes/generate-pdf", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = req.session.userId!;
@@ -827,22 +827,50 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       let pdfBytes: Uint8Array | Buffer;
       let fileName = `Orcamento_${quoteData.clientName.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.pdf`;
+      let generatorMethod = '';
       
+      // Sistema de três camadas de fallback: Puppeteer → html-pdf → pdf-lib
+      
+      // Método 1: Tentar gerar com Puppeteer (melhor qualidade, mas menos confiável no Replit)
       try {
-        console.log("Tentando gerar PDF via Puppeteer...");
+        console.log("🔍 Tentando gerar PDF via Puppeteer (método premium)...");
         pdfBytes = await generateQuotePdfWithPuppeteer(quoteData, user);
         fileName = fileName.replace('.pdf', '_premium.pdf'); // Adicionar sufixo se Puppeteer funcionou
-        console.log("PDF gerado com Puppeteer!");
+        console.log("✅ PDF gerado com sucesso via Puppeteer!");
+        generatorMethod = 'puppeteer';
       } catch (puppeteerError) {
-        console.error("Erro com Puppeteer, fallback para pdf-lib:", puppeteerError);
-        console.log("Gerando PDF para orçamento via pdf-lib (fallback)...");
-        pdfBytes = await generateQuotePdf(quoteData, user);
-        console.log("PDF gerado com pdf-lib (fallback).");
+        console.error("❌ Erro com Puppeteer:", puppeteerError);
+        
+        // Método 2: Tentar com PhantomJS (método intermediário)
+        try {
+          console.log("🔍 Tentando gerar PDF via PhantomJS (método secundário)...");
+          const { generateQuotePdfWithHtmlPdf } = await import('./pdf-generator');
+          pdfBytes = await generateQuotePdfWithHtmlPdf(quoteData, user);
+          fileName = fileName.replace('.pdf', '_html-pdf.pdf');
+          console.log("✅ PDF gerado com sucesso via PhantomJS (html-pdf)!");
+          generatorMethod = 'html-pdf';
+        } catch (phantomError) {
+          console.error("❌ Erro com PhantomJS:", phantomError);
+          
+          // Método 3: Último recurso - pdf-lib (básico mas mais confiável)
+          console.log("🔍 Tentando gerar PDF via pdf-lib (método básico/fallback)...");
+          pdfBytes = await generateQuotePdf(quoteData, user);
+          console.log("✅ PDF gerado com sucesso via pdf-lib!");
+          generatorMethod = 'pdf-lib';
+        }
       }
 
+      console.log(`📋 PDF final gerado com método: ${generatorMethod}`);
+
+      // Converter para buffer se não for
+      const buffer = pdfBytes instanceof Buffer ? pdfBytes : Buffer.from(pdfBytes);
+      
+      // Enviar o PDF como resposta
       res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`); 
-      res.send(Buffer.from(pdfBytes)); // Enviar Buffer
+      res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+      res.setHeader('Content-Length', buffer.length);
+      res.setHeader('X-PDF-Generator', generatorMethod); // Adicionar método usado para diagnósticos
+      res.send(buffer);
 
     } catch (error) {
       console.error("Erro GERAL ao gerar PDF do orçamento:", error);
