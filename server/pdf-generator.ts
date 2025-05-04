@@ -8,6 +8,8 @@ import path from 'path';
 import handlebars from 'handlebars';
 import puppeteer from 'puppeteer';
 import { execSync } from 'child_process'; // Para comandos do sistema
+import htmlPdf from 'html-pdf'; // Alternativa leve ao Puppeteer
+import { promisify } from 'util';
 
 // Helper para converter imagem do S3 para base64 para incluir no HTML
 async function getBase64ImageFromS3(imageUrl: string | null): Promise<string | null> {
@@ -484,55 +486,6 @@ export async function generateQuotePdfWithPuppeteer(quoteData: QuoteDataInput, c
   console.log("Lançando Puppeteer...");
   let browser;
   try {
-    // Função para localizar o binário do Chromium no sistema
-    const findChromiumExecutable = () => {
-      try {
-        // Tenta encontrar o caminho do chromium usando 'which'
-        const chromiumPath = execSync('which chromium').toString().trim();
-        console.log("Caminho do Chromium detectado:", chromiumPath);
-        
-        if (fsSync.existsSync(chromiumPath)) {
-          return chromiumPath;
-        }
-      } catch (err) {
-        console.error("Erro ao localizar chromium com 'which':", 
-            err instanceof Error ? err.message : String(err));
-      }
-      
-      // Caminhos comuns do Chromium em ambientes Replit/Nix
-      const possiblePaths = [
-        '/nix/store/0s8gfj0rrdgw5pl1v72cf0zk8qbjl09q-chromium-115.0.5790.170/bin/chromium',
-        '/usr/bin/chromium',
-        '/usr/bin/chromium-browser',
-        '/nix/store/*/chromium*/bin/chromium'
-      ];
-      
-      // Verificar caminhos conhecidos
-      for (const path of possiblePaths) {
-        if (path.includes('*')) {
-          try {
-            // Se o caminho contém wildcards, usar glob
-            const matches = execSync(`ls ${path} 2>/dev/null || echo ""`).toString().trim().split('\n');
-            if (matches[0]) {
-              console.log("Chromium encontrado via glob:", matches[0]);
-              return matches[0];
-            }
-          } catch (e) {
-            // Ignorar erros de glob
-          }
-        } else if (fsSync.existsSync(path)) {
-          console.log("Chromium encontrado via caminho fixo:", path);
-          return path;
-        }
-      }
-      
-      console.log("Nenhum executável do Chromium encontrado, usando undefined");
-      return undefined;
-    };
-    
-    const chromiumPath = findChromiumExecutable();
-    console.log("Caminho do Chromium a ser usado:", chromiumPath);
-
     // Flags adicionais para melhorar compatibilidade em ambiente Replit
     const puppeteerArgs = [
       '--no-sandbox',
@@ -547,13 +500,11 @@ export async function generateQuotePdfWithPuppeteer(quoteData: QuoteDataInput, c
     
     console.log("Args Puppeteer:", puppeteerArgs.join(' '));
     
-    // Configuração específica para ambiente Replit
+    // Abordagem simplificada - deixar o Puppeteer usar seu próprio Chromium
     browser = await puppeteer.launch({ 
         headless: true,
         args: puppeteerArgs,
         timeout: 60000, // Timeout mais alto (60 segundos)
-        executablePath: chromiumPath,
-        ignoreDefaultArgs: ['--disable-extensions']
     });
     console.log("Navegador lançado.");
     const page = await browser.newPage();
@@ -611,4 +562,132 @@ export async function generateQuotePdfWithPuppeteer(quoteData: QuoteDataInput, c
           await browser.close();
       }
   }
-} 
+}
+
+// --- TERCEIRA FUNÇÃO DE FALLBACK USANDO HTML-PDF ---
+export async function generateQuotePdfWithHtmlPdf(quoteData: QuoteDataInput, companyUser: User): Promise<Buffer> {
+  console.log("Iniciando geração de PDF com html-pdf (PhantomJS)...");
+
+  // 1. Reutilizamos o mesmo carregamento e compilação de template da função anterior
+  let templateHtml = '';
+  try {
+    const templatePath = path.join(process.cwd(), 'server', 'templates', 'quote-template.hbs');
+    console.log(`Carregando template de: ${templatePath}`);
+    const fileContent = await fs.readFile(templatePath, { encoding: 'utf-8' });
+    templateHtml = fileContent;
+    console.log("Template HTML carregado com sucesso.");
+  } catch (err) {
+    console.error("Erro ao carregar template HTML:", err);
+    throw new Error("Falha ao carregar template do orçamento.");
+  }
+  
+  // 2. Registrar helper de formatação de preço
+  handlebars.registerHelper('formatPrice', function(price: number) {
+    try {
+      const priceInCents = typeof price === 'number' ? price : parseInt(price);
+      if (isNaN(priceInCents)) return 'Preço inválido';
+      
+      return new Intl.NumberFormat('pt-BR', {
+        style: 'currency',
+        currency: 'BRL',
+        minimumFractionDigits: 2
+      }).format(priceInCents / 100);
+    } catch (err) {
+      console.error('Erro ao formatar preço:', err);
+      return 'ERRO';
+    }
+  });
+  
+  const template = handlebars.compile(templateHtml);
+
+  // 3. Preparar dados para o template (igual à função anterior)
+  console.log("Preparando dados para o template...");
+  let companyLogoBase64: string | null = null;
+  try {
+      companyLogoBase64 = await getBase64ImageFromS3(companyUser.companyLogoUrl);
+      console.log(`Logo ${companyLogoBase64 ? 'processado' : 'não encontrado/falhou'}`);
+  } catch (err) {
+      console.error("Erro ao processar logo:", err);
+  }
+
+  let itemsWithDetails: any[] = [];
+  try {
+      console.log(`Buscando detalhes para ${quoteData.items.length} itens...`);
+      itemsWithDetails = await Promise.all(quoteData.items.map(async (item, index) => {
+        console.log(`  Item ${index + 1}: Buscando produto ID ${item.productId}`);
+        const productDetails = await storage.getProduct(item.productId);
+        console.log(`  Item ${index + 1}: Detalhes ${productDetails ? 'encontrados' : 'NÃO encontrados'}`);
+        const imageBase64 = await getBase64ImageFromS3(productDetails?.imageUrl || null);
+        console.log(`  Item ${index + 1}: Imagem ${imageBase64 ? 'processada' : 'não encontrada/falhou'}`);
+        return {
+          ...item,
+          description: productDetails?.description || '-', 
+          imageBase64: imageBase64,
+          productCode: item.productCode || '-',
+          color: item.color || '-'
+        };
+      }));
+      console.log("Detalhes de todos os itens processados.");
+  } catch (err) {
+      console.error("Erro ao buscar detalhes dos produtos:", err);
+      throw new Error("Falha ao buscar informações dos produtos.");
+  }
+  
+  const templateData: TemplateData = {
+    ...quoteData,
+    items: itemsWithDetails, 
+    companyName: companyUser.companyName,
+    companyLogoBase64: companyLogoBase64,
+    companyAddress: companyUser.companyAddress,
+    companyPhone: companyUser.companyPhone,
+    companyCnpj: companyUser.companyCnpj,
+    quotePaymentTerms: companyUser.quotePaymentTerms,
+    quoteValidityDays: companyUser.quoteValidityDays ?? '7', 
+    currentDate: new Date().toLocaleDateString('pt-BR'),
+  };
+
+  // 4. Renderizar HTML
+  let htmlContent = '';
+  try {
+      console.log("Renderizando HTML com Handlebars...");
+      htmlContent = template(templateData);
+      console.log("HTML renderizado com sucesso.");
+  } catch (err) {
+      console.error("Erro ao renderizar HTML com Handlebars:", err);
+      throw new Error("Falha ao montar conteúdo do PDF.");
+  }
+
+  // 5. Gerar PDF usando html-pdf (PhantomJS)
+  try {
+      console.log("Iniciando geração de PDF com PhantomJS...");
+      const pdfOptions = {
+          format: 'A4',
+          border: {
+              top: "15mm",
+              right: "15mm",
+              bottom: "15mm",
+              left: "15mm"
+          },
+          timeout: 60000, // 60 segundos
+      };
+      
+      console.log("Opcoes do PhantomJS configuradas:", JSON.stringify(pdfOptions));
+      
+      // Usar html-pdf com Promise
+      return new Promise<Buffer>((resolve, reject) => {
+          htmlPdf.create(htmlContent, pdfOptions).toBuffer((err, buffer) => {
+              if (err) {
+                  console.error("Erro ao gerar PDF com PhantomJS:", err);
+                  reject(new Error(`Falha ao gerar PDF com PhantomJS: ${err.message}`));
+                  return;
+              }
+              
+              console.log("PDF gerado com sucesso (PhantomJS). Tamanho:", buffer.length);
+              resolve(buffer);
+          });
+      });
+  } catch (error) {
+      console.error("Erro ao gerar PDF com PhantomJS:", error);
+      throw new Error(`Falha ao gerar PDF com PhantomJS: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
