@@ -8,9 +8,9 @@ import path from 'path';
 import fs from 'fs';
 import { promisify } from 'util';
 import { fileURLToPath } from 'url';
-import { saveImageToFirebaseStorage } from './firebase-admin';
+import { storage } from './storage'; // Assuming storage is correctly imported
+import { getS3UploadMiddleware, uploadBufferToS3 } from './s3-service.js';
 import { convertPdfToImages } from './pdf-ai-pipeline';
-import { processImageWithClaude } from './claude-ai-extractor';
 import { processImageWithOpenAI, processFileWithAdvancedAI } from './advanced-ai-extractor';
 import { generateImagesFromPdf, extractProductImagesFromPdf, associateImagesToProducts } from './alternative-pdf-processor';
 

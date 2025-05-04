@@ -1,3 +1,4 @@
+/*
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
@@ -7,9 +8,13 @@ import path from "path";
 import { Readable } from "stream";
 import { finished } from "stream/promises";
 import { DecodedIdToken } from "firebase-admin/auth";
+import { 
+  processFixedExcel, 
+  extractDataFromFixedExcel 
+} from './fixed-excel-processor';
 
 // Configuração do multer para upload de arquivos
-const storage1 = multer.diskStorage({
+const localStorage = multer.diskStorage({
   destination: function (req, file, cb) {
     cb(null, './uploads/');
   },
@@ -18,7 +23,7 @@ const storage1 = multer.diskStorage({
   }
 });
 
-const upload = multer({ storage: storage1 });
+const upload = multer({ storage: localStorage });
 
 // Função que será chamada para processar a rota de upload de catálogos
 async function processUpload(req: Request, res: Response) {
@@ -303,8 +308,50 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Rota de upload (simplificada)
   app.post("/api/catalogs/upload", upload.single('file'), processUpload);
 
+  app.post('/api/fixed/process-catalog/:catalogId', async (req: Request, res: Response) => {
+    const catalogId = parseInt(req.params.catalogId);
+    const userId = req.session?.userId || parseInt(req.body.userId as string);
+
+    if (!userId || isNaN(catalogId)) {
+      return res.status(400).json({ message: "IDs inválidos" });
+    }
+
+    try {
+      const catalog = await storage.getCatalog(catalogId);
+      if (!catalog || catalog.userId !== userId) {
+        return res.status(404).json({ message: "Catálogo não encontrado" });
+      }
+
+      if (!catalog.s3Key) {
+        return res.status(400).json({ message: "Catálogo sem arquivo S3 associado" });
+      }
+
+      // Marcar como processando no PG
+      await storage.updateCatalogStatus(catalogId, 'processing');
+      
+      // Disparar processamento em background (sem await)
+      processFixedExcel(userId, catalogId, catalog.s3Key).catch(err => {
+        console.error(`Erro no processamento background do catálogo fixo ${catalogId}:`, err);
+        // Tentar marcar como falha se o processamento background falhar
+        storage.updateCatalogStatus(catalogId, 'failed')
+          .catch(statusErr => console.error('Erro ao atualizar status para FAILED após erro no background:', statusErr));
+      });
+
+      res.status(202).json({ message: "Processamento iniciado" });
+
+    } catch (error) {
+      console.error("Erro na rota /process-catalog:", error);
+      // Tentar marcar como falha
+       try {
+         await storage.updateCatalogStatus(catalogId, 'failed');
+       } catch (statusError) { console.error("Erro ao atualizar status para FAILED no catch principal:", statusError); }
+       return res.status(500).json({ message: "Erro ao iniciar processamento" });
+    }
+  });
+
   // Criar servidor HTTP
   const httpServer = createServer(app);
 
   return httpServer;
 }
+*/

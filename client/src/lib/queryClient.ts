@@ -7,20 +7,49 @@ async function throwIfResNotOk(res: Response) {
   }
 }
 
+// Definir tipo para opções extras
+interface ApiRequestOptions {
+  responseType?: 'json' | 'blob' | 'text';
+  // Adicionar outras opções de fetch se necessário (ex: headers customizados)
+}
+
 export async function apiRequest(
   method: string,
   url: string,
   data?: unknown | undefined,
-): Promise<Response> {
-  const res = await fetch(url, {
+  options?: ApiRequestOptions // <<< Adicionar argumento de opções
+): Promise<any> { // <<< Mudar tipo de retorno para any ou um tipo mais específico
+  const fetchOptions: RequestInit = {
     method,
     headers: data ? { "Content-Type": "application/json" } : {},
     body: data ? JSON.stringify(data) : undefined,
     credentials: "include",
-  });
+  };
+
+  const res = await fetch(url, fetchOptions);
 
   await throwIfResNotOk(res);
-  return res;
+
+  // Processar resposta com base nas opções
+  const responseType = options?.responseType || 'json'; // Default para json
+
+  if (responseType === 'blob') {
+    console.log("apiRequest: Retornando Blob");
+    return await res.blob();
+  } else if (responseType === 'text') {
+    console.log("apiRequest: Retornando Texto");
+    return await res.text();
+  } else { // Default 'json'
+    console.log("apiRequest: Retornando JSON");
+    // Lidar com respostas JSON vazias (ex: 204 No Content)
+    const text = await res.text();
+    try {
+        return text ? JSON.parse(text) : null; // Retorna null se corpo vazio
+    } catch (e) {
+        console.error("Falha ao parsear JSON:", e, "Texto recebido:", text);
+        throw new Error("Falha ao processar resposta JSON do servidor.");
+    }
+  }
 }
 
 type UnauthorizedBehavior = "returnNull" | "throw";
@@ -29,13 +58,7 @@ export const getQueryFn: <T>(options: {
 }) => QueryFunction<T> =
   ({ on401: unauthorizedBehavior }) =>
   async ({ queryKey }) => {
-    // Adiciona userId=1 como default para todas as solicitações GET
-    let url = queryKey[0] as string;
-    if (url.includes('?')) {
-      url += '&userId=1';
-    } else {
-      url += '?userId=1';
-    }
+    const url = queryKey[0] as string;
     
     const res = await fetch(url, {
       credentials: "include",

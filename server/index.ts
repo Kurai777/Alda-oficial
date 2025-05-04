@@ -1,9 +1,13 @@
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
-import { setupVite, serveStatic, log } from "./vite";
+import { serveStatic, log } from "./vite";
+import { createServer as createViteServer } from 'vite';
 import session from "express-session";
 import testRoutes from "./test-routes";
 import { reprocessRouter } from "./routes-reprocessor.js";
+import path from "path";
+import fs from "fs";
+import { nanoid } from "nanoid";
 
 // Importar módulos de banco de dados e storage
 import { migrate } from "./db";
@@ -33,6 +37,8 @@ app.use(session({
   }
 }));
 
+// COMENTAR TEMPORARIAMENTE O MIDDLEWARE DE LOG
+/*
 app.use((req, res, next) => {
   const start = Date.now();
   const path = req.path;
@@ -62,6 +68,7 @@ app.use((req, res, next) => {
 
   next();
 });
+*/
 
 (async () => {
   // Executar migração para garantir que as tabelas existam
@@ -75,32 +82,59 @@ app.use((req, res, next) => {
   
   const server = await registerRoutes(app);
 
+  // Manipulador de erros da API (deve vir ANTES do fallback do Vite)
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+    console.error("ERRO NA API:", err); // Logar erro da API
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";
-
-    res.status(status).json({ message });
-    throw err;
+    // Garantir que resposta seja JSON
+    if (!res.headersSent) {
+        res.status(status).json({ message });
+    } else {
+        res.end();
+    }
+    // Não chamar next(err) aqui para não cair no fallback HTML
   });
 
-  // importantly only setup vite in development and after
-  // setting up all the other routes so the catch-all route
-  // doesn't interfere with the other routes
+  // Configurar Vite ou Estático
   if (app.get("env") === "development") {
-    await setupVite(app, server);
+    console.log("Configurando Vite para desenvolvimento...");
+    const vite = await createViteServer({
+        server: { middlewareMode: true }, // Usar modo middleware simples
+        appType: 'custom',
+        logLevel: 'info'
+    });
+    // Usar APENAS os middlewares do Vite, SEM o catch-all manual
+    app.use(vite.middlewares);
+    console.log("Middlewares do Vite adicionados.");
+
+    // READICIONAR Catch-all do Vite para servir index.html
+    app.use("*", async (req, res, next) => {
+        const url = req.originalUrl;
+        console.log(`[Vite Fallback] Recebida requisição para: ${url}`);
+        try {
+            const clientTemplate = path.resolve(import.meta.dirname, "..", "client", "index.html");
+            let template = await fs.promises.readFile(clientTemplate, "utf-8");
+            // Injetar HMR e outros scripts do Vite
+            template = await vite.transformIndexHtml(url, template);
+            console.log("[Vite Fallback] Enviando index.html transformado.");
+            res.status(200).set({ "Content-Type": "text/html" }).end(template);
+        } catch (e) {
+            if (e instanceof Error) vite.ssrFixStacktrace(e);
+            console.error("[Vite Fallback] Erro:", e);
+            next(e); // Passar erro para o próximo handler
+        }
+    });
+
   } else {
-    serveStatic(app);
+    console.log("Configurando para servir estáticos (produção)...");
+    serveStatic(app); // serveStatic já inclui o fallback para index.html
   }
 
-  // ALWAYS serve the app on port 5000
-  // this serves both the API and the client.
-  // It is the only port that is not firewalled.
+  // Iniciar servidor
   const port = 5000;
-  server.listen({
-    port,
-    host: "0.0.0.0",
-    reusePort: true,
-  }, () => {
-    log(`serving on port ${port}`);
+  app.listen(port, "0.0.0.0", () => {
+     log(`serving on port ${port}`);
   });
+
 })();

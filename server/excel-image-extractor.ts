@@ -83,9 +83,9 @@ if __name__ == "__main__":
 }
 
 /**
- * Executa o script Python SIMPLIFICADO.
+ * Executa o script Python que extrai imagens por coluna.
  */
-async function runPythonColumnExtractor(excelFilePath: string, imageColumn: string): Promise<any> {
+export async function runPythonColumnExtractor(excelFilePath: string, imageColumn: string): Promise<any> {
    await ensureDirectories();
    const pythonScriptPath = path.join(PYTHON_SCRIPTS_DIR, 'extract_images_by_column.py');
    if (!imageColumn) return { images: [], error: "Coluna de imagem não fornecida para o extrator Python" };
@@ -134,6 +134,7 @@ async function runPythonColumnExtractor(excelFilePath: string, imageColumn: stri
 export interface ExtractedImageInfo {
   imageUrl: string;
   rowNumber: number;
+  anchorCol: number;
   sheetName: string;
   originalIndex: number; // Índice original da imagem no Excel
 }
@@ -163,8 +164,8 @@ export async function extractAndUploadImagesSequentially(excelFilePath: string, 
       return { extractedImages: [], successCount: 0, errorCount: 0 };
     }
 
-    const imagesData: { row_number: number, image_base64: string }[] = pythonResult.images || [];
-    console.log(`Python retornou ${imagesData.length} imagens da coluna ${imageColumn}.`);
+    const imagesData: { row_number: number, anchor_col: number, image_base64: string }[] = pythonResult.images || [];
+    console.log(`Python retornou ${imagesData.length} imagens com linha/coluna.`);
 
     if (imagesData.length === 0) {
       console.log("Nenhuma imagem detalhada extraída pelo Python.");
@@ -176,7 +177,8 @@ export async function extractAndUploadImagesSequentially(excelFilePath: string, 
       const imageBase64 = imageData.image_base64;
       const originalIndex = i;
       const rowNumber = imageData.row_number;
-      const imageName = `image_row${rowNumber}_idx${originalIndex}.png`;
+      const anchorCol = imageData.anchor_col;
+      const imageName = `image_row${rowNumber}_col${anchorCol}_idx${originalIndex}.png`;
 
       try {
         const publicUrl = await uploadImageToS3(
@@ -190,7 +192,8 @@ export async function extractAndUploadImagesSequentially(excelFilePath: string, 
         extractedImages.push({
           imageUrl: publicUrl,
           rowNumber: rowNumber,
-          sheetName: imageColumn,
+          anchorCol: anchorCol,
+          sheetName: "ExcelSheet",
           originalIndex: originalIndex
         }); 
         

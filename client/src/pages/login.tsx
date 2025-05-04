@@ -14,20 +14,18 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Card, CardContent, CardFooter } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
 import { Lock, Mail } from "lucide-react";
-import { FcGoogle } from "react-icons/fc";
 
 const loginSchema = z.object({
   email: z.string().email({ message: "Email inválido" }),
   password: z.string().min(6, { message: "A senha deve ter pelo menos 6 caracteres" }),
-  rememberMe: z.boolean().optional(),
 });
 
 const registerSchema = z.object({
+  name: z.string().min(2, { message: "Nome é obrigatório" }),
   email: z.string().email({ message: "Email inválido" }),
   password: z.string().min(6, { message: "A senha deve ter pelo menos 6 caracteres" }),
   companyName: z.string().min(2, { message: "Nome da empresa é obrigatório" }),
@@ -37,12 +35,10 @@ type LoginFormValues = z.infer<typeof loginSchema>;
 type RegisterFormValues = z.infer<typeof registerSchema>;
 
 export default function Login() {
-  const { user, login, loginWithGoogle, register, loading } = useAuth();
+  const { user, login, register, loading } = useAuth();
   const [, navigate] = useLocation();
   const [activeTab, setActiveTab] = useState<string>("login");
-  const [isGoogleLoading, setIsGoogleLoading] = useState(false);
 
-  // Redirect if already logged in
   useEffect(() => {
     if (user) {
       navigate("/");
@@ -54,13 +50,13 @@ export default function Login() {
     defaultValues: {
       email: "",
       password: "",
-      rememberMe: false,
     },
   });
 
   const registerForm = useForm<RegisterFormValues>({
     resolver: zodResolver(registerSchema),
     defaultValues: {
+      name: "",
       email: "",
       password: "",
       companyName: "",
@@ -72,41 +68,22 @@ export default function Login() {
       await login({
         email: data.email,
         password: data.password,
-        rememberMe: data.rememberMe
       });
-      // O redirecionamento é feito dentro da função login
     } catch (error) {
-      console.error("Login failed:", error);
-      // Erros são tratados dentro da função login
-    }
-  };
-
-  const onGoogleLogin = async () => {
-    if (isGoogleLoading) return;
-    
-    setIsGoogleLoading(true);
-    try {
-      await loginWithGoogle();
-      // O redirecionamento é feito dentro da função loginWithGoogle
-    } catch (error) {
-      console.error("Google login failed:", error);
-      // Erros são tratados dentro da função loginWithGoogle
-    } finally {
-      setIsGoogleLoading(false);
+      console.error("Login failed (component level catch - should be handled in useAuth):");
     }
   };
 
   const onRegisterSubmit = async (data: RegisterFormValues) => {
     try {
       await register({
+        name: data.name,
         email: data.email,
         password: data.password,
         companyName: data.companyName
       });
-      // O redirecionamento é feito dentro da função register
     } catch (error) {
-      console.error("Registration failed:", error);
-      // Erros são tratados dentro da função register
+      console.error("Registration failed (component level catch - should be handled in useAuth):");
     }
   };
 
@@ -168,27 +145,7 @@ export default function Login() {
                     )}
                   />
 
-                  <div className="flex items-center justify-between">
-                    <FormField
-                      control={loginForm.control}
-                      name="rememberMe"
-                      render={({ field }) => (
-                        <div className="flex items-center space-x-2">
-                          <Checkbox
-                            id="rememberMe"
-                            checked={field.value}
-                            onCheckedChange={field.onChange}
-                          />
-                          <label
-                            htmlFor="rememberMe"
-                            className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
-                          >
-                            Lembrar-me
-                          </label>
-                        </div>
-                      )}
-                    />
-
+                  <div className="flex items-center justify-end">
                     <div className="text-sm">
                       <a href="#" className="font-medium text-primary hover:text-primary/80">
                         Esqueceu sua senha?
@@ -202,39 +159,24 @@ export default function Login() {
                   </Button>
                 </form>
               </Form>
-              
-              <div className="mt-6">
-                <div className="relative">
-                  <div className="absolute inset-0 flex items-center">
-                    <Separator className="w-full" />
-                  </div>
-                  <div className="relative flex justify-center text-xs">
-                    <span className="bg-card px-2 text-muted-foreground">Ou continue com</span>
-                  </div>
-                </div>
-                
-                <div className="mt-6">
-                  <Button 
-                    variant="outline" 
-                    type="button" 
-                    className="w-full" 
-                    onClick={onGoogleLogin}
-                    disabled={isGoogleLoading}
-                  >
-                    {isGoogleLoading ? (
-                      <div className="mr-2 h-4 w-4 animate-spin" />
-                    ) : (
-                      <FcGoogle className="mr-2 h-5 w-5" />
-                    )}
-                    Google
-                  </Button>
-                </div>
-              </div>
             </TabsContent>
             
             <TabsContent value="register" className="mt-4">
               <Form {...registerForm}>
                 <form onSubmit={registerForm.handleSubmit(onRegisterSubmit)} className="space-y-6">
+                  <FormField
+                    control={registerForm.control}
+                    name="name"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Nome Completo</FormLabel>
+                        <FormControl>
+                          <Input placeholder="Seu Nome" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
                   <FormField
                     control={registerForm.control}
                     name="companyName"
@@ -248,7 +190,6 @@ export default function Login() {
                       </FormItem>
                     )}
                   />
-
                   <FormField
                     control={registerForm.control}
                     name="email"
@@ -262,7 +203,6 @@ export default function Login() {
                       </FormItem>
                     )}
                   />
-
                   <FormField
                     control={registerForm.control}
                     name="password"
@@ -283,34 +223,6 @@ export default function Login() {
                   </Button>
                 </form>
               </Form>
-              
-              <div className="mt-6">
-                <div className="relative">
-                  <div className="absolute inset-0 flex items-center">
-                    <Separator className="w-full" />
-                  </div>
-                  <div className="relative flex justify-center text-xs">
-                    <span className="bg-card px-2 text-muted-foreground">Ou registre-se com</span>
-                  </div>
-                </div>
-                
-                <div className="mt-6">
-                  <Button 
-                    variant="outline" 
-                    type="button" 
-                    className="w-full" 
-                    onClick={onGoogleLogin}
-                    disabled={isGoogleLoading}
-                  >
-                    {isGoogleLoading ? (
-                      <div className="mr-2 h-4 w-4 animate-spin" />
-                    ) : (
-                      <FcGoogle className="mr-2 h-5 w-5" />
-                    )}
-                    Google
-                  </Button>
-                </div>
-              </div>
             </TabsContent>
           </Tabs>
         </CardContent>

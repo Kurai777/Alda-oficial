@@ -1,4 +1,4 @@
-import { pgTable, text, serial, integer, boolean, json, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, integer, boolean, json, timestamp, varchar } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -8,9 +8,14 @@ export const users = pgTable("users", {
   password: text("password").notNull(),
   name: text("name"),
   companyName: text("company_name").notNull(),
-  firebaseId: text("firebase_id").unique(),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
+  companyLogoUrl: text("company_logo_url"),
+  companyAddress: text("company_address"),
+  companyPhone: text("company_phone"),
+  companyCnpj: text("company_cnpj"),
+  quotePaymentTerms: text("quote_payment_terms"),
+  quoteValidityDays: integer("quote_validity_days"),
 });
 
 export const insertUserSchema = createInsertSchema(users).pick({
@@ -18,7 +23,6 @@ export const insertUserSchema = createInsertSchema(users).pick({
   password: true,
   name: true,
   companyName: true,
-  firebaseId: true,
 });
 
 export const products = pgTable("products", {
@@ -198,3 +202,9 @@ export type AiDesignProject = typeof aiDesignProjects.$inferSelect;
 export type InsertAiDesignProject = z.infer<typeof insertAiDesignProjectSchema>;
 export type AiDesignChatMessage = typeof aiDesignChatMessages.$inferSelect;
 export type InsertAiDesignChatMessage = z.infer<typeof insertAiDesignChatMessageSchema>;
+
+export const session = pgTable("session", {
+  sid: varchar("sid", { length: 255 }).primaryKey(),
+  sess: json("sess").notNull(),
+  expire: timestamp("expire", { mode: 'date', withTimezone: true }).notNull(),
+});

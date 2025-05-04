@@ -10,8 +10,6 @@ import fs from 'fs';
 import path from 'path';
 import { generateImagesFromPdf } from './alternative-pdf-processor';
 import { processImageWithOpenAI, processFileWithAdvancedAI } from './advanced-ai-extractor';
-import { processImageWithClaude } from './claude-ai-extractor';
-import { saveImageToFirebaseStorage } from './firebase-admin';
 import { extractAllProductImages } from './image-extractor';
 import sharp from 'sharp';
 

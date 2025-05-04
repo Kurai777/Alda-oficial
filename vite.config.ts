@@ -24,6 +24,13 @@ export default defineConfig({
     },
   },
   root: path.resolve(import.meta.dirname, "client"),
+  server: {
+    allowedHosts: [
+      '5e0031b4-9329-452f-8e3c-1e782ec57c50-00-b132oxdhv42x.riker.replit.dev'
+    ],
+    host: '0.0.0.0',
+    port: 3000
+  },
   build: {
     outDir: path.resolve(import.meta.dirname, "dist/public"),
     emptyOutDir: true,

@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Orçamento - {{companyName}}</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            font-size: 10px;
+            margin: 40px;
+            color: #333;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 30px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid #eee;
+        }
+        .header img.logo {
+            max-width: 150px;
+            max-height: 60px;
+            object-fit: contain;
+        }
+        .company-details {
+            text-align: right;
+            font-size: 9px;
+            line-height: 1.4;
+        }
+        .quote-title {
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 20px;
+        }
+        .section-title {
+            font-size: 13px;
+            font-weight: bold;
+            margin-top: 20px;
+            margin-bottom: 8px;
+            border-bottom: 1px solid #ccc;
+            padding-bottom: 3px;
+        }
+        .client-info p, .item-details p, .notes p, .footer p {
+            margin: 0 0 5px 0;
+        }
+        .items-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+        }
+        .items-table th, .items-table td {
+            border: 1px solid #ddd;
+            padding: 6px 8px;
+            text-align: left;
+            vertical-align: top;
+        }
+        .items-table th {
+            background-color: #f8f8f8;
+            font-weight: bold;
+        }
+        .items-table td.price, .items-table th.price {
+            text-align: right;
+        }
+        .items-table img.product-image {
+            max-width: 60px;
+            max-height: 60px;
+            object-fit: contain;
+            display: block; /* Ajuda no alinhamento */
+        }
+        .total-section {
+            margin-top: 20px;
+            text-align: right;
+            font-size: 14px;
+            font-weight: bold;
+        }
+        .footer {
+            margin-top: 30px;
+            padding-top: 15px;
+            border-top: 1px solid #eee;
+            font-size: 9px;
+            color: #555;
+            line-height: 1.4;
+        }
+        .whitespace-pre-wrap {
+             white-space: pre-wrap; /* Mantém quebras de linha das textareas */
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div>
+            {{#if companyLogoBase64}}
+                <img src="{{companyLogoBase64}}" alt="Logo" class="logo">
+            {{else}}
+                <h1 style="font-size: 24px; font-weight: bold;">{{companyName}}</h1>
+            {{/if}}
+        </div>
+        <div class="company-details">
+            {{#if companyAddress}}<p>{{companyAddress}}</p>{{/if}}
+            {{#if companyPhone}}<p>Tel: {{companyPhone}}</p>{{/if}}
+            {{#if companyCnpj}}<p>CNPJ: {{companyCnpj}}</p>{{/if}}
+        </div>
+    </div>
+
+    <div class="quote-title">ORÇAMENTO</div>
+    <p style="text-align: right; margin-top: -30px; margin-bottom: 20px;">Data: {{currentDate}}</p>
+
+    <div class="section-title">DADOS DO CLIENTE</div>
+    <div class="client-info">
+        <p><strong>Nome:</strong> {{clientName}}</p>
+        {{#if clientEmail}}<p><strong>E-mail:</strong> {{clientEmail}}</p>{{/if}}
+        {{#if clientPhone}}<p><strong>Telefone:</strong> {{clientPhone}}</p>{{/if}}
+        {{#if architectName}}<p><strong>Arquiteto:</strong> {{architectName}}</p>{{/if}}
+    </div>
+
+    <div class="section-title">PRODUTOS SELECIONADOS</div>
+    <table class="items-table">
+        <thead>
+            <tr>
+                <th style="width: 80px;">Imagem</th>
+                <th style="width: 80px;">Código</th>
+                <th>Produto</th>
+                <th>Descrição</th>
+                <th style="width: 80px;">Cor</th>
+                <th class="price" style="width: 100px;">Preço Unitário</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{#each items}}
+            <tr>
+                <td>
+                    {{#if imageBase64}}
+                    <img src="{{imageBase64}}" alt="{{productName}}" class="product-image">
+                    {{else}}
+                    <span>Sem Imagem</span>
+                    {{/if}}
+                </td>
+                <td>{{productCode}}</td>
+                <td>{{productName}}</td>
+                <td>{{description}}</td>
+                <td>{{color}}</td>
+                <td class="price">{{formatPrice price}}</td>
+            </tr>
+            {{/each}}
+        </tbody>
+    </table>
+
+    <div class="total-section">
+        TOTAL DO ORÇAMENTO: {{formatPrice totalPrice}}
+    </div>
+
+    {{#if notes}}
+    <div class="section-title">OBSERVAÇÕES</div>
+    <div class="notes whitespace-pre-wrap">
+        <p>{{notes}}</p>
+    </div>
+    {{/if}}
+
+    <div class="footer">
+        <p>A validade deste orçamento é de {{quoteValidityDays}} dias a partir da data de emissão.</p>
+        <p class="whitespace-pre-wrap">{{#if quotePaymentTerms}}{{quotePaymentTerms}}{{else}}Condições de pagamento a combinar.{{/if}}</p>
+        <p style="margin-top: 10px;">{{companyName}} agradece a preferência.</p>
+        {{#if companyPhone}}<p>Para mais informações, entre em contato com nossa comercial: {{companyPhone}}</p>{{/if}}
+    </div>
+
+</body>
+</html> 

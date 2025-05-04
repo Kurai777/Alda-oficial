@@ -77,132 +77,6 @@ export default function QuoteGenerator({ items = [], onClearItems }: QuoteGenera
     return nameMap[color] || color;
   };
 
-  const generatePDF = (quoteData: any) => {
-    // Create a new PDF document
-    const doc = new jsPDF();
-    
-    // Set initial position
-    let yPos = 20;
-    const margin = 20;
-    const rightMargin = 190;
-    
-    // Add company header
-    doc.setFontSize(22);
-    doc.setFont("helvetica", "bold");
-    doc.text("ALD-A Móveis", margin, yPos);
-    yPos += 10;
-    
-    // Add date
-    doc.setFontSize(10);
-    doc.setFont("helvetica", "normal");
-    doc.text(`Data: ${new Date().toLocaleDateString('pt-BR')}`, rightMargin, yPos, { align: 'right' });
-    yPos += 15;
-    
-    // Add quote title
-    doc.setFontSize(16);
-    doc.setFont("helvetica", "bold");
-    doc.text("ORÇAMENTO", margin, yPos);
-    yPos += 15;
-    
-    // Add client information
-    doc.setFontSize(12);
-    doc.setFont("helvetica", "bold");
-    doc.text("DADOS DO CLIENTE", margin, yPos);
-    yPos += 8;
-    
-    doc.setFontSize(10);
-    doc.setFont("helvetica", "normal");
-    doc.text(`Nome: ${quoteData.clientName}`, margin, yPos);
-    yPos += 6;
-    
-    if (quoteData.clientEmail) {
-      doc.text(`E-mail: ${quoteData.clientEmail}`, margin, yPos);
-      yPos += 6;
-    }
-    
-    if (quoteData.clientPhone) {
-      doc.text(`Telefone: ${quoteData.clientPhone}`, margin, yPos);
-      yPos += 6;
-    }
-    
-    if (quoteData.architectName) {
-      doc.text(`Arquiteto: ${quoteData.architectName}`, margin, yPos);
-      yPos += 6;
-    }
-    
-    yPos += 10;
-    
-    // Add items header
-    doc.setFontSize(12);
-    doc.setFont("helvetica", "bold");
-    doc.text("ITENS", margin, yPos);
-    yPos += 8;
-    
-    // Add table headers
-    doc.setFontSize(10);
-    doc.setFont("helvetica", "bold");
-    doc.text("Código", margin, yPos);
-    doc.text("Produto", margin + 30, yPos);
-    doc.text("Cor", margin + 100, yPos);
-    doc.text("Preço", rightMargin, yPos, { align: 'right' });
-    yPos += 2;
-    
-    // Add a separator line
-    doc.line(margin, yPos, rightMargin, yPos);
-    yPos += 6;
-    
-    // List items
-    doc.setFont("helvetica", "normal");
-    quoteData.items.forEach((item: any) => {
-      // Check if we need a new page
-      if (yPos > 270) {
-        doc.addPage();
-        yPos = 20;
-      }
-      
-      doc.text(item.productCode, margin, yPos);
-      doc.text(item.productName, margin + 30, yPos);
-      doc.text(getColorName(item.color), margin + 100, yPos);
-      doc.text(formatPrice(item.price), rightMargin, yPos, { align: 'right' });
-      yPos += 6;
-    });
-    
-    // Add a separator line
-    yPos += 2;
-    doc.line(margin, yPos, rightMargin, yPos);
-    yPos += 8;
-    
-    // Add total
-    doc.setFont("helvetica", "bold");
-    doc.text("Total:", margin + 100, yPos);
-    doc.text(formatPrice(quoteData.totalPrice), rightMargin, yPos, { align: 'right' });
-    yPos += 15;
-    
-    // Add notes if there are any
-    if (quoteData.notes) {
-      doc.setFontSize(12);
-      doc.setFont("helvetica", "bold");
-      doc.text("OBSERVAÇÕES", margin, yPos);
-      yPos += 8;
-      
-      doc.setFontSize(10);
-      doc.setFont("helvetica", "normal");
-      
-      // Split long text into multiple lines
-      const splitNotes = doc.splitTextToSize(quoteData.notes, rightMargin - margin);
-      doc.text(splitNotes, margin, yPos);
-      yPos += splitNotes.length * 6 + 10;
-    }
-    
-    // Add footer
-    doc.setFontSize(9);
-    doc.setFont("helvetica", "italic");
-    doc.text("Este orçamento é válido por 30 dias.", margin, 280);
-    
-    // Return the PDF document
-    return doc;
-  };
-
   const handleGenerateQuote = async () => {
     if (!user) return;
     
@@ -246,16 +120,52 @@ export default function QuoteGenerator({ items = [], onClearItems }: QuoteGenera
         totalPrice: getTotalPrice(),
       };
       
-      // Generate PDF
-      const pdf = generatePDF(quoteData);
+      // --- MODIFICADO: Chamar API Backend para gerar PDF ---
+      console.log("Enviando dados para API gerar PDF...");
+      const response = await apiRequest("POST", "/api/quotes/generate-pdf", quoteData, {
+        responseType: 'blob' // Indicar que esperamos um Blob como resposta
+      });
+
+      // Verificar se a resposta é um Blob (PDF)
+      if (!(response instanceof Blob)) {
+        // Tentar ler como JSON para pegar mensagem de erro do backend
+        let errorMessage = "Erro desconhecido ao gerar PDF.";
+        try {
+            // Se a resposta não for um blob, pode ser um JSON de erro
+            // Precisamos ler o blob como texto para ver o erro
+            const errorText = await response.text(); 
+            const errorJson = JSON.parse(errorText);
+            errorMessage = errorJson.message || errorMessage;
+        } catch (parseError) {
+            console.error("Não foi possível parsear resposta de erro como JSON", parseError);
+            // Se não for JSON, usar o statusText se disponível
+            // A API `apiRequest` pode precisar ser ajustada para expor statusText
+             errorMessage = `Erro ${response.status || 'desconhecido'} ao gerar PDF.`; 
+        }
+         throw new Error(errorMessage);
+      }
+
+      // Criar URL temporária para o Blob (PDF)
+      const fileURL = window.URL.createObjectURL(response);
+      // Criar link temporário para download
+      const link = document.createElement('a');
+      link.href = fileURL;
+      const fileName = `Orcamento_${clientName.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.pdf`;
+      link.setAttribute('download', fileName);
+      document.body.appendChild(link);
       
-      // Save PDF
-      pdf.save(`Orcamento_${clientName.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.pdf`);
+      // Simular clique no link para iniciar download
+      link.click();
       
-      // Create quote in database
+      // Limpar link e URL temporários
+      link.parentNode?.removeChild(link);
+      window.URL.revokeObjectURL(fileURL);
+      
+      console.log("PDF recebido e download iniciado.");
+      // --- FIM DA MODIFICAÇÃO ---
+      
+      // Manter lógica de salvar orçamento no banco (talvez fazer ANTES de gerar PDF?)
       await apiRequest("POST", "/api/quotes", quoteData);
-      
-      // Invalidate quotes query to refresh the list
       queryClient.invalidateQueries({ queryKey: ["/api/quotes"] });
       
       toast({
@@ -263,7 +173,7 @@ export default function QuoteGenerator({ items = [], onClearItems }: QuoteGenera
         description: "O orçamento foi criado e está sendo baixado.",
       });
       
-      // Clear form (but keep client info)
+      // Limpar formulário
       if (onClearItems) {
         onClearItems();
       } else {
@@ -275,7 +185,7 @@ export default function QuoteGenerator({ items = [], onClearItems }: QuoteGenera
       console.error("Quote generation failed:", error);
       toast({
         title: "Falha ao gerar orçamento",
-        description: "Ocorreu um erro ao gerar o orçamento.",
+        description: error instanceof Error ? error.message : "Ocorreu um erro ao gerar o orçamento.",
         variant: "destructive",
       });
     } finally {

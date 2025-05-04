@@ -8,7 +8,6 @@
 import fs from 'fs';
 import path from 'path';
 import OpenAI from 'openai';
-import { saveImageToFirebaseStorage } from './firebase-admin';
 import { ExtractedProduct } from './pdf-ai-pipeline';
 
 // Inicializar o cliente da OpenAI
@@ -126,39 +125,32 @@ export async function processImageWithOpenAI(
 }
 
 /**
- * Processa um arquivo de imagem ou PDF para extrair produtos e suas imagens
+ * Processa um arquivo de imagem ou PDF para extrair produtos
  * @param filePath Caminho para o arquivo ou buffer do arquivo
  * @param fileName Nome do arquivo
- * @param userId ID do usuário
- * @param catalogId ID do catálogo
- * @returns Lista de produtos extraídos com URLs de imagens
+ * @param userId ID do usuário (REMOVER?)
+ * @param catalogId ID do catálogo (REMOVER?)
+ * @returns Lista de produtos extraídos (sem URL de imagem definida aqui)
  */
 export async function processFileWithAdvancedAI(
   filePath: string | Buffer,
   fileName: string,
-  userId: string,
-  catalogId: string
+  userId: string, // Manter por enquanto para compatibilidade, mas não usado
+  catalogId: string // Manter por enquanto para compatibilidade, mas não usado
 ): Promise<ExtractedProduct[]> {
   try {
-    console.log(`Processando arquivo: ${fileName}`);
+    console.log(`Processando arquivo com IA Avançada: ${fileName}`);
     
-    // Determinar se é um buffer ou um caminho
     let fileBuffer: Buffer;
     if (Buffer.isBuffer(filePath)) {
       fileBuffer = filePath;
     } else {
+      // Ler do caminho se não for buffer
+      if (!fs.existsSync(filePath)) {
+        throw new Error(`Arquivo não encontrado em: ${filePath}`);
+      }
       fileBuffer = await fs.promises.readFile(filePath);
     }
-    
-    // Fazer upload da imagem para o Firebase Storage
-    const imageUrl = await saveImageToFirebaseStorage(
-      fileBuffer,
-      fileName,
-      userId,
-      catalogId
-    );
-    
-    console.log(`Imagem salva com sucesso: ${imageUrl || 'N/A'}`);
     
     // Converter para base64 para enviar para a API de visão
     const base64Image = fileBuffer.toString('base64');
@@ -166,17 +158,13 @@ export async function processFileWithAdvancedAI(
     // Usar o modelo de visão para extrair produtos
     const extractedProducts = await processImageWithOpenAI(base64Image, fileName);
     
-    // Adicionar URL da imagem aos produtos
-    const productsWithImages = extractedProducts.map(product => ({
-      ...product,
-      imageUrl: imageUrl || undefined
-    }));
-    
-    console.log(`Extração completa: ${productsWithImages.length} produtos encontrados`);
-    return productsWithImages;
+    console.log(`Extração IA avançada completa: ${extractedProducts.length} produtos encontrados para ${fileName}`);
+    // Retornar apenas os produtos extraídos
+    return extractedProducts;
     
   } catch (error) {
-    console.error('Erro ao processar arquivo com IA avançada:', error);
-    return [];
+    console.error(`Erro ao processar arquivo ${fileName} com IA avançada:`, error);
+    // Retornar array vazio em caso de erro
+    return []; 
   }
 }

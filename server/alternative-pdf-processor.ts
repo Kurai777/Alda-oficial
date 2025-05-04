@@ -9,7 +9,6 @@ import fs from 'fs';
 import path from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { saveImageToFirebaseStorage } from './firebase-admin';
 import { ExtractedProduct } from './pdf-ai-pipeline';
 
 const execPromise = promisify(exec);
@@ -121,58 +120,46 @@ export async function generateImagesFromPdf(
 }
 
 /**
- * Extrai imagens específicas dos produtos do PDF
+ * Extrai imagens específicas dos produtos do PDF (SIMULAÇÃO)
  * @param pdfPath Caminho para o arquivo PDF
- * @param userId ID do usuário
- * @param catalogId ID do catálogo
- * @returns Mapa associando códigos de produtos a URLs de imagens
+ * @param userId ID do usuário (REMOVIDO - não usado aqui)
+ * @param catalogId ID do catálogo (REMOVIDO - não usado aqui)
+ * @returns Mapa associando códigos de produtos a URLs de imagens (VAZIO NESTA VERSÃO)
  */
 export async function extractProductImagesFromPdf(
   pdfPath: string,
-  userId: string,
-  catalogId: string
+  // userId: string,
+  // catalogId: string
 ): Promise<Map<string, string>> {
-  // Implementação simplificada - em um caso real, usaríamos detecção de objetos
-  // para recortar as imagens dos produtos
+  // Implementação simplificada - SIMULAÇÃO
+  // Em um caso real, usaríamos detecção de objetos
+  // A lógica de upload para S3/Firebase foi removida daqui.
   
   const productImagesMap = new Map<string, string>();
+  console.warn("Função extractProductImagesFromPdf é apenas uma simulação e não extrai/salva imagens reais.");
+
+  // try {
+  //   // Extrair imagens das páginas
+  //   const pageImages = await generateImagesFromPdf(pdfPath, {
+  //     dpi: 200,
+  //     outputDir: path.join(__dirname, '../temp/product-images')
+  //   });
+    
+  //   // REMOVIDO Bloco de upload para Firebase
+  //   // for (let i = 0; i < Math.min(pageImages.length, 5); i++) {
+  //   //   const page = pageImages[i];
+  //   //   const productCode = `PROD-${i + 100}`;
+  //   //   const imageFileName = `product_${productCode}_${path.basename(pdfPath, '.pdf')}.png`;
+  //   //   const imageUrl = await saveImageToFirebaseStorage(...);
+  //   //   if (imageUrl) { productImagesMap.set(productCode, imageUrl); }
+  //   // }
+    
+  // } catch (error) {
+  //   console.error('Erro na simulação de extração de imagens de produtos:', error);
+  // }
   
-  try {
-    // Extrair imagens das páginas
-    const pageImages = await generateImagesFromPdf(pdfPath, {
-      dpi: 200,
-      outputDir: path.join(__dirname, '../temp/product-images')
-    });
-    
-    // Associar algumas imagens a códigos fictícios para demonstração
-    // Em uma implementação real, faríamos detecção de objetos e extrairíamos
-    // as imagens dos produtos específicos
-    
-    // Vamos fazer upload dessas imagens para o Firebase Storage
-    for (let i = 0; i < Math.min(pageImages.length, 5); i++) {
-      const page = pageImages[i];
-      const productCode = `PROD-${i + 100}`; // Código fictício
-      const imageFileName = `product_${productCode}_${path.basename(pdfPath, '.pdf')}.png`;
-      
-      // Fazer upload da imagem
-      const imageUrl = await saveImageToFirebaseStorage(
-        page.buffer,
-        imageFileName,
-        userId,
-        catalogId
-      );
-      
-      if (imageUrl) {
-        productImagesMap.set(productCode, imageUrl);
-      }
-    }
-    
-    return productImagesMap;
-    
-  } catch (error) {
-    console.error('Erro ao extrair imagens de produtos:', error);
-    return productImagesMap; // Retornar mapa vazio em caso de erro
-  }
+  // Retorna mapa vazio pois o upload/extração real foi removido
+  return productImagesMap; 
 }
 
 /**

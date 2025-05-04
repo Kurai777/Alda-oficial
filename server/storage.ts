@@ -22,7 +22,6 @@ export interface IStorage {
   // User methods
   getUser(id: number): Promise<User | undefined>;
   getUserByEmail(email: string): Promise<User | undefined>;
-  getUserByFirebaseId(firebaseId: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
   updateUser(id: number, userData: Partial<User>): Promise<User | undefined>;
 
@@ -42,7 +41,7 @@ export interface IStorage {
   getCatalog(id: number): Promise<Catalog | undefined>;
   getCatalogsByUserId(userId: number | string): Promise<Catalog[]>;
   createCatalog(catalog: InsertCatalog): Promise<Catalog>;
-  updateCatalogStatus(id: number, status: string, firestoreCatalogId?: string): Promise<Catalog | undefined>;
+  updateCatalogStatus(id: number, status: string): Promise<Catalog | undefined>;
   deleteCatalog(id: number): Promise<boolean>;
 
   // Quote methods
@@ -205,12 +204,6 @@ export class MemStorage implements IStorage {
     );
   }
 
-  async getUserByFirebaseId(firebaseId: string): Promise<User | undefined> {
-    return Array.from(this.users.values()).find(
-      (user) => user.firebaseId === firebaseId
-    );
-  }
-
   async createUser(insertUser: InsertUser): Promise<User> {
     const id = this.userId++;
     const user: User = { 
@@ -219,7 +212,6 @@ export class MemStorage implements IStorage {
       password: insertUser.password,
       name: insertUser.name || null,
       companyName: insertUser.companyName || "Empresa Padrão",
-      firebaseId: insertUser.firebaseId || null,
       createdAt: new Date(),
       updatedAt: new Date()
     };
@@ -357,9 +349,6 @@ export class MemStorage implements IStorage {
       description: insertProduct.description || null,
       category: insertProduct.category || null,
       imageUrl: insertProduct.imageUrl || null,
-      // Campos de integração com Firebase
-      firestoreId: insertProduct.firestoreId || null,
-      firebaseUserId: insertProduct.firebaseUserId || null
     };
     
     this.products.set(id, product);
@@ -408,9 +397,6 @@ export class MemStorage implements IStorage {
       description: productUpdate.description !== undefined ? productUpdate.description : existingProduct.description,
       category: productUpdate.category !== undefined ? productUpdate.category : existingProduct.category,
       imageUrl: productUpdate.imageUrl !== undefined ? productUpdate.imageUrl : existingProduct.imageUrl,
-      // Preservar ou atualizar campos de integração com Firebase
-      firestoreId: productUpdate.firestoreId !== undefined ? productUpdate.firestoreId : existingProduct.firestoreId,
-      firebaseUserId: productUpdate.firebaseUserId !== undefined ? productUpdate.firebaseUserId : existingProduct.firebaseUserId
     };
     
     this.products.set(id, updatedProduct);
@@ -526,23 +512,19 @@ export class MemStorage implements IStorage {
       id, 
       createdAt: new Date(),
       processedStatus: insertCatalog.processedStatus || "pending",
-      firestoreCatalogId: insertCatalog.firestoreCatalogId || null,
-      firebaseUserId: insertCatalog.firebaseUserId || null
     };
     
     this.catalogs.set(id, catalog);
     return catalog;
   }
 
-  async updateCatalogStatus(id: number, status: string, firestoreCatalogId?: string): Promise<Catalog | undefined> {
+  async updateCatalogStatus(id: number, status: string): Promise<Catalog | undefined> {
     const existingCatalog = this.catalogs.get(id);
     if (!existingCatalog) return undefined;
 
     const updatedCatalog = { 
       ...existingCatalog, 
       processedStatus: status,
-      // Atualizar firestoreCatalogId se fornecido
-      ...(firestoreCatalogId ? { firestoreCatalogId } : {}),
     };
     
     this.catalogs.set(id, updatedCatalog);
@@ -659,12 +641,6 @@ export class DatabaseStorage implements IStorage {
     }
   }
   
-  async getUserByFirebaseId(firebaseId: string): Promise<User | undefined> {
-    if (!firebaseId) return undefined;
-    const result = await db.select().from(users).where(eq(users.firebaseId, firebaseId)).limit(1);
-    return result[0];
-  }
-  
   async createUser(insertUser: InsertUser): Promise<User> {
     try {
       const userToInsert = {
@@ -672,7 +648,6 @@ export class DatabaseStorage implements IStorage {
         password: insertUser.password,
         name: insertUser.name || null,
         companyName: insertUser.companyName,
-        firebaseId: insertUser.firebaseId || null,
       };
       const result = await db.insert(users).values(userToInsert).returning();
       return result[0];
@@ -756,7 +731,8 @@ export class DatabaseStorage implements IStorage {
   
   async createProduct(insertProduct: InsertProduct): Promise<Product> {
     try {
-      const [product] = await db.insert(products).values(insertProduct).returning();
+      const { firebaseUserId, firestoreId, ...productToInsert } = insertProduct;
+      const [product] = await db.insert(products).values(productToInsert).returning();
       return product;
     } catch (error) {
       console.error('Error creating product:', error);
@@ -766,8 +742,9 @@ export class DatabaseStorage implements IStorage {
   
   async updateProduct(id: number, productUpdate: Partial<InsertProduct>): Promise<Product | undefined> {
     try {
+      const { firebaseUserId, firestoreId, ...updateData } = productUpdate;
       const [product] = await db.update(products)
-        .set(productUpdate)
+        .set(updateData)
         .where(eq(products.id, id))
         .returning();
       return product;
@@ -882,7 +859,8 @@ export class DatabaseStorage implements IStorage {
   
   async createCatalog(insertCatalog: InsertCatalog): Promise<Catalog> {
     try {
-      const [catalog] = await db.insert(catalogs).values(insertCatalog).returning();
+      const { firebaseUserId, firestoreCatalogId, ...catalogToInsert } = insertCatalog;
+      const [catalog] = await db.insert(catalogs).values(catalogToInsert).returning();
       return catalog;
     } catch (error) {
       console.error('Error creating catalog:', error);
@@ -890,13 +868,9 @@ export class DatabaseStorage implements IStorage {
     }
   }
   
-  async updateCatalogStatus(id: number, status: string, firestoreCatalogId?: string): Promise<Catalog | undefined> {
+  async updateCatalogStatus(id: number, status: string): Promise<Catalog | undefined> {
     try {
-      const updateData: any = { processedStatus: status };
-      if (firestoreCatalogId) {
-        updateData.firestoreCatalogId = firestoreCatalogId;
-      }
-      
+      const updateData = { processedStatus: status };
       const [catalog] = await db.update(catalogs)
         .set(updateData)
         .where(eq(catalogs.id, id))
@@ -908,8 +882,9 @@ export class DatabaseStorage implements IStorage {
     }
   }
   
-  async updateCatalog(id: number, updateData: Partial<InsertCatalog>): Promise<Catalog | undefined> {
+  async updateCatalog(id: number, updateDataInput: Partial<InsertCatalog>): Promise<Catalog | undefined> {
     try {
+      const { firebaseUserId, firestoreCatalogId, ...updateData } = updateDataInput;
       const [catalog] = await db.update(catalogs)
         .set(updateData)
         .where(eq(catalogs.id, id))

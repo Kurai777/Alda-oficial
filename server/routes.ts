@@ -1,6 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
+import { type InsertUser } from '@shared/schema';
 import multer from "multer";
 import * as fs from "fs";
 import path from "path";
@@ -11,7 +12,7 @@ import { WebSocketServer } from "ws";
 import mime from "mime-types";
 import { createCanvas } from "canvas";
 import { deleteDataFromFirestore } from "./test-upload.js";
-import { getS3UploadMiddleware, checkS3Configuration } from "./s3-service.js";
+import { getS3UploadMiddleware, checkS3Configuration, uploadBufferToS3 } from "./s3-service.js";
 import { 
   uploadCatalogFileToS3, 
   getProductImageUrl, 
@@ -28,6 +29,11 @@ import firebaseAppClient from '../client/src/lib/firebase';
 import { fixProductImages } from './excel-fixed-image-mapper';
 import { extractAndUploadImagesSequentially, type ExtractedImageInfo } from './excel-image-extractor';
 import { Catalog as SharedCatalog } from "@shared/schema";
+import { spawn } from 'child_process';
+import { runPythonColumnExtractor } from './excel-image-extractor';
+import { processCatalogInBackground } from './catalog-processor';
+import bcrypt from 'bcrypt';
+import { generateQuotePdf } from './pdf-generator';
 
 type MoodboardCreateInput = {
   userId: number;
@@ -49,14 +55,7 @@ declare module "express-session" {
   }
 }
 
-declare global {
-  namespace Express {
-    interface Request {
-      firebaseUser?: DecodedIdToken;
-      s3Key?: string; // Chave S3 do arquivo enviado
-    }
-  }
-}
+const SALT_ROUNDS = 10;
 
 // Verificar se devemos usar S3 ou armazenamento local
 let useS3Storage = true; // Forçando uso do S3 para todos os ambientes
@@ -73,6 +72,20 @@ const localStorage = multer.diskStorage({
 
 // Inicialmente, configurar para armazenamento local (será substituído depois de verificar S3)
 let upload = multer({ storage: localStorage });
+
+// Middleware Multer específico para upload de logo (em memória para processar e enviar ao S3)
+const logoUploadInMemory = multer({ 
+  storage: multer.memoryStorage(), // Salvar em memória
+  limits: { fileSize: 5 * 1024 * 1024 }, // Limite de 5MB para logo
+  fileFilter: (req, file, cb) => {
+    // Aceitar apenas imagens comuns
+    if (file.mimetype.startsWith('image/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Tipo de arquivo inválido para logo. Use PNG, JPG, WEBP.'));
+    }
+  }
+});
 
 async function extractProductsFromExcel(filePath: string): Promise<any[]> {
   const XLSX = require('xlsx');
@@ -111,6 +124,14 @@ function handleMulterError(err: any, req: Request, res: Response, next: NextFunc
   // Se não houve erro no multer, passar para o próximo middleware/rota
   next();
 }
+
+// Middleware simples para verificar autenticação via sessão
+const requireAuth = (req: Request, res: Response, next: NextFunction) => {
+  if (!req.session || !req.session.userId) {
+    return res.status(401).json({ message: "Autenticação necessária." });
+  }
+  next();
+};
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Verificar configuração do S3 e ativar se disponível
@@ -163,273 +184,220 @@ export async function registerRoutes(app: Express): Promise<Server> {
     });
   });
 
-  // Middleware para extrair usuário Firebase do token Authorization
-  const extractFirebaseUser = async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const authHeader = req.headers.authorization;
-      
-      if (!authHeader || !authHeader.startsWith('Bearer ')) {
-        return next();
-      }
-      
-      const token = authHeader.split('Bearer ')[1];
-      
-      if (!token) {
-        return next();
-      }
-      
-      const firebaseAdmin = await import('./firebase-admin');
-      const decodedToken = await firebaseAdmin.auth.verifyIdToken(token);
-      
-      req.firebaseUser = decodedToken;
-      
-      next();
-    } catch (error) {
-      console.error("Erro ao extrair usuário Firebase:", error);
-      next();
-    }
-  };
-  
-  // Adicionar middleware para todas as rotas
-  app.use(extractFirebaseUser);
-  
-  // Rotas de autenticação
+  // ========================================
+  // NOVAS ROTAS DE AUTENTICAÇÃO (SESSÃO + BCRYPT)
+  // ========================================
+
+  // Registro de Usuário
   app.post("/api/auth/register", async (req: Request, res: Response) => {
     try {
-      const { email, password, name } = req.body;
-      
-      if (!email || !password) {
-        return res.status(400).json({ message: "Email e senha são obrigatórios" });
+      const { email, password, name, companyName } = req.body;
+
+      if (!email || !password || !name) {
+        return res.status(400).json({ message: "Email, senha e nome são obrigatórios" });
       }
-      
+
       // Verificar se o usuário já existe
       const existingUser = await storage.getUserByEmail(email);
-      
       if (existingUser) {
-        return res.status(400).json({ message: "Usuário já existe" });
+        return res.status(409).json({ message: "Email já cadastrado" }); // Usar 409 Conflict
       }
-      
-      // Criar usuário no Firebase
-      const firebaseAdmin = await import('./firebase-admin');
-      const userRecord = await firebaseAdmin.auth.createUser({
-        email,
-        password,
-        displayName: name
-      });
-      
+
+      // Hash da senha
+      const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
+
       // Criar usuário no banco de dados
       const user = await storage.createUser({
         email,
-        password: "FIREBASE_AUTH",
+        password: hashedPassword, // Salvar senha com hash
         name,
-        companyName: "Empresa Padrão",
-        firebaseId: userRecord.uid,
+        companyName: companyName || "Empresa Padrão",
+        // Remover firebaseId
       });
-      
-      // Início da sessão
-      if (req.session) {
-        req.session.userId = user.id;
-      }
-      
+
+      // Iniciar sessão automaticamente após registro
+      req.session.userId = user.id;
+      console.log(`Usuário ${user.id} registrado e sessão iniciada.`);
+
       return res.status(201).json({
         id: user.id,
         email: user.email,
         name: user.name,
-        firebaseId: user.firebaseId
+        companyName: user.companyName
+        // Remover firebaseId
       });
     } catch (error) {
       console.error("Erro ao registrar usuário:", error);
-      return res.status(500).json({ message: "Erro ao criar usuário" });
+      return res.status(500).json({ message: "Erro interno ao registrar usuário" });
     }
   });
-  
+
+  // Login de Usuário
   app.post("/api/auth/login", async (req: Request, res: Response) => {
     try {
       const { email, password } = req.body;
-      
+
       if (!email || !password) {
         return res.status(400).json({ message: "Email e senha são obrigatórios" });
       }
-      
-      // Usar o app importado como default
-      const auth = getAuth(firebaseAppClient);
-      const userCredential = await signInWithEmailAndPassword(auth, email, password);
-      
-      const user = await storage.getUserByFirebaseId(userCredential.user.uid);
-      
+
+      // Buscar usuário pelo email
+      const user = await storage.getUserByEmail(email);
       if (!user) {
-        const newUser = await storage.createUser({
-          email,
-          password: "FIREBASE_AUTH",
-          name: userCredential.user.displayName || email.split('@')[0],
-          companyName: "Empresa Padrão",
-          firebaseId: userCredential.user.uid,
-        });
-        
-        if (req.session) {
-          req.session.userId = newUser.id;
-        }
-        
-        // Retornar dados do novo usuário criado localmente
-        return res.status(200).json({
-          id: newUser.id,
-          email: newUser.email,
-          name: newUser.name,
-          firebaseId: newUser.firebaseId
-        });
+        console.log(`Tentativa de login falhou: Email ${email} não encontrado.`);
+        return res.status(401).json({ message: "Credenciais inválidas" }); // Não especificar se é email ou senha
       }
-      
-      // Usuário encontrado no DB local
-      console.log(`Usuário ${email} encontrado no DB local (ID: ${user.id}).`);
-      if (req.session) {
-        req.session.userId = user.id;
+
+      // Verificar senha
+      const isPasswordValid = await bcrypt.compare(password, user.password);
+      if (!isPasswordValid) {
+        console.log(`Tentativa de login falhou: Senha incorreta para ${email}.`);
+        return res.status(401).json({ message: "Credenciais inválidas" });
       }
-      
-      // Retornar dados do usuário existente
+
+      // Iniciar sessão
+      req.session.userId = user.id;
+      console.log(`Usuário ${user.id} logado e sessão iniciada.`);
+
       return res.status(200).json({
         id: user.id,
         email: user.email,
         name: user.name,
-        firebaseId: user.firebaseId
+        companyName: user.companyName
+        // Remover firebaseId
       });
     } catch (error) {
       console.error("Erro ao fazer login:", error);
-      // Adicionar verificação de tipo para error.code (Boa prática)
-      let errorMessage = "Erro interno durante o login";
-      let statusCode = 500;
-      if (error instanceof Error && 'code' in error) { 
-          const firebaseErrorCode = (error as any).code; // Type assertion
-          if ([ 'auth/invalid-credential', 
-                'auth/user-not-found', 
-                'auth/wrong-password'].includes(firebaseErrorCode)) 
-          {         
-               errorMessage = "Credenciais inválidas";
-               statusCode = 401;
-          } 
-      } 
-      return res.status(statusCode).json({ message: errorMessage });
+      return res.status(500).json({ message: "Erro interno durante o login" });
     }
   });
-  
-  app.post("/api/auth/firebase-sync", async (req: Request, res: Response) => {
-    try {
-      if (!req.firebaseUser) {
-        return res.status(401).json({ message: "Token inválido ou não fornecido" });
-      }
-      
-      const { uid, email, name } = req.firebaseUser;
-      
-      // Verificar se o usuário já existe no banco de dados
-      let user = await storage.getUserByFirebaseId(uid);
-      
-      if (!user) {
-        // Criar usuário no banco se não existir
-        user = await storage.createUser({
-          email: email || `user_${uid}@placeholder.com`,
-          password: "FIREBASE_AUTH",
-          name: name || email?.split('@')[0] || uid,
-          companyName: "Empresa Padrão",
-          firebaseId: uid,
-        });
-      }
-      
-      // Início da sessão
-      if (req.session) {
-        req.session.userId = user.id;
-      }
-      
-      return res.status(200).json({
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        firebaseId: user.firebaseId
-      });
-    } catch (error) {
-      console.error("Erro ao sincronizar usuário Firebase:", error);
-      return res.status(500).json({ message: "Erro ao sincronizar usuário" });
-    }
-  });
-  
-  app.get("/api/auth/me", async (req: Request, res: Response) => {
-    try {
-      // Priorizar autenticação Firebase
-      if (req.firebaseUser) {
-        const { uid } = req.firebaseUser;
-        const user = await storage.getUserByFirebaseId(uid);
-        
-        if (user) {
-          console.log(`Usuário autenticado via Firebase Token: ${user.email}`);
-          return res.status(200).json({
-            id: user.id,
-            email: user.email,
-            name: user.name,
-            firebaseId: user.firebaseId
-          });
-        }
-         console.log(`Token Firebase válido, mas usuário ${uid} não encontrado no DB local.`);
-         // Considerar retornar 401 ou tentar sincronizar aqui?
-      }
-      
-      // Fallback para autenticação por sessão
-      if (req.session?.userId) {
-      const user = await storage.getUser(req.session.userId);
-          if (user) {
-              console.log(`Usuário autenticado via Sessão: ${user.email}`);
-      return res.status(200).json({
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        firebaseId: user.firebaseId
-      });
-          } else {
-             console.log(`Sessão encontrada (userId: ${req.session.userId}) mas usuário não existe no DB.`);
-             // Limpar sessão inválida?
-             req.session.destroy(()=>{}); 
-          }
-      }
-      
-      // Se chegou aqui, não está autenticado
-      console.log("Nenhuma autenticação válida (Firebase ou Sessão) encontrada.");
-      return res.status(401).json({ message: "Não autenticado" });
 
+  // Obter Usuário Logado (Verificar Sessão)
+  app.get("/api/auth/me", requireAuth, async (req: Request, res: Response) => {
+    // O middleware requireAuth já garante que req.session.userId existe
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user) {
+        // Isso não deveria acontecer se a sessão é válida, mas checar por segurança
+        console.error(`Sessão válida (userId: ${req.session.userId}) mas usuário não encontrado no DB.`);
+        req.session.destroy(() => {}); // Destruir sessão inválida
+        return res.status(401).json({ message: "Usuário da sessão não encontrado." });
+      }
+
+      console.log(`Usuário ${user.id} autenticado via sessão.`);
+      return res.status(200).json({
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        companyName: user.companyName
+        // Remover firebaseId
+      });
     } catch (error) {
       console.error("Erro ao obter usuário (/api/auth/me):", error);
-      return res.status(500).json({ message: "Erro ao obter usuário" });
+      return res.status(500).json({ message: "Erro ao obter dados do usuário" });
     }
   });
-  
+
+  // --- ADICIONAR/MODIFICAR ROTA PUT /api/auth/me ---
+  app.put("/api/auth/me", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      const receivedData = req.body;
+
+      if (!receivedData || typeof receivedData !== 'object') {
+        return res.status(400).json({ message: "Dados inválidos." });
+      }
+
+      // Mapear de camelCase (frontend) para snake_case (DB/schema)
+      const updateDataForDb: Partial<InsertUser & { company_logo_url?: string | null, company_address?: string | null, company_phone?: string | null, company_cnpj?: string | null, quote_payment_terms?: string | null, quote_validity_days?: number | null }> = {};
+
+      if (receivedData.name !== undefined) updateDataForDb.name = receivedData.name;
+      if (receivedData.companyName !== undefined) updateDataForDb.companyName = receivedData.companyName;
+      if (receivedData.companyAddress !== undefined) updateDataForDb.company_address = receivedData.companyAddress;
+      if (receivedData.companyPhone !== undefined) updateDataForDb.company_phone = receivedData.companyPhone;
+      if (receivedData.companyCnpj !== undefined) updateDataForDb.company_cnpj = receivedData.companyCnpj;
+      if (receivedData.companyLogoUrl !== undefined) updateDataForDb.company_logo_url = receivedData.companyLogoUrl; // Manter camelCase aqui se a coluna for camelCase, ou snake_case se for snake_case
+      if (receivedData.quotePaymentTerms !== undefined) updateDataForDb.quote_payment_terms = receivedData.quotePaymentTerms;
+      if (receivedData.quoteValidityDays !== undefined) updateDataForDb.quote_validity_days = receivedData.quoteValidityDays;
+      
+      // Não permitir atualização de email/senha aqui
+      delete updateDataForDb.email;
+      delete updateDataForDb.password;
+      
+      // Adicionar verificação se o objeto mapeado não está vazio
+      if (Object.keys(updateDataForDb).length === 0) {
+          return res.status(400).json({ message: "Nenhum dado válido para atualizar." });
+      }
+
+      console.log(`Atualizando perfil para userId: ${userId}`, updateDataForDb);
+
+      // Chamar storage.updateUser com os dados mapeados (snake_case)
+      // A função updateUser precisa aceitar esses campos
+      const updatedUser = await storage.updateUser(userId, updateDataForDb);
+
+      if (!updatedUser) {
+        return res.status(404).json({ message: "Usuário não encontrado." });
+      }
+
+      console.log(`Perfil atualizado para userId: ${userId}`);
+      // Retornar dados atualizados (sem senha)
+      const { password, ...userToSend } = updatedUser;
+      return res.status(200).json(userToSend);
+
+    } catch (error) {
+      console.error("Erro ao atualizar perfil:", error);
+      return res.status(500).json({ message: "Erro interno ao atualizar perfil." });
+    }
+  });
+  // --- FIM DA ROTA PUT --- 
+
+  // Logout de Usuário
   app.post("/api/auth/logout", (req: Request, res: Response) => {
     if (req.session) {
+      console.log(`Deslogando usuário ${req.session.userId}`);
       req.session.destroy((err) => {
         if (err) {
+          console.error("Erro ao destruir sessão:", err);
           return res.status(500).json({ message: "Erro ao encerrar sessão" });
         }
-        res.status(200).json({ message: "Logout realizado com sucesso" });
+        // Limpar o cookie no cliente também
+        res.clearCookie('connect.sid'); // Use o nome padrão ou o nome configurado do seu cookie de sessão
+        return res.status(200).json({ message: "Logout realizado com sucesso" });
       });
     } else {
-      res.status(200).json({ message: "Nenhuma sessão para encerrar" });
+      return res.status(200).json({ message: "Nenhuma sessão ativa para encerrar" });
     }
   });
-  
-  // Rotas de produtos
-  app.get("/api/products", async (req: Request, res: Response) => {
+
+  // ========================================
+  // ROTAS PROTEGIDAS
+  // ========================================
+
+  // Rotas de produtos (Aplicar requireAuth)
+  app.get("/api/products", requireAuth, async (req: Request, res: Response) => {
     try {
-      const userId = req.session?.userId || parseInt(req.query.userId as string) || undefined;
+      // Usar ID da sessão autenticada
+      const userId = req.session.userId!;
       const catalogId = req.query.catalogId ? parseInt(req.query.catalogId as string) : undefined;
-      
-      if (!userId) {
-        return res.status(401).json({ message: "Usuário não autenticado" });
-      }
-      
+
       const products = await storage.getProducts(userId, catalogId);
-      return res.status(200).json(products);
+      
+      // CORRIGIDO: Converter Datas para ISOString antes de enviar JSON
+      const productsForJson = products.map(p => ({
+        ...p,
+        // Garante que createdAt é string segura para JSON
+        createdAt: p.createdAt instanceof Date ? p.createdAt.toISOString() : p.createdAt,
+      }));
+      
+      // Retornar array de produtos formatado
+      return res.status(200).json(productsForJson);
     } catch (error) {
       console.error("Erro ao obter produtos:", error);
       return res.status(500).json({ message: "Erro ao obter produtos" });
     }
   });
-  
-  app.get("/api/products/:id", async (req: Request, res: Response) => {
+
+  app.get("/api/products/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const id = parseInt(req.params.id);
       
@@ -449,14 +417,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.status(500).json({ message: "Erro ao obter produto" });
     }
   });
-  
-  app.post("/api/products", async (req: Request, res: Response) => {
+
+  app.post("/api/products", requireAuth, async (req: Request, res: Response) => {
     try {
-      const userId = req.session?.userId || parseInt(req.body.userId);
-      
-      if (!userId) {
-        return res.status(401).json({ message: "Usuário não autenticado" });
-      }
+      const userId = req.session.userId!;
       
       const product = await storage.createProduct({
         ...req.body,
@@ -472,7 +436,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
   
-  app.put("/api/products/:id", async (req: Request, res: Response) => {
+  app.put("/api/products/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const id = parseInt(req.params.id);
       
@@ -483,6 +447,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const data = req.body;
       const product = await storage.updateProduct(id, {
         ...data,
+        userId: req.session.userId!,
         updatedAt: new Date(),
         isEdited: true
       });
@@ -498,7 +463,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
   
-  app.delete("/api/products/:id", async (req: Request, res: Response) => {
+  app.delete("/api/products/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const id = parseInt(req.params.id);
       
@@ -518,15 +483,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.status(500).json({ message: "Erro ao excluir produto" });
     }
   });
-  
-  // Rotas de catálogos
-  app.get("/api/catalogs", async (req: Request, res: Response) => {
+
+  // Rotas de catálogos (Aplicar requireAuth)
+  app.get("/api/catalogs", requireAuth, async (req: Request, res: Response) => {
     try {
-      const userId = req.session?.userId || parseInt(req.query.userId as string);
-      
-      if (!userId) {
-        return res.status(401).json({ message: "Usuário não autenticado" });
-      }
+      const userId = req.session.userId!;
       
       const catalogs = await storage.getCatalogs(userId);
       return res.status(200).json(catalogs);
@@ -536,13 +497,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
   
-  app.post("/api/catalogs", async (req: Request, res: Response) => {
+  app.post("/api/catalogs", requireAuth, async (req: Request, res: Response) => {
     try {
-      const userId = req.session?.userId || parseInt(req.body.userId);
-      
-      if (!userId) {
-        return res.status(401).json({ message: "Usuário não autenticado" });
-      }
+      const userId = req.session.userId!;
       
       // Criar catálogo no banco de dados
       const catalog = await storage.createCatalog({
@@ -551,28 +508,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         createdAt: new Date()
       });
       
-      // Criar catálogo no Firestore
-      try {
-        // Importar serviço do Firestore
-        const { createCatalogInFirestore } = await import('./firestore-service');
-        
-        const firestoreCatalog = await createCatalogInFirestore({
-          name: req.body.name,
-          fileName: req.body.name,
-          filePath: "",
-          fileType: "manual",
-          status: "completed",
-          userId: userId.toString(),
-          localCatalogId: catalog.id,
-          createdAt: new Date()
-        });
-        
-        console.log(`Catálogo criado no Firestore: ${firestoreCatalog.id}`);
-      } catch (firestoreError) {
-        console.error("Erro ao criar catálogo no Firestore:", firestoreError);
-        // Continuar mesmo se não conseguir salvar no Firestore
-      }
-      
       return res.status(201).json(catalog);
     } catch (error) {
       console.error("Erro ao criar catálogo:", error);
@@ -580,7 +515,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
   
-  app.get("/api/catalogs/:id", async (req: Request, res: Response) => {
+  app.get("/api/catalogs/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const id = parseInt(req.params.id);
       
@@ -592,6 +527,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       if (!catalog) {
         return res.status(404).json({ message: "Catálogo não encontrado" });
+      }
+      
+      // Verificar permissão
+      if (catalog.userId !== req.session.userId) {
+        return res.status(403).json({ message: "Acesso negado" });
       }
       
       // Obter os produtos associados a este catálogo
@@ -607,7 +547,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
   
-  app.put("/api/catalogs/:id/status", async (req: Request, res: Response) => {
+  app.put("/api/catalogs/:id/status", requireAuth, async (req: Request, res: Response) => {
     try {
       const id = parseInt(req.params.id);
       const { status } = req.body;
@@ -618,6 +558,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       if (!status) {
         return res.status(400).json({ message: "Status é obrigatório" });
+      }
+      
+      const catalog = await storage.getCatalog(id);
+      if (!catalog || catalog.userId !== req.session.userId) {
+        return res.status(403).json({ message: "Acesso negado ou catálogo não encontrado" });
       }
       
       const success = await storage.updateCatalogStatus(id, status);
@@ -633,10 +578,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
   
-  app.post("/api/catalogs/:id/remap-images", async (req: Request, res: Response) => {
+  app.post("/api/catalogs/:id/remap-images", requireAuth, async (req: Request, res: Response) => {
     try {
       const catalogId = parseInt(req.params.id);
-      const userId = req.session?.userId || parseInt(req.body.userId as string);
+      const userId = req.session.userId!;
       
       if (isNaN(catalogId)) return res.status(400).json({ message: "ID inválido" });
       if (!userId) return res.status(401).json({ message: "Usuário não autenticado" });
@@ -656,7 +601,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(200).json({
             message: result.message,
             updatedCount: result.updated
-          });
+        });
       } else {
           return res.status(500).json({ 
               message: "Erro ao corrigir imagens", 
@@ -671,9 +616,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
   
-  app.post("/api/catalogs/remap-all-images", async (req: Request, res: Response) => {
+  app.post("/api/catalogs/remap-all-images", requireAuth, async (req: Request, res: Response) => {
     try {
-      const userId = req.session?.userId || parseInt(req.body.userId as string);
+      const userId = req.session.userId!;
       if (!userId) return res.status(401).json({ message: "Usuário não autenticado" });
       
       const catalogs = await storage.getCatalogs(userId);
@@ -686,7 +631,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
         for (const catalog of catalogs) {
         console.log(`Iniciando correção de imagens para catálogo ${catalog.id} (todos)`);
-        try {
+          try {
             // *** Chamar a função exportada correta ***
             const result = await fixProductImages(userId, catalog.id);
             results.push({
@@ -724,7 +669,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
   
-  app.delete("/api/catalogs/:id", async (req: Request, res: Response) => {
+  app.delete("/api/catalogs/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const id = parseInt(req.params.id);
       
@@ -734,7 +679,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       console.log(`Iniciando exclusão do catálogo ${id}`);
       
-      // Obter o catálogo para verificar o userId
       const catalog = await storage.getCatalog(id);
       
       if (!catalog) {
@@ -744,22 +688,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       console.log(`Catálogo ${id} encontrado, pertence ao usuário ${catalog.userId}`);
       
+      if (catalog.userId !== req.session.userId) {
+        return res.status(403).json({ message: "Acesso negado" });
+      }
+      
       // Primeiro, excluir todos os produtos associados a este catálogo
-      // usando a função dedicada para isso no storage
       const deletedProductsCount = await storage.deleteProductsByCatalogId(id);
       console.log(`${deletedProductsCount} produtos excluídos do catálogo ${id}`);
-      
-      // Tentar excluir do Firestore se aplicável
-      try {
-        if (catalog.firestoreCatalogId) {
-          const { deleteCatalogFromFirestore } = await import('./firestore-service');
-          await deleteCatalogFromFirestore(catalog.userId.toString(), id.toString());
-          console.log(`Catálogo ${id} excluído do Firestore`);
-        }
-      } catch (firestoreError) {
-        console.error("Erro ao excluir catálogo do Firestore:", firestoreError);
-        // Continuar mesmo se não conseguir excluir do Firestore
-      }
       
       // Por fim, excluir o catálogo
       const success = await storage.deleteCatalog(id);
@@ -780,14 +715,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
   
-  // Rotas de orçamentos
-  app.get("/api/quotes", async (req: Request, res: Response) => {
+  // Rotas de orçamentos (Aplicar requireAuth)
+  app.get("/api/quotes", requireAuth, async (req: Request, res: Response) => {
     try {
-      const userId = req.session?.userId || parseInt(req.query.userId as string);
-      
-      if (!userId) {
-        return res.status(401).json({ message: "Usuário não autenticado" });
-      }
+      const userId = req.session.userId!;
       
       const quotes = await storage.getQuotes(userId);
       return res.status(200).json(quotes);
@@ -797,7 +728,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
   
-  app.get("/api/quotes/:id", async (req: Request, res: Response) => {
+  app.get("/api/quotes/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const id = parseInt(req.params.id);
       
@@ -818,13 +749,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
   
-  app.post("/api/quotes", async (req: Request, res: Response) => {
+  app.post("/api/quotes", requireAuth, async (req: Request, res: Response) => {
     try {
-      const userId = req.session?.userId || parseInt(req.body.userId);
-      
-      if (!userId) {
-        return res.status(401).json({ message: "Usuário não autenticado" });
-      }
+      const userId = req.session.userId!;
       
       const quote = await storage.createQuote({
         ...req.body,
@@ -839,7 +766,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
   
-  app.put("/api/quotes/:id", async (req: Request, res: Response) => {
+  app.put("/api/quotes/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const id = parseInt(req.params.id);
       
@@ -860,13 +787,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
   
-  app.delete("/api/quotes/:id", async (req: Request, res: Response) => {
+  app.delete("/api/quotes/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const id = parseInt(req.params.id);
       
       if (isNaN(id)) {
         return res.status(400).json({ message: "ID inválido" });
       }
+      
+      const quote = await storage.getQuote(id);
+      if (!quote || quote.userId !== req.session.userId) return res.status(403).json({ message: 'Acesso negado' });
       
       const success = await storage.deleteQuote(id);
       
@@ -881,14 +811,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
   
-  // Rotas de moodboards
-  app.get("/api/moodboards", async (req: Request, res: Response) => {
+  // ROTA: Gerar PDF do Orçamento (voltando para pdf-lib básico)
+  app.post("/api/quotes/generate-pdf", requireAuth, async (req: Request, res: Response) => {
     try {
-      const userId = req.session?.userId || parseInt(req.query.userId as string);
-      
-      if (!userId) {
-        return res.status(401).json({ message: "Usuário não autenticado" });
+      const userId = req.session.userId!;
+      const user = await storage.getUser(userId);
+      if (!user) {
+        return res.status(403).json({ message: "Usuário não encontrado ou não autorizado." });
       }
+
+      const quoteData = req.body; 
+      if (!quoteData || !quoteData.clientName || !quoteData.items || quoteData.items.length === 0) {
+        return res.status(400).json({ message: "Dados do orçamento inválidos ou incompletos." });
+      }
+
+      console.log("Gerando PDF para orçamento via pdf-lib...");
+      // Chamar a função ANTIGA
+      const pdfBytes = await generateQuotePdf(quoteData, user);
+
+      const fileName = `Orcamento_${quoteData.clientName.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.pdf`;
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`); 
+
+      // Enviar o buffer do PDF (converter Uint8Array para Buffer)
+      res.send(Buffer.from(pdfBytes));
+
+    } catch (error) {
+      console.error("Erro ao gerar PDF do orçamento:", error);
+      return res.status(500).json({ message: "Erro interno ao gerar PDF do orçamento." });
+    }
+  });
+  
+  // Rotas de moodboards (Aplicar requireAuth)
+  app.get("/api/moodboards", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
       
       const moodboards = await storage.getMoodboards(userId);
       return res.status(200).json(moodboards);
@@ -898,7 +855,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
   
-  app.get("/api/moodboards/:id", async (req: Request, res: Response) => {
+  app.get("/api/moodboards/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const id = parseInt(req.params.id);
       
@@ -911,6 +868,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!moodboard) {
         return res.status(404).json({ message: "Moodboard não encontrado" });
       }
+      
+      // Verificar permissão
+      if (moodboard.userId !== req.session.userId) return res.status(403).json({ message: 'Acesso negado' });
       
       // Obter produtos associados a este moodboard
       const products = [];
@@ -932,13 +892,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
   
-  app.post("/api/moodboards", async (req: Request, res: Response) => {
+  app.post("/api/moodboards", requireAuth, async (req: Request, res: Response) => {
     try {
-      const userId = req.session?.userId || parseInt(req.body.userId);
-      
-      if (!userId) {
-        return res.status(401).json({ message: "Usuário não autenticado" });
-      }
+      const userId = req.session.userId!;
       
       const input: MoodboardCreateInput = {
         ...req.body,
@@ -954,7 +910,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
   
-  app.put("/api/moodboards/:id", async (req: Request, res: Response) => {
+  app.put("/api/moodboards/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const id = parseInt(req.params.id);
       
@@ -976,13 +932,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
   
-  app.delete("/api/moodboards/:id", async (req: Request, res: Response) => {
+  app.delete("/api/moodboards/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const id = parseInt(req.params.id);
       
       if (isNaN(id)) {
         return res.status(400).json({ message: "ID inválido" });
       }
+      
+      const moodboard = await storage.getMoodboard(id);
+      if (!moodboard || moodboard.userId !== req.session.userId) return res.status(403).json({ message: 'Acesso negado' });
       
       const success = await storage.deleteMoodboard(id);
       
@@ -997,445 +956,202 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
   
-  // Rota para busca visual com IA
-  /*
-  app.post("/api/ai/visual-search", async (req: Request, res: Response) => {
+  // Rota para upload e processamento de catálogos (Aplicar requireAuth)
+  app.post("/api/catalogs/upload", requireAuth, upload.single("file"), handleMulterError, async (req: Request, res: Response) => {
+    console.log("=== INÍCIO TRY BLOCK DA ROTA UPLOAD ===");
     try {
-      const { imageBase64, catalogId, maxResults = 5 } = req.body;
-      const userId = req.session?.userId || parseInt(req.body.userId as string);
-      
-      if (!userId) {
-        return res.status(401).json({ message: "Usuário não autenticado" });
-      }
-      
-      if (!imageBase64) {
-        return res.status(400).json({ message: "Imagem não fornecida" });
-      }
-      
-      // ** ERRO AQUI: Módulo não encontrado **
-      // const { searchSimilarProducts } = await import('./visual-search-service'); 
-      
-      const products = await storage.getProducts(userId, catalogId ? parseInt(catalogId) : undefined);
-      if (!products || products.length === 0) {
-        return res.status(404).json({ message: "Nenhum produto encontrado" });
-      }
-      
-      // ** Lógica de busca visual precisa ser implementada aqui **
-      // const similarProducts = await searchSimilarProducts(imageBase64, products, maxResults);
-      const similarProducts = products.slice(0, maxResults); // Placeholder
-      
-      return res.status(200).json({
-        results: similarProducts,
-        totalProducts: products.length
-      });
+      // REMOVER VERIFICAÇÃO FIREBASE - requireAuth já fez a verificação da sessão
+      // if (!req.firebaseUser || !req.firebaseUser.uid) { ... }
+      const userId = req.session.userId!; // Obter userId da SESSÃO
 
-    } catch (error) {
-      console.error("Erro na busca visual:", error);
-      // Corrigir tipo do erro
-      const message = error instanceof Error ? error.message : "Erro desconhecido"; 
-      return res.status(500).json({ message: "Erro ao processar busca visual", error: message });
-    }
-  });
-  */
-  
-  // Rota para upload e processamento de catálogos
-  app.post("/api/catalogs/upload", 
-    (req, res, next) => {
-        // Chama o middleware de upload
-        upload.single('file')(req, res, (err) => {
-            // Passa para o handler de erro do Multer *antes* do handler principal da rota
-            handleMulterError(err, req, res, next);
-        });
-    }, 
-    async (req: Request, res: Response) => {
-      // *** LOG INICIAL ABSOLUTO ***
-      console.log(`\\n!!!! ROTA POST /api/catalogs/upload ACIONADA (APÓS MULTER) !!!! Timestamp: ${Date.now()}`);
-      console.log("--> Objeto req.file (do multer):", req.file);
-      console.log("--> Objeto req.body:", req.body);
-      // *****************************
+      // Obter usuário local (do nosso DB) para consistência
+      const localUser = await storage.getUser(userId);
+      if (!localUser) {
+         // Isso seria um erro interno grave se requireAuth passou
+         console.error(`Usuário da sessão ${userId} não encontrado no DB local durante upload!`);
+         return res.status(500).json({ message: "Erro interno: dados do usuário inconsistentes." });
+      }
+      const localUserId = localUser.id;
+      const userEmail = localUser.email; // Usar email do usuário local
 
-      try {
-        console.log("=== INÍCIO TRY BLOCK DA ROTA UPLOAD ===");
       if (!req.file) {
-          console.log("ERRO PÓS-MULTER: req.file ainda está indefinido!");
-          // Se chegou aqui sem erro do Multer mas sem req.file, algo estranho aconteceu
-          return res.status(500).json({ message: "Erro interno: Arquivo não processado corretamente pelo middleware." });
+        return res.status(400).json({ message: "Nenhum arquivo enviado" });
       }
-      
-      // Extrair informações do arquivo
-      const file = req.file;
-      console.log("File object:", JSON.stringify(file, null, 2));
-      
-      let filePath: string = '';
-      let s3Key: string | null = null;
-      const fileName = file.originalname;
-      const fileType = fileName.split('.').pop()?.toLowerCase() || '';
-      
-      // Verificar quem está fazendo o upload (obter o ID do usuário)
-      const userId = req.params.userId || req.query.userId || req.body.userId || req.session?.userId || 1;
-      console.log(`Upload realizado pelo usuário: ${userId}`);
-      
-      // Verificar se estamos usando S3 ou armazenamento local
-      if (useS3Storage && file.hasOwnProperty('location')) {
-        // Upload via S3 - multer-s3 v3 usa 'location'
-        s3Key = (file as any).key;
-        const s3Location = (file as any).location;
-          // @ts-ignore - Ignorar possível erro de tipo aqui
-          filePath = s3Key; 
-        console.log(`Arquivo recebido via S3 v3: ${fileName} (${fileType}), S3 Key: ${s3Key}, Location: ${s3Location}`);
-      } else if (useS3Storage && (file as any).s3) {
-        // Upload via S3 - multer-s3 v2
-        s3Key = (file as any).key || (file as any).s3?.key;
-           // @ts-ignore - Ignorar possível erro de tipo aqui
-          filePath = s3Key; 
-        console.log(`Arquivo recebido via S3 v2: ${fileName} (${fileType}), S3 Key: ${s3Key}`);
-      } else if (file.path) {
-        // Upload local tradicional
-        filePath = file.path;
-        console.log(`Arquivo recebido localmente: ${fileName} (${fileType}), salvo em: ${filePath}`);
-        
-        // Se o S3 estiver configurado, fazer upload do arquivo para S3 (migração)
-        if (useS3Storage) {
-          try {
-            console.log(`Migrando arquivo local para S3 - filepath: ${filePath}, userId: ${userId}`);
-            const userIdNum = typeof userId === 'string' ? parseInt(userId) : userId;
-            
-            // Importar módulo s3 para upload
-            const { uploadFileToS3 } = await import('./s3-service.js');
-            
-            // Fazer upload diretamente com o módulo S3
-            s3Key = await uploadFileToS3(filePath, userIdNum, 'catalogs', 'temp');
-            console.log(`Arquivo migrado para S3 com sucesso. S3 Key: ${s3Key}`);
-          } catch (s3Error) {
-            console.error("Erro ao migrar arquivo para S3, continuando com armazenamento local:", s3Error);
-            s3Key = null; // Garante que o s3Key é nulo em caso de erro
-          }
-        }
-      } else {
-        // Fallback: Criar um caminho de arquivo temporário
-        filePath = `./uploads/temp-${Date.now()}-${fileName}`;
-        console.log(`Nenhum caminho de arquivo encontrado, usando fallback: ${filePath}`);
+
+      const { originalname, mimetype, size, bucket, key, location, etag } = req.file as any; // Usar 'as any' por enquanto devido à complexidade dos tipos de Multer S3
+
+      console.log("File object:", JSON.stringify(req.file, null, 2));
+
+      // Salvar metadados do catálogo no banco de dados
+      const catalogData = {
+        userId: localUserId, // Usar ID do usuário local
+        fileName: originalname,
+        fileUrl: location, // ADICIONAR fileUrl usando a location do S3
+        fileType: originalname.split('.').pop()?.toLowerCase() || '',
+        fileSize: size,
+        s3Bucket: bucket,
+        s3Key: key,
+        s3Url: location,
+        s3Etag: etag,
+        processedStatus: 'queued' as 'queued',
+        // REMOVER firebaseUserId
+      };
+
+      // Passar catalogData corrigido
+      const catalog = await storage.createCatalog(catalogData);
+      console.log(`Catálogo ${catalog.id} criado no banco com status 'queued'.`);
+
+      // Adicionar ID do catálogo ao Firestore (se necessário)
+      const firestoreId = catalog.id;
+      console.log(`ID do catálogo no Firestore: ${firestoreId}`);
+
+      // Agora, disparar o processamento em background
+      // Primeiro, precisamos baixar o arquivo do S3 para um local temporário
+      const tempDir = path.join(process.cwd(), 'uploads', 'temp');
+      if (!fs.existsSync(tempDir)){
+          fs.mkdirSync(tempDir, { recursive: true });
       }
-      
-      // Garantir que temos um fileUrl válido
-      const fileUrl = s3Key || filePath;
-      if (!fileUrl) {
-        throw new Error("Não foi possível determinar um URL válido para o arquivo");
-      }
-      
-      // Determinar o caminho de acesso efetivo ao arquivo
-      // Se for S3, precisamos baixar para um caminho local temporário para processamento
-      let processingFilePath = filePath;
-      
-      // Se estiver no S3, vamos baixar para um caminho local temporário
-      if (useS3Storage && s3Key) {
-        try {
-          console.log(`Arquivo está no S3, baixando para processamento local...`);
-          
-          // Criar pasta temporária
-          const tempDir = './uploads/temp';
-          if (!fs.existsSync(tempDir)) {
-            fs.mkdirSync(tempDir, { recursive: true });
-          }
-          
-          // Caminho temporário para download
-          const tempPath = path.join(tempDir, `${Date.now()}-${fileName}`);
-          
-          // Importar serviço S3
-          const { downloadFileFromS3 } = await import('./s3-service.js');
-          
-          // Baixar arquivo do S3
-          const fileBuffer = await downloadFileFromS3(s3Key);
-          
-          // Salvar localmente
-          fs.writeFileSync(tempPath, fileBuffer);
-          
-          console.log(`Arquivo baixado do S3 para: ${tempPath}`);
-          processingFilePath = tempPath;
-        } catch (downloadError) {
-          console.error(`Erro ao baixar arquivo do S3:`, downloadError);
-          // Manter o caminho original em caso de erro
-          console.log(`Usando o caminho original: ${filePath}`);
-        }
-      }
-      
-      console.log(`FileUrl final para o banco: ${fileUrl}`);
-      console.log(`Caminho de processamento efetivo: ${processingFilePath}`);
-      
-      // Criar um novo catálogo no banco de dados
-      const catalog = await storage.createCatalog({
-        userId: typeof userId === 'string' ? parseInt(userId) : userId,
-        fileName: fileName,
-        fileUrl: fileUrl, // URL válido garantido
-        processedStatus: "processing"
-      });
-      
-      // ID do catálogo no banco relacional
-      const catalogId = catalog.id;
-      console.log(`Catálogo criado no banco de dados com ID: ${catalogId}`);
-      
-      // ID do catálogo no Firestore (pode ser o mesmo ou diferente)
-      const firestoreCatalogId = req.body.firestoreCatalogId || catalogId;
-      console.log(`ID do catálogo no Firestore: ${firestoreCatalogId}`);
-      
-      // Salvar o catálogo no Firestore também
+      const tempFilePath = path.join(tempDir, `${Date.now()}-${originalname}`);
+
+      console.log("Arquivo está no S3, baixando para processamento local...");
+      const { downloadFileFromS3 } = await import('./s3-service.js'); // Importar função de download
+
+      // CORREÇÃO: Chamar download, pegar buffer e escrever no arquivo temporário
       try {
-        const { createCatalogInFirestore } = await import('./firestore-service');
-        let productsData: any[] = [];
-        let extractedImageColumn: string | null = null;
-        let extractionInfo: string = '';
-
-        if (fileType === 'excel') {
-          try {
-            // ** ETAPA 1: Chamar IA para Extrair Dados Textuais E Coluna de Imagem **
-            console.log(`---> Chamando processExcelWithAI para texto e coluna de imagem: ${processingFilePath}`);
-            const aiResult = await processExcelWithAI(processingFilePath);
-            productsData = aiResult.products; // Pega os produtos do resultado
-            extractedImageColumn = aiResult.imageColumn; // Pega a coluna da imagem
-            console.log(`<<< Retorno de processExcelWithAI: ${productsData.length} produtos. Coluna Imagem: ${extractedImageColumn}`);
-            
-            // ** ETAPA 2: Chamar IA para Extrair Dados Textuais (com excelRowNumber) **
-            console.log(`---> Chamando processExcelWithAI para dados textuais: ${processingFilePath}`);
-            productsData = await processExcelWithAI(processingFilePath);
-            console.log(`<<< Retorno de processExcelWithAI: ${productsData.length} produtos (com excelRowNumber).`);
-            
-            extractionInfo = `IA extraiu ${productsData.length} produtos. ${extractedImageColumn?.length || 0} imagens foram processadas.`;
-          } catch (error) {
-            console.error("Erro no processamento de Excel:", error);
-            extractionInfo = "Erro no processamento de Excel: " + (error.message || "Erro desconhecido");
-            productsData = [];
-          }
-        } else if (fileType === 'pdf') {
-          console.log("---> Chamando processamento de PDF...");
-          // Implementar lógica PDF aqui
-          productsData = []; // Placeholder
-          extractionInfo = "Processamento PDF (implementar)";
-        } else if (['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(fileType)) {
-          console.log("---> Chamando processamento de Imagem...");
-          // Mantenha sua lógica de processamento de Imagem aqui
-          // Exemplo: const { processImage } = await import('./image-processor');
-          // productsData = await processImage(processingFilePath, ...);
-          extractionInfo = "Processamento Imagem (implementar)";
-          productsData = [];
-        } else {
-          throw new Error(`Formato de arquivo não suportado: ${fileType}.`);
-        }
-
-        // ======= FIM DO PROCESSAMENTO =======
-        console.log(`Processamento concluído. Produtos: ${productsData.length}.`);
-
-        // ======= SALVAR PRODUTOS (SEM imageUrl automático) =======
-        if (!Array.isArray(productsData)) productsData = [];
-
-        // Salvar no Firestore
-        try {
-          const productsToSaveFirestore = productsData.map(p => ({
-            ...p,
-            excelRowNumber: p.excelRowNumber, // Garantir que está sendo passado
-            imageUrl: null, // Definir como null inicialmente
-            userId: userId.toString() || 'unknown_user',
-            catalogId: firestoreCatalogId?.toString() || `unknown-catalog-${catalog?.id || 'new'}`,
-            localCatalogId: catalog?.id || null,
-            createdAt: new Date(),
-            updatedAt: new Date()
-          }));
-          const { saveProductsToFirestore, updateCatalogStatusInFirestore } = await import('./firestore-service');
-          const fsCatalogIdStr = firestoreCatalogId?.toString() || `unknown-catalog-${catalog?.id || 'new'}`;
-          const catalogIdForFirestore: string = fsCatalogIdStr;
-          const userIdStr = userId.toString() || 'unknown_user'; // Garantir que é string
-          const productIds = await saveProductsToFirestore(productsToSaveFirestore, userIdStr, catalogIdForFirestore); 
-          console.log(`${productIds.length} produtos salvos no Firestore.`);
-          await updateCatalogStatusInFirestore(userIdStr, catalogIdForFirestore, "completed", productsData.length);
-        } catch (firestoreError) {
-          console.error("Erro ao salvar produtos no Firestore:", firestoreError);
-        }
-
-        // Salvar no Banco Local (PostgreSQL)
-        const savedLocalProducts = [];
-        const localUserIdNum = typeof userId === 'number' ? userId : parseInt(userId.toString());
-        const localCatalogIdNum = catalog?.id;
-
-        if (localCatalogIdNum === undefined || isNaN(localCatalogIdNum)) {
-          console.error("ERRO: ID do catálogo local inválido. Pulando salvamento no PG.");
-        } else {
-          for (const productData of productsData) {
-            try {
-              const productToSaveLocal = {
-                userId: localUserIdNum,
-                catalogId: localCatalogIdNum,
-                excelRowNumber: productData.excelRowNumber, // <<< Salvar o número da linha!
-                name: productData.name || "Produto S/ Nome",
-                code: productData.code || `CODE-${Date.now()}`,
-                description: productData.description || productData.name || "",
-                price: productData.price || 0,
-                category: productData.category || 'Geral',
-                manufacturer: productData.manufacturer || '',
-                location: productData.location || '',
-                colors: Array.isArray(productData.colors) ? productData.colors : [],
-                materials: Array.isArray(productData.materials) ? productData.materials : [],
-                sizes: Array.isArray(productData.sizes) ? productData.sizes : [],
-                imageUrl: null, // Definir como null inicialmente
-                isEdited: false,
-                createdAt: new Date(),
-                updatedAt: new Date()
-              };
-              const savedProduct = await storage.createProduct(productToSaveLocal);
-              savedLocalProducts.push(savedProduct); // Armazenar o produto salvo que CONTERÁ o excelRowNumber
-            } catch (dbError) {
-              console.error('Erro ao salvar produto no banco local PG:', dbError, productData);
-            }
-          }
-          console.log(`${savedLocalProducts.length} produtos salvos no banco de dados local PG (com excelRowNumber).`);
-
-          // *** ETAPA DE ASSOCIAÇÃO DE IMAGENS (POR NÚMERO DE LINHA) ***
-          if (savedLocalProducts.length > 0 && extractedImageColumn) {
-            console.log(`---> Iniciando associação de ${extractedImageColumn} imagens com ${savedLocalProducts.length} produtos POR LINHA DO EXCEL...`);
-            let associatedCount = 0;
-            let notFoundCount = 0;
-
-            // Criar um mapa para acesso rápido às imagens pela linha
-            // Lidar com múltiplas imagens por linha: agrupar por linha
-            const imagesByRowMap = new Map<number, ExtractedImageInfo[]>();
-            for (const imgInfo of extractedImageColumn.split(',')) {
-              if (imgInfo.trim() !== '') {
-                imagesByRowMap.set(parseInt(imgInfo.trim()), []);
-              }
-            }
-
-            for (const product of savedLocalProducts) {
-              // @ts-ignore - Assumindo que excelRowNumber está presente após salvar
-              const productRow = product.excelRowNumber;
-              
-              if (productRow === undefined || productRow === null || isNaN(productRow) || productRow <= 0) {
-                  console.warn(`Produto ID ${product.id} (${product.name}) sem número de linha válido (${productRow}). Pulando associação.`);
-                  continue;
-              }
-
-              const imagesForThisRow = imagesByRowMap.get(productRow);
-
-              if (imagesForThisRow && imagesForThisRow.length > 0) {
-                const imageToAssociate = imagesForThisRow[0];
-                const shortImageUrl = imageToAssociate.imageUrl.substring(imageToAssociate.imageUrl.length - 40);
-                console.log(`Associando: Produto ID ${product.id} (Linha Excel: ${productRow}, Nome: ${product.name}) ---> Imagem Índice ${imageToAssociate.originalIndex} (Linha Excel: ${imageToAssociate.rowNumber}, ...${shortImageUrl})`);
-                try {
-                  await storage.updateProductImageUrl(product.id, imageToAssociate.imageUrl);
-                  associatedCount++;
-                } catch (updateError) {
-                  console.error(`Erro ao atualizar DB para produto ID ${product.id} com imagem da linha ${productRow}:`, updateError);
-                }
-              } else {
-                console.log(`AVISO: Nenhuma imagem encontrada na lista extraída para a linha ${productRow} do Produto ID ${product.id} (${product.name}).`);
-                notFoundCount++;
-              }
-            }
-            console.log(`---> Associação por linha concluída: ${associatedCount} produtos atualizados com URLs S3. ${notFoundCount} produtos não encontraram imagem correspondente.`);
-          } else {
-            console.log("---> Pulando associação de imagens (sem produtos salvos ou sem informações detalhadas de imagens).");
-          }
-          // *************************************
-        }
-
-        // Declarar updatedCatalog fora do if para estar acessível na resposta
-        let updatedCatalog: SharedCatalog | undefined = undefined; 
-        if (localCatalogIdNum) { 
-            updatedCatalog = await storage.updateCatalogStatus(localCatalogIdNum, "completed");
-        }
-
-        // ======= RESPOSTA DE SUCESSO =======
-        return res.status(201).json({
-          message: `Catálogo processado com sucesso (${fileType} via IA).`,
-          catalog: updatedCatalog,
-          extractionInfo: extractionInfo,
-          totalProductsSaved: savedLocalProducts.length,
-          sampleProducts: savedLocalProducts.slice(0, 3),
-          firestoreCatalogId
-        });
-        
-      } catch (processingError) {
-         // ======= TRATAMENTO DE ERRO DE PROCESSAMENTO =======
-          console.error("Erro durante o processamento do catálogo:", processingError);
-          try {
-            const { updateCatalogStatusInFirestore } = await import('./firestore-service');
-            const fsCatalogId = firestoreCatalogId?.toString() || `unknown-catalog-${catalog?.id || 'error'}`;
-            // *** Passar userId como primeiro argumento ***
-            const userIdStr = userId?.toString() || 'unknown_user'; // Garantir que userId seja string
-            await updateCatalogStatusInFirestore(userIdStr, fsCatalogId, "failed", 0); 
-          } catch (fsError) { console.error("Erro ao atualizar status Firestore para falha:", fsError); }
-          
-          if (catalog?.id) {
-              await storage.updateCatalogStatus(catalog.id, "failed");
-              } else {
-              console.error("Não foi possível atualizar status do catálogo local: ID do catálogo não encontrado.");
-          }
-          return res.status(400).json({
-            message: "Falha ao processar o catálogo",
-            error: processingError instanceof Error ? processingError.message : "Erro desconhecido",
-            catalog: catalog ? { id: catalog.id, fileName: catalog.fileName } : { fileName: fileName }
+          const fileBuffer = await downloadFileFromS3(key);
+          fs.writeFileSync(tempFilePath, fileBuffer);
+          console.log(`Arquivo baixado do S3 e salvo em: ${tempFilePath}`);
+      } catch (downloadError) {
+          console.error(`Erro ao baixar ou salvar arquivo temporário ${key}:`, downloadError);
+          // Atualizar status para falho se o download falhar
+          await storage.updateCatalogStatus(catalog.id, 'failed');
+          // Retornar erro 500
+          return res.status(500).json({
+            message: `Erro ao baixar arquivo do S3: ${downloadError instanceof Error ? downloadError.message : String(downloadError)}`
           });
       }
-    } catch (error) {
-       // Log de erro geral da rota principal
-       console.error("!!!! ERRO NO HANDLER PRINCIPAL da ROTA /api/catalogs/upload !!!!", error);
-       // Tenta atualizar status para falha antes de responder
-       try {
-          const catalogId = parseInt(req.body.catalogId || req.params.catalogId) || null;
-          const firestoreCatalogId = req.body.firestoreCatalogId || catalogId;
-        const { updateCatalogStatusInFirestore } = await import('./firestore-service');
-          const fsCatalogId = firestoreCatalogId?.toString() || `unknown-catalog-${catalogId || 'error'}`;
-          // @ts-ignore
-          await updateCatalogStatusInFirestore(fsCatalogId, "failed", 0); 
-          if (catalogId) await storage.updateCatalogStatus(catalogId, "failed");
-       } catch (statusError) { console.error("Erro ao tentar atualizar status para falha:", statusError);} 
-      
-      return res.status(500).json({
-         message: "Erro interno fatal no servidor durante o processamento do catálogo.",
-         error: error instanceof Error ? error.message : "Erro desconhecido"
-       });
-    }
-  }
-);
+      // Fim da Correção
 
-// Rotas para imagens
-app.get("/api/images/:userId/:catalogId/:filename", (req: Request, res: Response) => {
-  const { userId, catalogId, filename } = req.params;
-  const filePath = path.join("uploads", userId, catalogId, filename);
-  
-  if (fs.existsSync(filePath)) {
-    const contentType = mime.lookup(filePath) || 'application/octet-stream';
-    res.setHeader('Content-Type', contentType);
-    fs.createReadStream(filePath).pipe(res);
-  } else {
-    res.status(404).json({ message: "Imagem não encontrada" });
-  }
-});
+      // Preparar dados para o job
+      const jobData = {
+        catalogId: catalog.id,
+        userId: localUserId, // Passar ID local para o job
+        s3Key: key,
+        processingFilePath: tempFilePath, // Caminho local temporário
+        fileName: originalname,
+        fileType: catalogData.fileType,
+      };
 
-// Servidor WebSocket
-const httpServer = createServer(app);
-const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
+      console.log(`Disparando processamento em background para catálogo ${catalog.id}...`);
+      // ASSUMIR que processCatalogInBackground existe e foi importado
+      await processCatalogInBackground(jobData); // Chamar processamento em background (NÃO await se for realmente background)
 
-wss.on('connection', (ws) => {
-  console.log('Cliente WebSocket conectado');
-  
-  ws.on('message', (message) => {
-    try {
-      const data = JSON.parse(message.toString());
-      console.log('Mensagem recebida:', data);
-      
-      // Broadcast para todos os clientes
-      wss.clients.forEach((client) => {
-        if (client !== ws && client.readyState === 1) {
-          client.send(JSON.stringify(data));
-        }
+      return res.status(201).json({
+        message: `Catálogo "${originalname}" enviado com sucesso e está na fila para processamento.`,
+        catalogId: catalog.id,
+        s3Url: location
       });
     } catch (error) {
-      console.error('Erro ao processar mensagem WebSocket:', error);
+      console.error("Erro GERAL na rota de upload:", error);
+      // Tentar limpar arquivo temporário em caso de erro geral
+      if (req.file && req.file.path && fs.existsSync(req.file.path)) {
+        try {
+          fs.unlinkSync(req.file.path);
+        } catch (unlinkErr) { /* Ignorar erro no unlink */ }
+      }
+      return res.status(500).json({
+        message: `Erro interno ao processar upload: ${error instanceof Error ? error.message : String(error)}`
+      });
     }
   });
-  
-  ws.on('close', () => {
-    console.log('Cliente WebSocket desconectado');
-  });
-});
 
-return httpServer;
+  // Rotas para imagens
+  app.get("/api/images/:userId/:catalogId/:filename", (req: Request, res: Response) => {
+    const { userId, catalogId, filename } = req.params;
+    const filePath = path.join("uploads", userId, catalogId, filename);
+    
+    if (fs.existsSync(filePath)) {
+      const contentType = mime.lookup(filePath) || 'application/octet-stream';
+      res.setHeader('Content-Type', contentType);
+      fs.createReadStream(filePath).pipe(res);
+    } else {
+      res.status(404).json({ message: "Imagem não encontrada" });
+    }
+  });
+
+  // Servidor WebSocket
+  const httpServer = createServer(app);
+  const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
+  
+  wss.on('connection', (ws) => {
+    console.log('Cliente WebSocket conectado');
+    
+    ws.on('message', (message) => {
+      try {
+        const data = JSON.parse(message.toString());
+        console.log('Mensagem recebida:', data);
+        
+        // Broadcast para todos os clientes
+        wss.clients.forEach((client) => {
+          if (client !== ws && client.readyState === 1) {
+            client.send(JSON.stringify(data));
+          }
+        });
+      } catch (error) {
+        console.error('Erro ao processar mensagem WebSocket:', error);
+      }
+    });
+    
+    ws.on('close', () => {
+      console.log('Cliente WebSocket desconectado');
+    });
+  });
+
+  // --- NOVA ROTA: Upload de Logo da Empresa ---
+  app.post("/api/upload-logo", requireAuth, logoUploadInMemory.single("logoFile"), handleMulterError, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+
+      if (!req.file) {
+        return res.status(400).json({ message: "Nenhum arquivo de logo enviado." });
+      }
+
+      const fileBuffer = req.file.buffer;
+      const originalName = req.file.originalname;
+      const mimeType = req.file.mimetype;
+
+      console.log(`Recebido upload de logo: ${originalName}, tamanho: ${fileBuffer.length} bytes`);
+
+      // Fazer upload do buffer para S3
+      const logoUrl = await uploadBufferToS3(fileBuffer, originalName, userId, 'profile', 'logo');
+
+      if (!logoUrl) {
+           throw new Error("Falha ao fazer upload do logo para S3.");
+      }
+
+      console.log(`Logo salvo no S3 com URL: ${logoUrl}`);
+      console.log("Preparando para enviar resposta JSON com sucesso...");
+      
+      // REVERTER PARA RESPOSTA ORIGINAL
+      return res.status(200).json({ logoUrl: logoUrl }); 
+      /* // Teste anterior comentado
+      return res.status(200).json({ success: true, tempUrl: logoUrl }); 
+      */
+
+    } catch (error) {
+      console.error("Erro no upload do logo:", error);
+      const message = error instanceof Error ? error.message : "Erro interno no servidor durante upload do logo.";
+      // GARANTIR RESPOSTA JSON NO ERRO
+      if (!res.headersSent) { // Verificar se headers já não foram enviados
+         res.status(500).json({ message });
+      } else {
+         console.error("Headers já enviados, não é possível enviar erro JSON.");
+         // Apenas encerrar a resposta se possível
+         res.end();
+      }
+    }
+  });
+  // --- FIM ROTA UPLOAD LOGO ---
+
+  return httpServer;
 }

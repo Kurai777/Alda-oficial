@@ -46,10 +46,10 @@ router.get('/verify-product-image/:productId', async (req, res) => {
     
     // Tenta enviar um JSON de erro mesmo assim, mas pode ser tarde demais
     if (!res.headersSent) {
-      res.status(500).json({
-        status: 'error',
+    res.status(500).json({
+      status: 'error',
         error: errorMessage
-      });
+    });
     } else {
       console.error('Headers já enviados, não foi possível enviar JSON de erro para /verify-product-image.');
     }

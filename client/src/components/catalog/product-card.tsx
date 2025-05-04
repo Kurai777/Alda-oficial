@@ -91,6 +91,7 @@ export default function ProductCard({ product, onAddToQuote }: ProductCardProps)
             {/* Adicionar verificação prévia de imagem para resolver problema de associação */}
             <ImageWithVerification 
               productId={product.id} 
+              imageUrl={product.imageUrl || undefined}
               altText={product.name || "Produto"}
               className="h-full w-full object-cover"
             />

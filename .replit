@@ -2,9 +2,16 @@ modules = ["web", "postgresql-16", "python-3.11", "nodejs-20"]
 run = "npm run dev"
 hidden = [".config", ".git", "generated-icon.png", "node_modules", "dist"]
 
-[nix]
+# Especificar um canal Nix estável
 channel = "stable-23_11"
-packages = ["cairo", "freetype", "giflib", "glibcLocales", "lcms2", "libimagequant", "libjpeg", "librsvg", "libtiff", "libuuid", "libwebp", "libxcrypt", "openjpeg", "pango", "poppler", "python3", "tcl", "tk", "zlib"]
+
+[languages.nodejs]
+
+[nix]
+# Habilita o uso do replit.nix para gerenciar pacotes do sistema
+enabled = true 
+# Opcional: Especificar o caminho se não for replit.nix na raiz
+# path = "replit.nix"
 
 [deployment]
 deploymentTarget = "cloudrun"
@@ -22,6 +29,10 @@ externalPort = 80
 [[ports]]
 localPort = 8080
 externalPort = 8080
+
+[[ports]]
+localPort = 24678
+externalPort = 3001
 
 [workflows]
 runButton = "Start application"

@@ -64,7 +64,7 @@ export default function Catalogs() {
   // Fetch catalogs
   const { data: catalogs = [], isLoading } = useQuery({
     queryKey: ["/api/catalogs"],
-    enabled: !!user?.uid,
+    enabled: !!user,
   });
 
   // Mutation to process catalog
