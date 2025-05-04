@@ -10,7 +10,7 @@ import {
 import session from "express-session";
 import { pool, db } from "./db";
 import connectPgSimple from "connect-pg-simple";
-import { eq, and } from 'drizzle-orm';
+import { eq, and, ilike, or } from 'drizzle-orm';
 
 // Criar store de sessão PostgreSQL
 const PostgresSessionStore = connectPgSimple(session);
@@ -68,6 +68,9 @@ export interface IStorage {
   // AI Design Chat Messages methods
   getAiDesignChatMessages(projectId: number): Promise<AiDesignChatMessage[]>;
   createAiDesignChatMessage(message: InsertAiDesignChatMessage): Promise<AiDesignChatMessage>;
+
+  // Search products
+  searchProducts(userId: number | string, searchText: string): Promise<Product[]>;
 }
 
 export class MemStorage implements IStorage {
@@ -144,6 +147,13 @@ export class MemStorage implements IStorage {
     this.aiDesignChatMessages.set(id, message);
     return message;
   }
+
+  // Placeholder para searchProducts em MemStorage (não funcional)
+  async searchProducts(userId: number | string, searchText: string): Promise<Product[]> {
+      console.warn("MemStorage.searchProducts não implementado");
+      return [];
+  }
+
   sessionStore: session.Store;
   
   private users: Map<number, User>;
@@ -1102,6 +1112,53 @@ export class DatabaseStorage implements IStorage {
     } catch (error) {
       console.error('Error creating AI design chat message:', error);
       throw error;
+    }
+  }
+
+  // Search products
+  async searchProducts(userId: number | string, searchText: string): Promise<Product[]> {
+    try {
+      const parsedUserId = typeof userId === 'string' ? parseInt(userId) : userId;
+      console.log(`DB: Buscando produtos para userId=${parsedUserId} com texto: "${searchText}"`);
+
+      // Processar texto de busca: minúsculas, remover acentos, split em palavras
+      const searchTerms = searchText
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/[^a-z0-9\s]/g, ' ') // Substituir não alfanuméricos por espaço
+        .split(' ')
+        .filter(term => term.length > 2); // Filtrar palavras curtas
+        // TODO: Poderia remover stopwords (de, a, o, com, etc.)
+
+      if (searchTerms.length === 0) {
+        console.log("DB: Nenhum termo de busca válido após processamento.");
+        return [];
+      }
+
+      console.log("DB: Termos de busca processados:", searchTerms);
+
+      // Construir condições OR para ILIKE em nome OU descrição
+      const searchConditions = or(
+        ...searchTerms.map(term => ilike(products.name, `%${term}%`)),
+        ...searchTerms.map(term => ilike(products.description, `%${term}%`))
+      );
+
+      const results = await db.select()
+        .from(products)
+        .where(and(
+            eq(products.userId, parsedUserId),
+            searchConditions // Aplicar condições OR
+        ))
+        // TODO: Adicionar limite? Ordenar por relevância?
+        .limit(20); // Limitar a 20 resultados por segurança
+
+      console.log(`DB: Encontrados ${results.length} produtos na busca visual.`);
+      return results;
+
+    } catch (error) {
+      console.error('Error searching products:', error);
+      return [];
     }
   }
 }

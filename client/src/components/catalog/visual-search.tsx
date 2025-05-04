@@ -41,51 +41,48 @@ export default function VisualSearch() {
   const handleSearch = async () => {
     if (!selectedFile || !user) return;
     
+    setIsSearching(true);
+    setSearchResults([]); // Limpar resultados anteriores
+    
     try {
-      setIsSearching(true);
-      setSearchResults([]);
-      
-      // Convert image to base64
-      const reader = new FileReader();
-      reader.readAsDataURL(selectedFile);
-      reader.onload = async () => {
-        const base64Image = reader.result?.toString().split(',')[1];
-        
-        if (!base64Image) {
-          throw new Error("Failed to convert image to base64");
-        }
-        
-        // In a real implementation, we would send the image to the backend
-        // and use AI to find similar products
+      const formData = new FormData();
+      formData.append('searchImage', selectedFile); // Nome do campo esperado pelo multer
+
+      console.log("Enviando imagem para busca visual...");
+      // Chamar a rota correta do backend com FormData
+      const response = await fetch("/api/products/visual-search", {
+        method: "POST",
+        body: formData,
+        credentials: "include", // Enviar cookies de sessão
+      });
+
+      if (!response.ok) {
+        let errorMsg = "Erro na busca visual.";
         try {
-          const res = await apiRequest("POST", "/api/ai/visual-search", {
-            userId: user.id,
-            imageBase64: base64Image,
-          });
-          
-          const results = await res.json();
-          setSearchResults(results);
-          
-          toast({
-            title: "Busca realizada com sucesso",
-            description: `Encontramos ${results.length} produtos similares.`,
-          });
-        } catch (error) {
-          console.error("Visual search failed:", error);
-          toast({
-            title: "Falha na busca",
-            description: "Ocorreu um erro ao processar a imagem.",
-            variant: "destructive",
-          });
-        }
-      };
-    } catch (error) {
-      console.error("File processing failed:", error);
+          const errorData = await response.json();
+          errorMsg = errorData.message || errorMsg;
+        } catch (e) { /* Ignorar erro de parse se não for JSON */ }
+        throw new Error(errorMsg);
+      }
+
+      // Processar a resposta JSON com os produtos encontrados
+      const results: Product[] = await response.json();
+      setSearchResults(results);
+      console.log("Resultados da busca visual:", results);
+
       toast({
-        title: "Falha no processamento",
-        description: "Ocorreu um erro ao processar a imagem.",
+        title: "Busca visual concluída",
+        description: `Encontrados ${results.length} produtos similares.`,
+      });
+
+    } catch (error: any) {
+      console.error("Erro na busca visual:", error);
+      toast({
+        title: "Falha na Busca Visual",
+        description: error.message || "Não foi possível realizar a busca.",
         variant: "destructive",
       });
+      setSearchResults([]); // Limpar resultados em caso de erro
     } finally {
       setIsSearching(false);
     }

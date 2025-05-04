@@ -8,6 +8,7 @@ import FilterSidebar from "@/components/filters/filter-sidebar";
 import SearchSort from "@/components/catalog/search-sort";
 import ProductCard from "@/components/catalog/product-card";
 import QuoteGenerator from "@/components/quotes/quote-generator";
+import VisualSearch from "@/components/catalog/visual-search";
 
 interface QuoteItem {
   product: Product;
@@ -178,6 +179,11 @@ export default function Dashboard() {
       {/* Main content container */}
       <div className="flex-1 overflow-hidden">
         <div className="p-4 h-full overflow-y-auto">
+          {/* ADICIONAR/DESCOMENTAR BUSCA VISUAL AQUI */}
+          <div className="mb-8">
+             <VisualSearch />
+          </div>
+          
           {/* Mostrar estado inicial ou se não houver catálogos */}
       
           {!products && (

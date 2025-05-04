@@ -10,7 +10,6 @@ channel = "stable-23_11"
 [nix]
 # Habilita o uso do replit.nix para gerenciar pacotes do sistema
 enabled = true 
-channel = "stable-24_05"
 # Opcional: Especificar o caminho se não for replit.nix na raiz
 # path = "replit.nix"
 

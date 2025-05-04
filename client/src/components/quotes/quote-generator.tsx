@@ -16,6 +16,7 @@ interface QuoteItem {
   product: Product;
   color: string;
   size?: string;
+  quantity: number; // Adicionando quantidade para permitir múltiplas unidades do mesmo produto
 }
 
 interface QuoteGeneratorProps {
@@ -49,7 +50,7 @@ export default function QuoteGenerator({ items = [], onClearItems }: QuoteGenera
   };
 
   const getTotalPrice = () => {
-    return quoteItems.reduce((total, item) => total + item.product.price, 0);
+    return quoteItems.reduce((total, item) => total + (item.product.price * item.quantity), 0);
   };
 
   const formatPrice = (price: number) => {
@@ -115,7 +116,8 @@ export default function QuoteGenerator({ items = [], onClearItems }: QuoteGenera
           productCode: item.product.code,
           color: item.color,
           size: item.size || "",
-          price: item.product.price
+          price: item.product.price,
+          quantity: item.quantity || 1 // Garantir que sempre tem uma quantidade
         })),
         totalPrice: getTotalPrice(),
       };

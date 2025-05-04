@@ -34,6 +34,8 @@ import { runPythonColumnExtractor } from './excel-image-extractor';
 import { processCatalogInBackground } from './catalog-processor';
 import bcrypt from 'bcrypt';
 import { generateQuotePdf, generateQuotePdfWithPuppeteer } from './pdf-generator';
+import { User } from '@shared/schema'; // Garantir que User está importado
+import OpenAI from 'openai';
 
 type MoodboardCreateInput = {
   userId: number;
@@ -86,6 +88,22 @@ const logoUploadInMemory = multer({
     }
   }
 });
+
+// Multer para busca visual (memória)
+const visualSearchUpload = multer({ 
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 }, // Limite 10MB para imagem de busca
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Apenas imagens são permitidas para busca visual.'));
+    }
+  }
+});
+
+// Configurar cliente OpenAI (assumindo variável de ambiente)
+const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
 
 async function extractProductsFromExcel(filePath: string): Promise<any[]> {
   const XLSX = require('xlsx');
@@ -1193,6 +1211,63 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
   // --- FIM ROTA UPLOAD LOGO ---
+
+  // --- NOVA ROTA: Busca Visual de Produtos ---
+  app.post("/api/products/visual-search", requireAuth, visualSearchUpload.single("searchImage"), handleMulterError, async (req: Request, res: Response) => {
+    if (!openai) {
+        return res.status(503).json({ message: "Serviço de IA não configurado no servidor." });
+    }
+    if (!req.file) {
+      return res.status(400).json({ message: "Nenhuma imagem enviada para busca." });
+    }
+
+    const userId = req.session.userId!;
+    const imageBuffer = req.file.buffer;
+    const mimeType = req.file.mimetype;
+
+    try {
+      console.log("Recebida imagem para busca visual, enviando para IA...");
+      // 1. Obter descrição da IA
+      const base64Image = imageBuffer.toString('base64');
+      const imageUrl = `data:${mimeType};base64,${base64Image}`;
+      
+      const aiResponse = await openai.chat.completions.create({
+        model: "gpt-4o", // Ou outro modelo com capacidade de visão
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "Descreva detalhadamente o móvel principal nesta imagem em português, focando em tipo, cor, material, estilo e características distintas. Seja conciso e use palavras-chave relevantes para busca em um catálogo." },
+              {
+                type: "image_url",
+                image_url: { url: imageUrl },
+              },
+            ],
+          },
+        ],
+        max_tokens: 150,
+      });
+
+      const description = aiResponse.choices[0]?.message?.content?.trim();
+      if (!description) {
+        throw new Error("IA não conseguiu descrever a imagem.");
+      }
+      console.log("Descrição da IA:", description);
+
+      // 2. Buscar produtos no banco usando a descrição
+      console.log(`Buscando produtos para userId ${userId} com descrição: ${description}`);
+      const similarProducts = await storage.searchProducts(userId, description);
+
+      console.log(`Encontrados ${similarProducts.length} produtos similares.`);
+      return res.status(200).json(similarProducts);
+
+    } catch (error) {
+      console.error("Erro na busca visual:", error);
+      const message = error instanceof Error ? error.message : "Erro interno no servidor durante busca visual.";
+      return res.status(500).json({ message });
+    }
+  });
+  // --- FIM BUSCA VISUAL ---
 
   return httpServer;
 }
