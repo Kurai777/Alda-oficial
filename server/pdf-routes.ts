@@ -1,11 +1,11 @@
-import { Request, Response, Router } from "express";
+import { Request, Response, Router, NextFunction } from "express";
 import { storage } from "./storage";
 
 // Criar router independente para PDF
 const pdfRouter = Router();
 
 // Middleware de autenticação simplificado
-function requireAuth(req: Request, res: Response, next: Function) {
+function requireAuth(req: Request, res: Response, next: NextFunction) {
   if (!req.session.userId) {
     return res.status(401).json({ message: "Não autorizado. Faça login para continuar." });
   }

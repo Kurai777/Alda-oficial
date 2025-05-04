@@ -162,9 +162,9 @@ export default function QuoteGenerator({ items = [], onClearItems }: QuoteGenera
         discountPercentage: (paymentInstallments === "à vista" && applyCashDiscount) ? 10 : 0,
       };
       
-      // --- MODIFICADO: Chamar API Backend para gerar PDF ---
-      console.log("Enviando dados para API gerar PDF...");
-      const response = await apiRequest("POST", "/api/quotes/generate-pdf", quoteData, {
+      // --- NOVA ROTA: Chamar API Backend alternativa para gerar PDF simples ---
+      console.log("Enviando dados para rota alternativa de PDF...");
+      const response = await apiRequest("POST", "/api/pdf/generate-simple-pdf", quoteData, {
         responseType: 'blob' // Indicar que esperamos um Blob como resposta
       });
 

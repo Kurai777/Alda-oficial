@@ -24,6 +24,9 @@ app.use('/api/test', testRoutes);
 // Registrar rotas de reprocessamento
 app.use('/api/admin', reprocessRouter);
 
+// Registrar rotas especiais para PDF
+app.use('/api/pdf', pdfRouter);
+
 // Configuração da sessão
 const SESSION_SECRET = process.env.SESSION_SECRET || 'alda-session-secret';
 app.use(session({
