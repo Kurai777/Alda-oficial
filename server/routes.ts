@@ -852,8 +852,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Método 1: Tentar gerar com Puppeteer (melhor qualidade, mas menos confiável no Replit)
       try {
         console.log("🔍 Tentando gerar PDF via Puppeteer (método premium)...");
-        // Usar a versão aprimorada do gerador
-        const { generateQuotePdfWithPuppeteer } = await import('./pdf-generator-improved');
+        // Usar a versão corrigida do gerador
+        const { generateQuotePdfWithPuppeteer } = await import('./pdf-generator-fix');
         pdfBytes = await generateQuotePdfWithPuppeteer(quoteData, user);
         fileName = fileName.replace('.pdf', '_premium.pdf'); // Adicionar sufixo se Puppeteer funcionou
         console.log("✅ PDF gerado com sucesso via Puppeteer!");
@@ -864,8 +864,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Método 2: Tentar com PhantomJS (método intermediário)
         try {
           console.log("🔍 Tentando gerar PDF via PhantomJS (método secundário)...");
-          // Usar a versão aprimorada do gerador
-          const { generateQuotePdfWithHtmlPdf } = await import('./pdf-generator-improved');
+          // Usar a versão corrigida do gerador
+          const { generateQuotePdfWithHtmlPdf } = await import('./pdf-generator-fix');
           pdfBytes = await generateQuotePdfWithHtmlPdf(quoteData, user);
           fileName = fileName.replace('.pdf', '_html-pdf.pdf');
           console.log("✅ PDF gerado com sucesso via PhantomJS (html-pdf)!");
@@ -875,8 +875,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           
           // Método 3: Último recurso - pdf-lib (básico mas mais confiável)
           console.log("🔍 Tentando gerar PDF via pdf-lib (método básico/fallback)...");
-          // Usar a versão aprimorada do gerador
-          const { generateQuotePdf } = await import('./pdf-generator-improved');
+          // Usar a versão corrigida do gerador
+          const { generateQuotePdf } = await import('./pdf-generator-fix');
           pdfBytes = await generateQuotePdf(quoteData, user);
           console.log("✅ PDF gerado com sucesso via pdf-lib!");
           generatorMethod = 'pdf-lib';
