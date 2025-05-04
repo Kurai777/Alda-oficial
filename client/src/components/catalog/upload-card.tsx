@@ -80,7 +80,7 @@ export default function UploadCard() {
       }
       
       // Enviar o arquivo para o servidor
-      const response = await fetch('/api/catalogs/upload', {
+      const response = await fetch('/backend/catalogs/upload', {
         method: 'POST',
         body: formData,
         // Não configuramos headers quando enviamos FormData

@@ -159,7 +159,9 @@ export default function QuoteGenerator({ items = [], onClearItems }: QuoteGenera
         paymentInstallments,
         paymentMethod,
         applyCashDiscount,
-        discountPercentage: (paymentInstallments === "à vista" && applyCashDiscount) ? 10 : 0,
+        discountPercentage: (paymentInstallments === "à vista" && applyCashDiscount && user?.cashDiscountPercentage) 
+                            ? user.cashDiscountPercentage 
+                            : 0,
       };
       
       // --- MODIFICADO: Chamar API Backend para gerar PDF ---

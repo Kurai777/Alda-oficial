@@ -44,6 +44,7 @@ const profileFormSchema = z.object({
   // Zod trata números em inputs como string inicialmente, converter depois
   quoteValidityDays: z.string().nullable().optional(), 
   // logoUpload não entra no schema de dados a serem enviados diretamente
+  cashDiscountPercentage: z.string().nullable().optional(),
 });
 
 type ProfileFormValues = z.infer<typeof profileFormSchema>;
@@ -68,6 +69,7 @@ export default function ProfilePage() {
       companyCnpj: "",
       quotePaymentTerms: "",
       quoteValidityDays: "",
+      cashDiscountPercentage: "",
     },
     mode: "onChange", // Validar ao mudar
   });
@@ -83,6 +85,7 @@ export default function ProfilePage() {
         companyCnpj: user.companyCnpj || "",
         quotePaymentTerms: user.quotePaymentTerms || "",
         quoteValidityDays: user.quoteValidityDays?.toString() || "", // Converter número para string
+        cashDiscountPercentage: user.cashDiscountPercentage?.toString() || "",
       });
       setCompanyLogoPreview(user.companyLogoUrl || null);
     } else {
@@ -187,6 +190,7 @@ export default function ProfilePage() {
       companyLogoUrl: logoUrlToSave, // <<< Usar a URL final (nova, antiga ou null)
       quotePaymentTerms: formData.quotePaymentTerms || null,
       quoteValidityDays: formData.quoteValidityDays ? Number(formData.quoteValidityDays) : null,
+      cashDiscountPercentage: formData.cashDiscountPercentage ? Number(formData.cashDiscountPercentage) : null,
     };
 
     try {
@@ -333,11 +337,27 @@ export default function ProfilePage() {
                     name="quoteValidityDays"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Validade Padrão do Orçamento (dias)</FormLabel>
-                        <FormControl><Input type="number" {...field} value={field.value ?? ""} placeholder="Ex: 7" min="1"/></FormControl>
-                        <FormDescription>
-                          Este período será usado como padrão para novos orçamentos.
-                        </FormDescription>
+                        <FormLabel>Validade Padrão Orçamento (dias)</FormLabel>
+                        <FormControl>
+                          <Input type="number" placeholder="Ex: 7" {...field} onChange={e => field.onChange(parseInt(e.target.value, 10) || 0)} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  
+                  <FormField
+                    control={form.control}
+                    name="cashDiscountPercentage"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Desconto Padrão Pagamento à Vista (%)</FormLabel>
+                        <FormControl>
+                          <Input type="number" placeholder="Ex: 10" {...field} onChange={e => field.onChange(parseInt(e.target.value, 10) || 0)} />
+                        </FormControl>
+                         <FormDescription>
+                            Percentual (0-100) aplicado se "à vista" for selecionado.
+                         </FormDescription>
                         <FormMessage />
                       </FormItem>
                     )}

@@ -9,6 +9,9 @@ import { pdfRouter } from "./pdf-routes";
 import path from "path";
 import fs from "fs";
 import { nanoid } from "nanoid";
+import { createServer } from "http";
+import { WebSocketServer } from "ws";
+import { addS3ImageRoutes } from "./s3-image-routes";
 
 // Importar módulos de banco de dados e storage
 import { migrate } from "./db";
@@ -32,6 +35,8 @@ app.use(session({
   }
 }));
 
+// === COMENTAR TEMPORARIAMENTE ROTAS ADICIONAIS ===
+/*
 // Registrar rotas de teste
 app.use('/api/test', testRoutes);
 
@@ -40,6 +45,8 @@ app.use('/api/admin', reprocessRouter);
 
 // Registrar rotas especiais para PDF
 app.use('/api/pdf', pdfRouter);
+*/
+// === FIM DO COMENTÁRIO ===
 
 (async () => {
   // Executar migração
@@ -51,34 +58,44 @@ app.use('/api/pdf', pdfRouter);
     console.error("Erro durante migração do banco de dados:", error);
   }
 
-  // ===== MOVER REGISTRO DAS ROTAS PRINCIPAIS PARA ANTES DO VITE =====
-  // REGISTRAR ROTAS DA API PRIMEIRO (DENTRO DO ASYNC)
-  console.log("Registrando rotas principais da API...");
-  await registerRoutes(app); // Manter dentro do async, mas ANTES do Vite
-  console.log("Rotas principais da API registradas.");
-  // ==================================================================
+  // ===== ADICIONAR CONFIGURAÇÃO S3 E ROTAS DE IMAGEM =====
+  // === COMENTAR TEMPORARIAMENTE ADD S3 IMAGE ROUTES ===
+  /*
+  try {
+      const { addS3ImageRoutes } = await import('./s3-image-routes');
+      await addS3ImageRoutes(app); // <<< Adicionar rotas de imagem ao app principal
+      console.log("Rotas de imagem S3 adicionadas ao app.");
+  } catch (error) {
+      console.error('ERRO CRÍTICO ao adicionar rotas de imagem S3:', error);
+  }
+  */
+  // ======================================================
   
-  let vite: any = null; // Variável para guardar instância do Vite
+  // ===== REGISTRAR ROTAS PRINCIPAIS DA API DIRETAMENTE NO APP =====
+  console.log("Registrando rotas principais da API no app...");
+  await registerRoutes(app); 
+  console.log("Rotas principais da API registradas.");
+  // ===============================================================
+  
+  let vite: any = null;
 
-  // 1. CONFIGURAR VITE (se dev) - AGORA DEPOIS DAS ROTAS
+  // Configurar e Adicionar Middlewares do Vite (se dev)
   if (app.get("env") === "development") {
-    console.log("Configurando Vite para desenvolvimento (fase 1)...");
+    console.log("Configurando Vite para desenvolvimento...");
     vite = await createViteServer({
         server: { middlewareMode: true },
         appType: 'custom',
         logLevel: 'info'
     });
     console.log("Instância do Vite criada.");
+    
+    // Adicionar middlewares do Vite AQUI (depois das rotas API)
+    console.log("Adicionando middlewares do Vite...");
+    app.use(vite.middlewares); // <<< Manter DEPOIS do /api router
+    console.log("Middlewares do Vite adicionados.");
   }
 
-  // 2. ADICIONAR MIDDLEWARES DO VITE (se dev)
-  if (vite) {
-      console.log("Adicionando middlewares do Vite (exceto fallback)...");
-      app.use(vite.middlewares); 
-      console.log("Middlewares do Vite adicionados.");
-  }
-
-  // 3. Manipulador de erros da API (antes do fallback HTML)
+  // Manipulador de erros da API (DEPOIS do Vite middleware, ANTES do fallback geral se houver)
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
     console.error("ERRO NA API:", err); 
     const status = err.status || err.statusCode || 500;
@@ -91,12 +108,12 @@ app.use('/api/pdf', pdfRouter);
   });
   console.log("Manipulador de erros da API registrado.");
 
-  // 4. SERVIR ESTÁTICOS (produção) OU CATCH-ALL VITE (dev)
+  // Servir Estáticos (Produção) OU ADICIONAR FALLBACK VITE (Dev)
   if (app.get("env") !== "development") {
     console.log("Configurando para servir estáticos (produção)...");
     serveStatic(app); 
   } else if (vite) {
-    // Catch-all do Vite (DEVE SER O ÚLTIMO middleware)
+    // READICIONAR Catch-all do Vite (DEVE SER O ÚLTIMO middleware)
     console.log("Registrando fallback do Vite para index.html...");
     app.use("*", async (req, res, next) => {
         const url = req.originalUrl;
@@ -114,11 +131,27 @@ app.use('/api/pdf', pdfRouter);
         }
     });
     console.log("Fallback do Vite registrado.");
-  }
+  } 
 
-  // Iniciar servidor
+  // ===== CRIAR HTTP SERVER E WEBSOCKET SERVER =====
+  const httpServer = createServer(app);
+  const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
+  
+  wss.on('connection', (ws) => {
+    console.log('Cliente WebSocket conectado');
+    ws.on('message', (message) => {
+      // ... (lógica broadcast)
+    });
+    ws.on('close', () => {
+      console.log('Cliente WebSocket desconectado');
+    });
+  });
+  console.log("Servidor WebSocket configurado.");
+  // ================================================
+
+  // Iniciar servidor USANDO o httpServer
   const port = 5000;
-  app.listen(port, "0.0.0.0", () => {
+  httpServer.listen(port, "0.0.0.0", () => {
      log(`serving on port ${port}`);
   });
 

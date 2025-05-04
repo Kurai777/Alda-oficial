@@ -92,8 +92,8 @@ const CloudStoragePage: React.FC = () => {
     isLoading: isLoadingS3Status,
     error: s3StatusError
   } = useQuery<S3Status>({
-    queryKey: ['/api/storage/s3-status'],
-    refetchInterval: 300000, // 5 minutos
+    queryKey: ['/backend/storage/s3-status'],
+    refetchInterval: 60000, // Refetch cada minuto
   });
 
   // Consulta para obter métricas de armazenamento
@@ -102,8 +102,8 @@ const CloudStoragePage: React.FC = () => {
     isLoading: isLoadingMetrics,
     error: metricsError
   } = useQuery<StorageMetrics>({
-    queryKey: ['/api/storage/metrics'],
-    refetchInterval: 600000, // 10 minutos
+    queryKey: ['/backend/storage/metrics'],
+    refetchInterval: 300000, // Refetch cada 5 minutos
   });
 
   // Consulta para status de migração
@@ -112,13 +112,8 @@ const CloudStoragePage: React.FC = () => {
     isLoading: isLoadingMigration,
     error: migrationError
   } = useQuery<MigrationStatus>({
-    queryKey: ['/api/storage/migration-status'],
-    refetchInterval: (data) => {
-      if (data && 'inProgress' in data && data.inProgress) {
-        return 5000; // 5 segundos se em progresso
-      }
-      return 60000; // 1 minuto se não
-    }
+    queryKey: ['/backend/storage/migration-status'],
+    refetchInterval: 5000, // Refetch rápido durante migração
   });
 
   // Consulta para lista de catálogos
@@ -127,7 +122,7 @@ const CloudStoragePage: React.FC = () => {
     isLoading: isLoadingCatalogs,
     error: catalogsError
   } = useQuery({
-    queryKey: ['/api/catalogs'],
+    queryKey: ['/backend/catalogs'],
   });
   
   // Processar os dados de catálogos para garantir que sejam um array
@@ -139,18 +134,17 @@ const CloudStoragePage: React.FC = () => {
   // Mutação para iniciar migração completa
   const startMigrationMutation = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest('POST', '/api/storage/migrate-all');
-      return await res.json();
+      const res = await apiRequest('POST', '/backend/storage/migrate-all');
+      return res;
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       toast({
         title: 'Migração iniciada',
-        description: 'Processo de migração para nuvem iniciado com sucesso.',
+        description: data?.message || 'O processo começou em background.',
       });
-      // Invalidar consultas para atualizar dados
-      queryClient.invalidateQueries({ queryKey: ['/api/storage/migration-status'] });
+      queryClient.invalidateQueries({ queryKey: ['/backend/storage/migration-status'] });
     },
-    onError: (error: Error) => {
+    onError: (error: any) => {
       toast({
         title: 'Erro ao iniciar migração',
         description: error.message,
@@ -162,18 +156,17 @@ const CloudStoragePage: React.FC = () => {
   // Mutação para iniciar migração de catálogo específico
   const migrateCatalogMutation = useMutation({
     mutationFn: async (catalogId: number) => {
-      const res = await apiRequest('POST', `/api/storage/migrate-catalog/${catalogId}`);
-      return await res.json();
+      const res = await apiRequest('POST', `/backend/storage/migrate-catalog/${catalogId}`);
+      return res;
     },
     onSuccess: (_data, catalogId) => {
       toast({
         title: 'Migração de catálogo iniciada',
         description: `Migração do catálogo ID ${catalogId} iniciada com sucesso.`,
       });
-      // Invalidar consultas para atualizar dados
-      queryClient.invalidateQueries({ queryKey: ['/api/storage/migration-status'] });
+      queryClient.invalidateQueries({ queryKey: ['/backend/storage/migration-status'] });
     },
-    onError: (error: Error) => {
+    onError: (error: any) => {
       toast({
         title: 'Erro ao iniciar migração de catálogo',
         description: error.message,

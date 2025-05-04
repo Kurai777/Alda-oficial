@@ -17,6 +17,7 @@ export interface User {
   companyCnpj?: string | null;
   quotePaymentTerms?: string | null;
   quoteValidityDays?: number | null;
+  cashDiscountPercentage?: number | null;
 }
 
 // Interfaces ajustadas (sem rememberMe por padrão, sem companyName no login)
@@ -63,7 +64,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     console.log("Verificando status de autenticação...");
     setLoading(true);
     try {
-      const response = await fetch("/api/auth/me", {
+      const response = await fetch("/api/user", {
         credentials: "include", // Enviar cookies de sessão
       });
       if (response.ok) {
@@ -95,8 +96,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = async (credentials: LoginCredentials) => {
     setLoading(true);
     try {
-      const response = await apiRequest("POST", "/api/auth/login", credentials);
-      const userData: User = await response.json(); // API retorna dados do usuário em sucesso
+      const userData: User = await apiRequest("POST", "/api/login", credentials);
       setUser(userData);
 
       // Limpar queries pode ser necessário dependendo da sua lógica de cache
@@ -127,8 +127,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const register = async (credentials: RegisterCredentials) => {
     setLoading(true);
     try {
-      const response = await apiRequest("POST", "/api/auth/register", credentials);
-      const userData: User = await response.json(); // API retorna dados do usuário em sucesso
+      const userData: User = await apiRequest("POST", "/api/register", credentials);
       setUser(userData);
 
       // Limpar queries
@@ -156,7 +155,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = async () => {
     setLoading(true);
     try {
-      await apiRequest("POST", "/api/auth/logout");
+      await apiRequest("POST", "/api/logout");
       setUser(null);
       queryClient.clear(); // Limpar todo o cache ao sair
 

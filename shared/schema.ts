@@ -16,6 +16,7 @@ export const users = pgTable("users", {
   companyCnpj: text("company_cnpj"),
   quotePaymentTerms: text("quote_payment_terms"),
   quoteValidityDays: integer("quote_validity_days"),
+  cashDiscountPercentage: integer("cash_discount_percentage"),
 });
 
 export const insertUserSchema = createInsertSchema(users).pick({

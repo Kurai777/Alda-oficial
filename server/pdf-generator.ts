@@ -676,6 +676,11 @@ export async function generateQuotePdfWithPuppeteer(quoteData: QuoteDataInput, c
     quotePaymentTerms: companyUser.quotePaymentTerms,
     quoteValidityDays: companyUser.quoteValidityDays ?? '7', 
     currentDate: new Date().toLocaleDateString('pt-BR'),
+    paymentInstallments: quoteData.paymentInstallments || 'Não especificado',
+    paymentMethod: quoteData.paymentMethod || 'Não especificado',
+    applyCashDiscount: quoteData.applyCashDiscount ?? false,
+    discountPercentage: quoteData.discountPercentage || 0,
+    finalPrice: quoteData.finalPrice ?? quoteData.totalPrice
   };
 
   // 3. Renderizar HTML
@@ -918,6 +923,11 @@ export async function generateQuotePdfWithHtmlPdf(quoteData: QuoteDataInput, com
     quotePaymentTerms: companyUser.quotePaymentTerms,
     quoteValidityDays: companyUser.quoteValidityDays ?? '7', 
     currentDate: new Date().toLocaleDateString('pt-BR'),
+    paymentInstallments: quoteData.paymentInstallments || 'Não especificado',
+    paymentMethod: quoteData.paymentMethod || 'Não especificado',
+    applyCashDiscount: quoteData.applyCashDiscount ?? false,
+    discountPercentage: quoteData.discountPercentage || 0,
+    finalPrice: quoteData.finalPrice ?? quoteData.totalPrice
   };
 
   // 4. Renderizar HTML

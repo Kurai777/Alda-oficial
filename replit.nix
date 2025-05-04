@@ -1,7 +1,7 @@
 { pkgs }:
 {
   deps = [
-    pkgs.nodejs
+    pkgs.nodejs_20
     
     # Dependências completas para Puppeteer/Chromium no Nix (Restaurando)
     pkgs.chromium
@@ -48,10 +48,4 @@
     pkgs.xorg.libxkbfile
     pkgs.xorg.libxshmfence
   ];
-  env = {
-     # Configurações para Puppeteer usar o Chromium do Nix (Restaurando)
-     PUPPETEER_SKIP_CHROMIUM_DOWNLOAD = "true";
-     PUPPETEER_EXECUTABLE_PATH = pkgs.lib.getBin pkgs.chromium;
-     FONTCONFIG_PATH = "/etc/fonts";
-   };
 } 

@@ -37,8 +37,8 @@ export async function apiRequest(
   method: string,
   url: string,
   data?: unknown | undefined,
-  options?: ApiRequestOptions // <<< Adicionar argumento de opções
-): Promise<any> { // <<< Mudar tipo de retorno para any ou um tipo mais específico
+  options?: ApiRequestOptions
+): Promise<any> {
   const fetchOptions: RequestInit = {
     method,
     headers: data ? { "Content-Type": "application/json" } : {},

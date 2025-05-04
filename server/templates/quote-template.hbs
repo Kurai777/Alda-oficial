@@ -5,256 +5,241 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Orçamento - {{companyName}}</title>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Open+Sans:wght@300;400;600;700&display=swap');
-        
+        /* Estilos gerais */
         body {
-            font-family: 'Open Sans', Arial, sans-serif;
-            font-size: 10px;
-            margin: 40px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol';
+            font-size: 9pt; /* Tamanho base menor */
+            margin: 20mm; /* Margens definidas no Puppeteer */
             color: #333;
-            line-height: 1.6;
+            line-height: 1.4;
         }
+        h1, h2, h3, h4, h5, h6 { margin: 0; padding: 0; }
+        table { border-collapse: collapse; width: 100%; }
+        th, td { text-align: left; padding: 5px 8px; /* Aumentar padding */ border-bottom: 1px solid #eee; vertical-align: top; }
+        th { font-weight: bold; background-color: #f8f8f8; font-size: 8pt; text-transform: uppercase; }
+        td { font-size: 8.5pt; }
+
+        /* Cabeçalho */
         .header {
             display: flex;
             justify-content: space-between;
-            align-items: flex-start;
-            margin-bottom: 30px;
-            padding-bottom: 15px;
-            border-bottom: 1px solid #e0e0e0;
+            align-items: flex-start; /* Alinhar itens no topo */
+            margin-bottom: 15mm; /* Mais espaço */
+            padding-bottom: 10mm;
+            border-bottom: 1px solid #ccc; /* Linha mais visível */
+            min-height: 40px; /* Altura mínima para logo */
         }
-        .header .logo-container {
-            min-height: 70px;
+        .logo-container {
+            width: 150px; /* Espaço reservado para logo */
+            height: 40px; /* Altura máxima */
             display: flex;
-            align-items: center;
+            align-items: center; /* Centralizar logo verticalmente se for menor */
         }
-        .header img.logo {
-            max-width: 180px;
-            max-height: 70px;
+        .logo-container img.logo {
+            max-width: 100%;
+            max-height: 100%;
             object-fit: contain;
-            border-radius: 2px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
         }
         .company-details {
             text-align: right;
-            font-size: 9px;
-            line-height: 1.4;
+            font-size: 8pt;
+            max-width: 50%; /* Evitar que empurre o logo */
         }
-        .quote-title {
-            font-size: 20px;
-            font-weight: 700;
-            margin-bottom: 20px;
-            color: #2a2a2a;
+         .company-details h2 {
+             font-size: 14pt; /* Nome da empresa maior */
+             margin-bottom: 5px;
+         }
+        .company-details p {
+            margin: 2px 0;
         }
-        .section-title {
-            font-size: 14px;
-            font-weight: 600;
-            margin-top: 25px;
-            margin-bottom: 10px;
-            border-bottom: 1px solid #ccc;
-            padding-bottom: 5px;
-            color: #444;
+
+        /* Dados do Cliente */
+        .client-info {
+            margin-bottom: 10mm;
         }
-        .client-info p, .item-details p, .notes p, .footer p {
-            margin: 0 0 5px 0;
+        .client-info h3 {
+             font-size: 10pt;
+             font-weight: bold;
+             margin-bottom: 5px;
+             border-bottom: 1px solid #eee;
+             padding-bottom: 3px;
         }
-        .items-table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 15px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        .client-info p {
+             margin: 3px 0 3px 5px;
         }
-        .items-table th, .items-table td {
-            border: 1px solid #e0e0e0;
-            padding: 8px 10px;
-            text-align: left;
-            vertical-align: top;
-        }
-        .items-table th {
-            background-color: #f5f5f5;
-            font-weight: 600;
-            color: #444;
-        }
-        .items-table tr:nth-child(even) {
-            background-color: #fafafa;
-        }
-        .items-table td.price, .items-table th.price {
-            text-align: right;
-        }
-        .items-table .image-cell {
-            text-align: center;
-            vertical-align: middle;
-            height: 85px;
-            width: 85px;
-        }
+
+        /* Tabela de Itens */
+        .items-table th.image-col { width: 50px; text-align: center; }
+        .items-table td.image-col { text-align: center; padding: 3px; }
         .items-table img.product-image {
-            max-width: 80px;
-            max-height: 80px;
+            max-width: 40px;
+            max-height: 40px;
             object-fit: contain;
-            display: block;
-            margin: 0 auto;
+            vertical-align: middle; /* Alinhar imagem com texto */
+        }
+        .items-table th.code-col { width: 12%; }
+        .items-table th.product-col { width: 25%; }
+        .items-table th.desc-col { width: 25%; }
+        .items-table th.color-col { width: 10%; }
+        .items-table th.qty-col { width: 5%; text-align: center; }
+        .items-table th.price-col, .items-table th.subtotal-col { width: 11.5%; text-align: right; }
+        .items-table td { vertical-align: middle; /* Alinhar texto com imagem */ }
+        .items-table td.price-col, .items-table td.subtotal-col { text-align: right; font-family: monospace; font-size: 8.5pt; }
+        .items-table td.qty-col { text-align: center; }
+
+        /* Seção de Totais e Pagamento */
+        .summary-section {
+             margin-top: 10mm;
+             display: flex;
+             justify-content: flex-end; /* Alinhar à direita */
+        }
+        .summary-box {
+             width: 45%; /* Ocupar parte da direita */
+             border: 1px solid #eee;
+             padding: 10px 15px;
+        }
+        .summary-box table { width: 100%; font-size: 9pt; }
+        .summary-box td { border: none; padding: 3px 0; }
+        .summary-box td.label { text-align: right; padding-right: 10px; color: #555; }
+        .summary-box td.value { text-align: right; font-weight: bold; }
+        .summary-box td.discount { color: #28a745; } /* Verde para desconto */
+        .summary-box .total-row td { border-top: 1px solid #ccc; padding-top: 5px; font-size: 11pt; }
+
+        /* Observações */
+        .notes-section { margin-top: 10mm; }
+        .notes-section h3 { font-size: 10pt; font-weight: bold; margin-bottom: 5px; }
+        .notes-section pre {
+            font-size: 8.5pt;
+            white-space: pre-wrap; /* Quebrar linha */
+            word-wrap: break-word; /* Quebrar palavras longas */
+            background-color: #f8f8f8;
+            padding: 8px;
+            border: 1px solid #eee;
             border-radius: 3px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-            border: 1px solid #e2e2e2;
-            padding: 2px;
-            background-color: white;
         }
-        .items-table .no-image {
-            font-size: 10px;
-            color: #888;
-            text-align: center;
-            border: 1px dashed #ccc;
-            border-radius: 3px;
-            padding: 8px 2px;
-            margin: 5px auto;
-            max-width: 75px;
-            background-color: #f9f9f9;
-        }
-        .total-section {
-            margin-top: 25px;
-            text-align: right;
-            font-size: 16px;
-            font-weight: 700;
-            color: #2a2a2a;
-            padding: 10px;
-            background-color: #f9f9f9;
-            border-radius: 4px;
-        }
+
+        /* Rodapé */
         .footer {
-            margin-top: 40px;
-            padding-top: 15px;
-            border-top: 1px solid #e0e0e0;
-            font-size: 9px;
-            color: #666;
-            line-height: 1.4;
-        }
-        .whitespace-pre-wrap {
-             white-space: pre-wrap;
-        }
-        @page {
-            margin: 15mm;
-        }
-        .signature-area {
-            margin-top: 50px;
-            border-top: 1px dotted #ccc;
-            padding-top: 10px;
-            text-align: center;
-            font-size: 9px;
+            position: fixed; /* Tentativa de fixar rodapé */
+            bottom: 10mm;
+            left: 20mm;
+            right: 20mm;
+            font-size: 8pt;
             color: #777;
+            border-top: 1px solid #ccc;
+            padding-top: 5px;
+            text-align: center;
         }
+        .footer p { margin: 2px 0; }
+
     </style>
 </head>
 <body>
+
     <div class="header">
         <div class="logo-container">
             {{#if companyLogoBase64}}
                 <img src="{{companyLogoBase64}}" alt="Logo" class="logo">
             {{else}}
-                <h1 style="font-size: 24px; font-weight: bold;">{{companyName}}</h1>
+                <span>(Sem Logo)</span>
             {{/if}}
         </div>
         <div class="company-details">
+            <h2>{{companyName}}</h2>
             {{#if companyAddress}}<p>{{companyAddress}}</p>{{/if}}
             {{#if companyPhone}}<p>Tel: {{companyPhone}}</p>{{/if}}
             {{#if companyCnpj}}<p>CNPJ: {{companyCnpj}}</p>{{/if}}
         </div>
     </div>
 
-    <div class="quote-title">ORÇAMENTO</div>
-    <p style="text-align: right; margin-top: -30px; margin-bottom: 20px;">Data: {{currentDate}}</p>
+    <h1>ORÇAMENTO</h1>
+    <p>Data: {{currentDate}}</p>
 
-    <div class="section-title">DADOS DO CLIENTE</div>
     <div class="client-info">
+        <h3>Dados do Cliente</h3>
         <p><strong>Nome:</strong> {{clientName}}</p>
         {{#if clientEmail}}<p><strong>E-mail:</strong> {{clientEmail}}</p>{{/if}}
         {{#if clientPhone}}<p><strong>Telefone:</strong> {{clientPhone}}</p>{{/if}}
-        {{#if architectName}}<p><strong>Arquiteto:</strong> {{architectName}}</p>{{/if}}
+        {{#if architectName}}<p><strong>Arquiteto(a):</strong> {{architectName}}</p>{{/if}}
     </div>
 
-    <div class="section-title">PRODUTOS SELECIONADOS</div>
+    <h3>Itens do Orçamento</h3>
     <table class="items-table">
         <thead>
             <tr>
-                <th style="width: 80px;">Imagem</th>
-                <th style="width: 80px;">Código</th>
-                <th>Produto</th>
-                <th>Descrição</th>
-                <th style="width: 80px;">Cor</th>
-                <th style="width: 70px;">Quant.</th>
-                <th class="price" style="width: 100px;">Preço Unit.</th>
-                <th class="price" style="width: 100px;">Subtotal</th>
+                <th class="image-col">Img</th>
+                <th class="code-col">Código</th>
+                <th class="product-col">Produto</th>
+                <th class="desc-col">Descrição</th>
+                <th class="color-col">Cor</th>
+                <th class="qty-col">Qtd</th>
+                <th class="price-col">Preço Unit.</th>
+                <th class="subtotal-col">Subtotal</th>
             </tr>
         </thead>
         <tbody>
             {{#each items}}
             <tr>
-                <td class="image-cell">
-                    {{#if imageBase64}}
-                    <img src="{{imageBase64}}" alt="{{productName}}" class="product-image">
-                    {{else}}
-                    <div class="no-image">Sem Imagem</div>
+                <td class="image-col">
+                    {{#if this.imageBase64}}
+                        <img src="{{this.imageBase64}}" alt="{{this.productName}}" class="product-image">
                     {{/if}}
                 </td>
-                <td>{{productCode}}</td>
-                <td>{{productName}}</td>
-                <td>{{description}}</td>
-                <td>{{color}}</td>
-                <td style="text-align: center;">{{quantity}}</td>
-                <td class="price">{{formatPrice price}}</td>
-                <td class="price">{{formatPrice (multiply price quantity)}}</td>
+                <td>{{this.productCode}}</td>
+                <td>{{this.productName}}</td>
+                <td>{{this.description}}</td>
+                <td>{{this.color}}</td>
+                <td class="qty-col">{{this.quantity}}</td>
+                <td class="price-col">{{formatPrice this.price}}</td>
+                <td class="subtotal-col">{{formatPrice (multiply this.price this.quantity)}}</td>
             </tr>
             {{/each}}
         </tbody>
     </table>
 
-    <div class="total-section">
-        {{#if discountPercentage}}
-            <p style="font-size: 14px; margin-bottom: 5px;">Subtotal: {{formatPrice totalPrice}}</p>
-            <p style="font-size: 14px; margin-bottom: 5px; color: #27ae60;">Desconto à vista ({{discountPercentage}}%): -{{formatPrice (multiply totalPrice (divide discountPercentage 100))}}</p>
-            <p style="font-size: 16px; font-weight: 700;">TOTAL DO ORÇAMENTO: {{formatPrice finalPrice}}</p>
-        {{else}}
-            <p style="font-size: 16px; font-weight: 700;">TOTAL DO ORÇAMENTO: {{formatPrice totalPrice}}</p>
-        {{/if}}
-    </div>
-    
-    <div class="section-title">CONDIÇÕES DE PAGAMENTO</div>
-    <div class="payment-info">
-        <p><strong>Forma de pagamento:</strong> {{paymentInstallments}}</p>
-        <p><strong>Método:</strong> 
-            {{#if (eq paymentMethod "boleto")}}
-                Boleto Bancário
-            {{else if (eq paymentMethod "cartao")}}
-                Cartão de Crédito
-            {{else if (eq paymentMethod "cheque")}}
-                Cheque
-            {{else}}
-                {{paymentMethod}}
-            {{/if}}
-        </p>
-        {{#if (eq paymentInstallments "à vista")}}
-            {{#if applyCashDiscount}}
-                <p><strong>Desconto à vista:</strong> {{discountPercentage}}%</p>
-            {{/if}}
-        {{/if}}
+    <div class="summary-section">
+        <div class="summary-box">
+            <table>
+                 <tr>
+                     <td class="label">Subtotal Produtos:</td>
+                     <td class="value">{{formatPrice totalPrice}}</td>
+                 </tr>
+                {{#if discountPercentage}}
+                 <tr>
+                     <td class="label">Desconto ({{discountPercentage}}%):</td>
+                     <td class="value discount">- {{formatPrice (divide (multiply totalPrice discountPercentage) 100)}}</td>
+                 </tr>
+                {{/if}}
+                <tr class="total-row">
+                    <td class="label">TOTAL DO ORÇAMENTO:</td>
+                    <td class="value">{{formatPrice finalPrice}}</td>
+                 </tr>
+            </table>
+            <hr style="margin: 10px 0; border: none; border-top: 1px dashed #ccc;">
+            <table>
+                 <tr>
+                     <td class="label">Condição:</td>
+                     <td class="value">{{paymentInstallments}}</td>
+                 </tr>
+                 <tr>
+                     <td class="label">Método:</td>
+                     <td class="value">{{paymentMethod}}</td>
+                 </tr>
+            </table>
+        </div>
     </div>
 
     {{#if notes}}
-    <div class="section-title">OBSERVAÇÕES</div>
-    <div class="notes whitespace-pre-wrap">
-        <p>{{notes}}</p>
+    <div class="notes-section">
+        <h3>Observações</h3>
+        <pre>{{notes}}</pre>
     </div>
     {{/if}}
 
     <div class="footer">
-        <p>A validade deste orçamento é de {{quoteValidityDays}} dias a partir da data de emissão.</p>
-        <p class="whitespace-pre-wrap">{{#if quotePaymentTerms}}{{quotePaymentTerms}}{{else}}Condições de pagamento a combinar.{{/if}}</p>
-        <p style="margin-top: 10px;">{{companyName}} agradece a preferência.</p>
-        {{#if companyPhone}}<p>Para mais informações, entre em contato com nossa comercial: {{companyPhone}}</p>{{/if}}
-    </div>
-
-    <!-- Área de assinatura -->
-    <div class="signature-area">
-        <p>________________________</p>
-        <p>{{clientName}}</p>
+        <p>Validade deste orçamento: {{quoteValidityDays}} dias a partir da data de emissão.</p>
+        {{#if quotePaymentTerms}}<p><strong>Condições Gerais:</strong> {{quotePaymentTerms}}</p>{{/if}}
+        <p>{{companyName}} agradece a preferência.</p>
     </div>
 
 </body>
