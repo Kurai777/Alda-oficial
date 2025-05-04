@@ -388,6 +388,60 @@ async function streamToBuffer(stream) {
 }
 
 /**
+ * Obtém a imagem do S3 como string base64
+ * 
+ * @param {string} imageUrl URL ou chave S3 da imagem
+ * @returns {Promise<string>} String base64 da imagem
+ */
+export async function getBase64ImageFromS3(imageUrl) {
+  try {
+    // Extrair a chave S3 da URL
+    let s3Key;
+    
+    if (imageUrl.startsWith('http')) {
+      // É uma URL completa, extrair a chave
+      const s3Prefix = `https://${S3_BUCKET}.s3.${getNormalizedRegion()}.amazonaws.com/`;
+      if (imageUrl.startsWith(s3Prefix)) {
+        s3Key = imageUrl.substring(s3Prefix.length);
+      } else {
+        // Tentativa alternativa para extrair chave S3 de qualquer URL do S3
+        const url = new URL(imageUrl);
+        const pathParts = url.pathname.split('/');
+        
+        // Remover pasta vazia no início do caminho
+        if (pathParts[0] === '') pathParts.shift();
+        
+        // Se o primeiro segmento for o nome do bucket, removê-lo
+        if (pathParts[0] === S3_BUCKET) {
+          pathParts.shift();
+        }
+        
+        s3Key = pathParts.join('/');
+      }
+    } else {
+      // É apenas a chave
+      s3Key = imageUrl;
+    }
+    
+    if (!s3Key) {
+      console.error('Não foi possível extrair a chave S3 da URL:', imageUrl);
+      return null;
+    }
+    
+    console.log(`Obtendo imagem do S3 usando chave: ${s3Key}`);
+    
+    // Baixar o arquivo do S3
+    const buffer = await downloadFileFromS3(s3Key);
+    
+    // Converter para base64
+    return buffer.toString('base64');
+  } catch (error) {
+    console.error('Erro ao obter imagem do S3 como base64:', error);
+    return null;
+  }
+}
+
+/**
  * Verifica a integridade da configuração do S3
  * 
  * @returns {Promise<Object>} Status da configuração
