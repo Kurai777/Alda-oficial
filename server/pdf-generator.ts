@@ -232,10 +232,9 @@ function formatBRLPrice(priceInCents: number): string {
   }
 }
 
-// Função principal para gerar o PDF
+// Função principal para gerar o PDF com pdf-lib (MELHORADA)
 export async function generateQuotePdf(quoteData: QuoteDataInput, companyUser: User): Promise<Uint8Array> {
-  // LOG para verificar dados recebidos da empresa
-  console.log("Dados da Empresa Recebidos para PDF:", JSON.stringify(companyUser, null, 2));
+  console.log("Gerando PDF (pdf-lib) - Dados da Empresa:", JSON.stringify(companyUser, null, 2));
   
   const pdfDoc = await PDFDocument.create();
   let page = pdfDoc.addPage();
@@ -249,26 +248,24 @@ export async function generateQuotePdf(quoteData: QuoteDataInput, companyUser: U
   page.setFont(helveticaFont);
   page.setFontSize(10);
 
-  // --- Cabeçalho --- 
+  // --- CABEÇALHO MELHORADO --- 
   let logoHeight = 0;
+  const logoMaxWidth = 120; 
+  const logoMaxHeight = 40;
   if (companyUser.companyLogoUrl) {
     try {
       const urlParts = new URL(companyUser.companyLogoUrl);
       const s3Key = decodeURIComponent(urlParts.pathname.substring(1)); 
       const imageUint8Array = await downloadFileFromS3(s3Key);
-      
       const imageBuffer = Buffer.from(imageUint8Array);
-      
       let embeddedImage;
       if (s3Key.toLowerCase().endsWith('.png')) {
           embeddedImage = await pdfDoc.embedPng(imageBuffer);
       } else if (s3Key.toLowerCase().endsWith('.jpg') || s3Key.toLowerCase().endsWith('.jpeg')) {
           embeddedImage = await pdfDoc.embedJpg(imageBuffer);
-      } // TODO: Adicionar suporte a WEBP se necessário (requer biblioteca externa talvez)
+      } 
 
       if (embeddedImage) {
-        const logoMaxWidth = 120; // Diminuir um pouco?
-        const logoMaxHeight = 40; 
         const scaled = embeddedImage.scaleToFit(logoMaxWidth, logoMaxHeight);
         logoHeight = scaled.height;
         page.drawImage(embeddedImage, {
@@ -277,27 +274,44 @@ export async function generateQuotePdf(quoteData: QuoteDataInput, companyUser: U
           width: scaled.width,
           height: scaled.height,
         });
+        console.log("Logo incorporado ao PDF.");
+      } else {
+         console.log("Logo encontrado mas formato não suportado (PNG/JPG).")
       }
     } catch (error) {
-      console.error("Erro ao baixar/incorporar logo:", error);
+      console.error("Erro ao baixar/incorporar logo no pdf-lib:", error);
     }
+  } else {
+      console.log("Nenhuma URL de logo encontrada para a empresa.");
   }
   
+  // Nome da Empresa
   const companyNameText = companyUser.companyName || 'Nome da Empresa';
   page.setFont(helveticaBoldFont);
-  page.setFontSize(18); // Um pouco menor que antes
-  const companyNameX = margin + (logoHeight > 0 ? 130 : 0); 
+  page.setFontSize(18); 
+  const companyNameX = margin + (logoHeight > 0 ? logoMaxWidth + 10 : 0); 
   const companyNameMaxWidth = width - companyNameX - margin;
-  yPos = await drawWrappedText(page, companyNameText, { x: companyNameX, y: yPos, font: helveticaBoldFont, size: 18, maxWidth: companyNameMaxWidth, lineHeight: 20 });
-  yPos += 10; // Ajustar espaçamento
-  
-  // Dados da Empresa abaixo do nome/logo
-  let companyInfoY = yPos;
-  page.setFontSize(9);
+  // Desenhar nome (quebra manual simples se necessário)
+  const companyNameLines = companyNameText.split('\n'); // Tratar quebras de linha no nome?
+  let nameY = yPos;
+  for (const line of companyNameLines) {
+       page.drawText(line, { x: companyNameX, y: nameY, font: helveticaBoldFont, size: 18 });
+       nameY -= 20; // Espaçamento entre linhas do nome
+  }
+  const companyNameHeight = (companyNameLines.length * 20);
+
+  // Dados da Empresa abaixo do nome
+  let companyInfoY = nameY + (companyNameLines.length > 1 ? 10 : 0); // Ajustar Y inicial
   page.setFont(helveticaFont);
-  const companyInfoX = margin + (logoHeight > 0 ? 130 : 0);
+  page.setFontSize(9);
+  const companyInfoX = companyNameX;
    if(companyUser.companyAddress) {
-      companyInfoY = await drawWrappedText(page, sanitizeWinAnsi(companyUser.companyAddress), { x: companyInfoX, y: companyInfoY, font: helveticaFont, size: 9, maxWidth: companyNameMaxWidth, lineHeight: 11 });
+       const addrLines = sanitizeWinAnsi(companyUser.companyAddress).split('\n');
+       for(const line of addrLines) {
+           // TODO: Quebra de linha longa?
+            page.drawText(line, { x: companyInfoX, y: companyInfoY, size: 9 });
+            companyInfoY -= 11;
+       }
   }
   if(companyUser.companyPhone) {
       page.drawText(`Tel: ${sanitizeWinAnsi(companyUser.companyPhone)}`, { x: companyInfoX, y: companyInfoY, size: 9 });
@@ -307,16 +321,17 @@ export async function generateQuotePdf(quoteData: QuoteDataInput, companyUser: U
       page.drawText(`CNPJ: ${sanitizeWinAnsi(companyUser.companyCnpj)}`, { x: companyInfoX, y: companyInfoY, size: 9 });
       companyInfoY -= 11;
   }
+  const companyInfoHeight = nameY - companyInfoY;
   
-  // Data sempre alinhada à direita, mas abaixo do bloco esquerdo (logo)
+  // Data alinhada à direita
   page.setFont(helveticaFont);
   page.setFontSize(10);
   const dateText = `Data: ${new Date().toLocaleDateString('pt-BR')}`;
   const dateWidth = helveticaFont.widthOfTextAtSize(dateText, 10);
-  // Usar a posição Y mais alta (a inicial do logo) para a data
   page.drawText(dateText, { x: width - margin - dateWidth, y: height - margin }); 
 
-  yPos = companyInfoY - 25; // Espaço após info da empresa
+  // Ajustar Y principal baseado na maior altura (logo ou texto da empresa)
+  yPos = height - margin - Math.max(logoHeight + 10, companyNameHeight + companyInfoHeight) - 15; 
 
   // --- Título Orçamento --- 
   page.setFont(helveticaBoldFont);
@@ -347,85 +362,113 @@ export async function generateQuotePdf(quoteData: QuoteDataInput, companyUser: U
   }
   yPos -= 10;
 
-  // --- Tabela de Itens --- 
-  const tableTopY = yPos; // Salvar Y inicial da tabela
-  const rowHeight = 45; // Aumentar altura para possível imagem
-  const colWidths = { code: 60, product: 150, desc: 160, color: 60, price: 70 }; // Ajustar larguras
+  // --- Tabela de Itens --- (Adicionar Imagem e Descrição)
+  const tableTopY = yPos;
+  const rowHeight = 45; // Aumentar altura para imagem
+  const imageColWidth = 40;
+  const colWidths = { 
+      image: imageColWidth, 
+      code: 60, 
+      product: 130, // Diminuir um pouco
+      desc: 140, // Diminuir um pouco
+      color: 50, 
+      price: 70 
+  }; 
 
   // Cabeçalho Tabela
   page.setFont(helveticaBoldFont); page.setFontSize(10);
   let currentX = margin;
-  // page.drawText('Imagem', { x: currentX, y: yPos }); currentX += colWidths.image + 10; // Coluna Imagem (TODO)
+  page.drawText('Img', { x: currentX + imageColWidth / 2 - 10, y: yPos }); // Centralizar Img
+  currentX += colWidths.image + 10;
   page.drawText('Código', { x: currentX, y: yPos }); currentX += colWidths.code + 10;
   page.drawText('Produto', { x: currentX, y: yPos }); currentX += colWidths.product + 10;
   page.drawText('Descrição', { x: currentX, y: yPos }); currentX += colWidths.desc + 10;
   page.drawText('Cor', { x: currentX, y: yPos }); currentX += colWidths.color + 10;
-  page.drawText('Qtd.', { x: currentX, y: yPos }); currentX += 40;
-  page.drawText('Preço Unit.', { x: width - margin - colWidths.price - 70, y: yPos }); 
-  page.drawText('Subtotal', { x: width - margin - colWidths.price + 10, y: yPos }); // Subtotal à direita
-  yPos -= (1.5 * 10); // Espaço após cabeçalho
-
-  // Linha abaixo do cabeçalho
+  page.drawText('Preço Unit.', { x: width - margin - colWidths.price, y: yPos }); // Alinhar Preço à direita
+  yPos -= 15; 
   page.drawLine({ start: { x: margin, y: yPos }, end: { x: width - margin, y: yPos }, thickness: 0.5, color: rgb(0.7, 0.7, 0.7) });
   yPos -= 5;
 
   // Itens da Tabela
   page.setFont(helveticaFont); page.setFontSize(9);
   for (const item of quoteData.items) {
-    const productDetails = await storage.getProduct(item.productId);
-    const description = sanitizeWinAnsi(productDetails?.description || '-');
-    const code = sanitizeWinAnsi(item.productCode);
-    const name = sanitizeWinAnsi(item.productName);
-    const color = sanitizeWinAnsi(item.color);
-    const quantity = item.quantity || 1;
-    const priceText = formatBRLPrice(item.price);
-    const subtotalText = formatBRLPrice(item.price * quantity);
-
-    // Calcular altura necessária para descrição (aproximação)
-    const descLines = Math.ceil(helveticaFont.widthOfTextAtSize(description, 9) / colWidths.desc) + description.split('\n').length -1;
-    const currentItemHeight = Math.max(rowHeight, descLines * 11); // Altura mínima ou baseada na descrição
-
-    if (yPos - currentItemHeight < margin + 40) { // Verificar espaço
+    if (yPos - rowHeight < margin + 60) { // Checar espaço antes de desenhar
         page = pdfDoc.addPage();
-        yPos = height - margin - 20; // Reiniciar Y com espaço para cabeçalho repetido?
-        // TODO: Redesenhar cabeçalho da tabela
+        yPos = height - margin - 20; 
+        // TODO: Redesenhar cabeçalho da tabela na nova página
     }
     
     const itemStartY = yPos;
-    let textY = itemStartY - 11; // Começar texto um pouco abaixo do topo da linha
+    let textY = itemStartY - 11; 
     currentX = margin;
 
-    // TODO: Lógica para buscar e desenhar imagem do produto aqui
-    // const imageBase64 = await getBase64ImageFromS3(productDetails?.imageUrl || null);
-    // if (imageBase64) { ... page.drawImage ... }
-    
-    currentX += colWidths.code + 10; // Pular coluna imagem por enquanto
-    page.drawText(code, { x: margin, y: textY });
+    // 1. TENTAR DESENHAR IMAGEM
+    let productImageHeight = 0;
+    try {
+      const productDetails = await storage.getProduct(item.productId);
+      if (productDetails?.imageUrl) {
+        const urlParts = new URL(productDetails.imageUrl);
+        const s3Key = decodeURIComponent(urlParts.pathname.substring(1));
+        const imgUint8Array = await downloadFileFromS3(s3Key);
+        const imgBuffer = Buffer.from(imgUint8Array);
+        let embeddedImg;
+        if (s3Key.toLowerCase().endsWith('.png')) {
+            embeddedImg = await pdfDoc.embedPng(imgBuffer);
+        } else if (s3Key.toLowerCase().endsWith('.jpg') || s3Key.toLowerCase().endsWith('.jpeg')) {
+            embeddedImg = await pdfDoc.embedJpg(imgBuffer);
+        }
+        if (embeddedImg) {
+            const maxImgHeight = rowHeight - 10; // Deixar margem
+            const scaled = embeddedImg.scaleToFit(colWidths.image, maxImgHeight);
+            page.drawImage(embeddedImg, {
+                x: margin,
+                y: yPos - maxImgHeight + (maxImgHeight - scaled.height) / 2, // Centralizar verticalmente
+                width: scaled.width,
+                height: scaled.height
+            });
+            productImageHeight = scaled.height;
+            console.log(`Imagem ${s3Key} desenhada.`);
+        } else {
+             console.log(`Imagem ${s3Key} encontrada mas formato não suportado.`)
+        }
+      } else {
+          console.log(`Produto ${item.productId} sem imageUrl.`);
+      }
+    } catch (imgError) {
+      console.error(`Erro ao processar imagem para produto ${item.productId}:`, imgError);
+    }
+    currentX += colWidths.image + 10;
+
+    // 2. DESENHAR OUTRAS COLUNAS
+    const productDetails = await storage.getProduct(item.productId);
+    const description = sanitizeWinAnsi(productDetails?.description || '-').substring(0, 100); // Truncar descrição por ora
+    const code = sanitizeWinAnsi(item.productCode);
+    const name = sanitizeWinAnsi(item.productName);
+    const color = sanitizeWinAnsi(item.color);
+    const priceText = formatPrice(item.price);
+
+    page.drawText(code, { x: currentX, y: textY }); currentX += colWidths.code + 10;
     page.drawText(name, { x: currentX, y: textY }); currentX += colWidths.product + 10;
-    await drawWrappedText(page, description, { x: currentX, y: textY, font: helveticaFont, size: 9, maxWidth: colWidths.desc, lineHeight: 11});
-    currentX += colWidths.desc + 10;
-    page.drawText(color, { x: currentX, y: textY }); currentX += colWidths.color + 10;
+    page.drawText(description, { x: currentX, y: textY }); currentX += colWidths.desc + 10;
+    page.drawText(color, { x: currentX, y: textY });
     
-    // Adicionar coluna de quantidade
-    page.drawText(quantity.toString(), { x: currentX, y: textY }); currentX += 40;
+    const priceWidth = helveticaFont.widthOfTextAtSize(priceText, 9);
+    page.drawText(priceText, { x: width - margin - priceWidth, y: textY });
     
-    page.drawText(priceText, { x: width - margin - colWidths.price - 70, y: textY }); // Preço unitário
-    page.drawText(subtotalText, { x: width - margin - colWidths.price, y: textY }); // Subtotal
-    
-    yPos -= Math.max(rowHeight, descLines * 11); // Adjust yPos based on description height
+    // 3. AJUSTAR Y e desenhar linha
+    yPos -= rowHeight; // Usar altura de linha fixa por enquanto
     page.drawLine({ start: { x: margin, y: yPos }, end: { x: width - margin, y: yPos }, thickness: 0.5, color: rgb(0.9, 0.9, 0.9) });
-    yPos -= 5; // Espaço antes do próximo item
+    yPos -= 5; 
   }
 
-  // --- Total --- (Restaurando)
-  yPos -= 10; // Espaço antes do total
+  // --- Total --- (Restaurado)
+  yPos -= 10; 
   page.setFont(helveticaBoldFont); page.setFontSize(12);
-  const totalText = `TOTAL DO ORÇAMENTO: ${formatBRLPrice(quoteData.totalPrice)}`;
-  // Usar posição X fixa aproximada para evitar erro de widthOfTextAtSize
-  page.drawText(totalText, { x: width - margin - 150, y: yPos }); 
+  const totalText = `TOTAL DO ORÇAMENTO: ${formatPrice(quoteData.totalPrice)}`;
+  page.drawText(totalText, { x: width - margin - 150, y: yPos }); // Posição fixa
   yPos -= 25;
 
-  // --- Observações --- (Restaurando)
+  // --- Observações --- (Restaurado)
   if (quoteData.notes) {
     page.setFont(helveticaBoldFont);
     page.setFontSize(12);
@@ -446,31 +489,30 @@ export async function generateQuotePdf(quoteData: QuoteDataInput, companyUser: U
     yPos -= 10;
   }
 
-  // --- Rodapé --- 
-  const footerStartY = margin + 40; // Começar um pouco mais acima do fundo
+  // --- Rodapé MELHORADO --- 
+  const footerStartY = margin + 40; 
   let currentFooterY = footerStartY;
   page.setFont(helveticaFont); page.setFontSize(9);
   page.drawLine({ start: { x: margin, y: currentFooterY + 5 }, end: { x: width - margin, y: currentFooterY + 5 }, thickness: 0.5, color: rgb(0.7, 0.7, 0.7) });
-  currentFooterY -= 11; // Descer após a linha
+  currentFooterY -= 11;
   
   const validityDays = companyUser.quoteValidityDays ?? 7; 
   page.drawText(
     `A validade deste orçamento é de ${validityDays} dias a partir da data de emissão.`,
     { x: margin, y: currentFooterY, size: 9, color: rgb(0.3, 0.3, 0.3) }
   );
-  currentFooterY -= 11 * 2; // Mais espaço
+  currentFooterY -= 11 * 1.5; // Mais espaço
 
   const terms = companyUser.quotePaymentTerms || 'Condições de pagamento a combinar.';
   const termsLines = sanitizeWinAnsi(terms).split('\n');
-  page.drawText('Condições:', { x: margin, y: currentFooterY, size: 9, color: rgb(0.3, 0.3, 0.3), font: helveticaBoldFont }); // Negrito para título
+  page.drawText('Condições:', { x: margin, y: currentFooterY, size: 9, color: rgb(0.3, 0.3, 0.3), font: helveticaBoldFont });
   currentFooterY -= 11;
   for (const line of termsLines) {
       if (currentFooterY < margin / 2) break; 
-      // TODO: Quebra de linha automática para linhas longas dos termos
       page.drawText(line, { x: margin, y: currentFooterY, size: 9, color: rgb(0.3, 0.3, 0.3), lineHeight: 11 });
       currentFooterY -= 11;
   }
-  currentFooterY -= 5; // Espaço extra
+  currentFooterY -= 5; 
   
   if (currentFooterY > margin / 2) { 
     page.drawText(`${companyUser.companyName || 'Empresa'} agradece a preferência.`, { x: margin, y: currentFooterY, size: 9, color: rgb(0.3, 0.3, 0.3) });
@@ -480,7 +522,6 @@ export async function generateQuotePdf(quoteData: QuoteDataInput, companyUser: U
        page.drawText(`Para mais informações: ${sanitizeWinAnsi(companyUser.companyPhone)}`, { x: margin, y: currentFooterY, size: 9, color: rgb(0.3, 0.3, 0.3) });
   }
 
-  // 4. Salvar o documento PDF
   const pdfBytes = await pdfDoc.save();
   return pdfBytes;
 }

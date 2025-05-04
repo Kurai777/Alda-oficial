@@ -41,41 +41,8 @@ app.use('/api/admin', reprocessRouter);
 // Registrar rotas especiais para PDF
 app.use('/api/pdf', pdfRouter);
 
-// COMENTAR TEMPORARIAMENTE O MIDDLEWARE DE LOG
-/*
-app.use((req, res, next) => {
-  const start = Date.now();
-  const path = req.path;
-  let capturedJsonResponse: Record<string, any> | undefined = undefined;
-
-  const originalResJson = res.json;
-  res.json = function (bodyJson, ...args) {
-    capturedJsonResponse = bodyJson;
-    return originalResJson.apply(res, [bodyJson, ...args]);
-  };
-
-  res.on("finish", () => {
-    const duration = Date.now() - start;
-    if (path.startsWith("/api")) {
-      let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
-      if (capturedJsonResponse) {
-        logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
-      }
-
-      if (logLine.length > 80) {
-        logLine = logLine.slice(0, 79) + "…";
-      }
-
-      log(logLine);
-    }
-  });
-
-  next();
-});
-*/
-
 (async () => {
-  // Executar migração para garantir que as tabelas existam
+  // Executar migração
   try {
     console.log("Iniciando migração do banco de dados...");
     await migrate();
@@ -83,56 +50,70 @@ app.use((req, res, next) => {
   } catch (error) {
     console.error("Erro durante migração do banco de dados:", error);
   }
-  
-  const server = await registerRoutes(app);
 
-  // Manipulador de erros da API (deve vir ANTES do fallback do Vite)
+  // ===== MOVER REGISTRO DAS ROTAS PRINCIPAIS PARA ANTES DO VITE =====
+  // REGISTRAR ROTAS DA API PRIMEIRO (DENTRO DO ASYNC)
+  console.log("Registrando rotas principais da API...");
+  await registerRoutes(app); // Manter dentro do async, mas ANTES do Vite
+  console.log("Rotas principais da API registradas.");
+  // ==================================================================
+  
+  let vite: any = null; // Variável para guardar instância do Vite
+
+  // 1. CONFIGURAR VITE (se dev) - AGORA DEPOIS DAS ROTAS
+  if (app.get("env") === "development") {
+    console.log("Configurando Vite para desenvolvimento (fase 1)...");
+    vite = await createViteServer({
+        server: { middlewareMode: true },
+        appType: 'custom',
+        logLevel: 'info'
+    });
+    console.log("Instância do Vite criada.");
+  }
+
+  // 2. ADICIONAR MIDDLEWARES DO VITE (se dev)
+  if (vite) {
+      console.log("Adicionando middlewares do Vite (exceto fallback)...");
+      app.use(vite.middlewares); 
+      console.log("Middlewares do Vite adicionados.");
+  }
+
+  // 3. Manipulador de erros da API (antes do fallback HTML)
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
-    console.error("ERRO NA API:", err); // Logar erro da API
+    console.error("ERRO NA API:", err); 
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";
-    // Garantir que resposta seja JSON
     if (!res.headersSent) {
         res.status(status).json({ message });
     } else {
         res.end();
     }
-    // Não chamar next(err) aqui para não cair no fallback HTML
   });
+  console.log("Manipulador de erros da API registrado.");
 
-  // Configurar Vite ou Estático
-  if (app.get("env") === "development") {
-    console.log("Configurando Vite para desenvolvimento...");
-    const vite = await createViteServer({
-        server: { middlewareMode: true }, // Usar modo middleware simples
-        appType: 'custom',
-        logLevel: 'info'
-    });
-    // Usar APENAS os middlewares do Vite, SEM o catch-all manual
-    app.use(vite.middlewares);
-    console.log("Middlewares do Vite adicionados.");
-
-    // READICIONAR Catch-all do Vite para servir index.html
+  // 4. SERVIR ESTÁTICOS (produção) OU CATCH-ALL VITE (dev)
+  if (app.get("env") !== "development") {
+    console.log("Configurando para servir estáticos (produção)...");
+    serveStatic(app); 
+  } else if (vite) {
+    // Catch-all do Vite (DEVE SER O ÚLTIMO middleware)
+    console.log("Registrando fallback do Vite para index.html...");
     app.use("*", async (req, res, next) => {
         const url = req.originalUrl;
         console.log(`[Vite Fallback] Recebida requisição para: ${url}`);
         try {
             const clientTemplate = path.resolve(import.meta.dirname, "..", "client", "index.html");
             let template = await fs.promises.readFile(clientTemplate, "utf-8");
-            // Injetar HMR e outros scripts do Vite
             template = await vite.transformIndexHtml(url, template);
             console.log("[Vite Fallback] Enviando index.html transformado.");
             res.status(200).set({ "Content-Type": "text/html" }).end(template);
         } catch (e) {
             if (e instanceof Error) vite.ssrFixStacktrace(e);
             console.error("[Vite Fallback] Erro:", e);
-            next(e); // Passar erro para o próximo handler
+            next(e); 
         }
     });
-
-  } else {
-    console.log("Configurando para servir estáticos (produção)...");
-    serveStatic(app); // serveStatic já inclui o fallback para index.html
+    console.log("Fallback do Vite registrado.");
   }
 
   // Iniciar servidor
