@@ -14,6 +14,12 @@ async function getBase64ImageFromS3(imageUrl: string | null): Promise<string | n
   try {
     console.log(`Obtendo imagem do S3: ${imageUrl}`);
     
+    // Se a URL não parece ser do S3, retornar a própria URL (pode ser uma URL externa)
+    if (imageUrl.startsWith('http') && !imageUrl.includes('amazonaws.com')) {
+      console.log(`URL externa detectada, usando diretamente: ${imageUrl}`);
+      return imageUrl;
+    }
+    
     // Extrair a chave do S3 da URL
     const urlParts = new URL(imageUrl);
     const s3Key = decodeURIComponent(urlParts.pathname.substring(1));
@@ -24,12 +30,15 @@ async function getBase64ImageFromS3(imageUrl: string | null): Promise<string | n
     
     // Determinar o tipo MIME com base na extensão
     let mimeType = 'image/jpeg'; // Padrão
-    if (s3Key.toLowerCase().endsWith('.png')) {
+    const lcPath = s3Key.toLowerCase();
+    if (lcPath.endsWith('.png')) {
       mimeType = 'image/png';
-    } else if (s3Key.toLowerCase().endsWith('.webp')) {
+    } else if (lcPath.endsWith('.webp')) {
       mimeType = 'image/webp';
-    } else if (s3Key.toLowerCase().endsWith('.gif')) {
+    } else if (lcPath.endsWith('.gif')) {
       mimeType = 'image/gif';
+    } else if (lcPath.endsWith('.svg')) {
+      mimeType = 'image/svg+xml';
     }
     
     // Converter para base64
@@ -37,6 +46,11 @@ async function getBase64ImageFromS3(imageUrl: string | null): Promise<string | n
     return `data:${mimeType};base64,${base64}`;
   } catch (error) {
     console.error(`Erro ao obter imagem do S3 (${imageUrl}):`, error);
+    // Tentar retornar a URL original como fallback
+    if (imageUrl.startsWith('http')) {
+      console.log(`Tentando usar URL original como fallback: ${imageUrl}`);
+      return imageUrl;
+    }
     return null; // Retornar null em caso de erro
   }
 }
@@ -407,16 +421,33 @@ export async function generateQuotePdfWithPuppeteer(quoteData: QuoteDataInput, c
   let itemsWithDetails: any[] = [];
   try {
       console.log(`Buscando detalhes para ${quoteData.items.length} itens...`);
+      
+      // Usar Promise.all para processar todos os itens em paralelo
       itemsWithDetails = await Promise.all(quoteData.items.map(async (item, index) => {
         console.log(`  Item ${index + 1}: Buscando produto ID ${item.productId}`);
+        
+        // Buscar informações detalhadas do produto no banco de dados
         const productDetails = await storage.getProduct(item.productId);
         console.log(`  Item ${index + 1}: Detalhes ${productDetails ? 'encontrados' : 'NÃO encontrados'}`);
-        const imageBase64 = await getBase64ImageFromS3(productDetails?.imageUrl || null);
-        console.log(`  Item ${index + 1}: Imagem ${imageBase64 ? 'processada' : 'não encontrada/falhou'}`);
+        
+        // Buscar e converter a imagem para base64 (se existir)
+        let imageBase64 = null;
+        if (productDetails?.imageUrl) {
+          imageBase64 = await getBase64ImageFromS3(productDetails.imageUrl);
+          console.log(`  Item ${index + 1}: Imagem ${imageBase64 ? 'processada' : 'não encontrada/falhou'}`);
+        } else {
+          console.log(`  Item ${index + 1}: Produto sem URL de imagem definida`);
+        }
+        
+        // Retornar objeto com todas as informações necessárias para o template
         return {
           ...item,
           description: productDetails?.description || '-', // Usar '-' se descrição for null
-          imageBase64: imageBase64
+          imageBase64: imageBase64,
+          // Adicionamos outros campos relevantes do produto que possam ser úteis no template
+          manufacturer: productDetails?.manufacturer || null,
+          sizes: productDetails?.sizes || null,
+          materials: productDetails?.materials || []
         };
       }));
       console.log("Detalhes de todos os itens processados.");
