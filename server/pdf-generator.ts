@@ -15,26 +15,85 @@ import { promisify } from 'util';
 async function getBase64ImageFromS3(imageUrl: string | null): Promise<string | null> {
   if (!imageUrl) return null;
   
+  console.log(`🔍 Processando imagem: ${imageUrl}`);
+  
+  // MÉTODO 1: Tentar baixar do S3 se for URL do S3
   try {
-    console.log(`Tentando baixar imagem de: ${imageUrl}`);
-    const urlParts = new URL(imageUrl);
-    const s3Key = decodeURIComponent(urlParts.pathname.substring(1)); 
-    console.log(`Chave S3 extraída para imagem: ${s3Key}`);
-    
-    const imageUint8Array = await downloadFileFromS3(s3Key); 
-    const imageBuffer = Buffer.from(imageUint8Array);
-    
-    let mimeType = 'image/jpeg'; 
-    if (s3Key.toLowerCase().endsWith('.png')) mimeType = 'image/png';
-    else if (s3Key.toLowerCase().endsWith('.webp')) mimeType = 'image/webp';
-    else if (s3Key.toLowerCase().endsWith('.gif')) mimeType = 'image/gif';
-    
-    return `data:${mimeType};base64,${imageBuffer.toString('base64')}`;
-
-  } catch (error) {
-    console.error(`Erro ao buscar/converter imagem ${imageUrl}:`, error);
-    return null; 
+    if (imageUrl.includes('amazonaws.com') || imageUrl.includes('/api/s3-images/')) {
+      console.log(`Detectada imagem S3: ${imageUrl}`);
+      const urlParts = new URL(imageUrl);
+      const s3Key = decodeURIComponent(urlParts.pathname.substring(1)); 
+      console.log(`Chave S3 extraída: ${s3Key}`);
+      
+      const imageUint8Array = await downloadFileFromS3(s3Key); 
+      const imageBuffer = Buffer.from(imageUint8Array);
+      
+      let mimeType = 'image/jpeg'; 
+      if (s3Key.toLowerCase().endsWith('.png')) mimeType = 'image/png';
+      else if (s3Key.toLowerCase().endsWith('.webp')) mimeType = 'image/webp';
+      else if (s3Key.toLowerCase().endsWith('.gif')) mimeType = 'image/gif';
+      
+      console.log(`✅ Imagem do S3 processada com sucesso: ${mimeType}`);
+      return `data:${mimeType};base64,${imageBuffer.toString('base64')}`;
+    }
+  } catch (s3Error) {
+    console.error(`⚠️ Erro ao processar imagem do S3: ${imageUrl}`, s3Error);
+    // Continuar para o próximo método
   }
+  
+  // MÉTODO 2: Tentar baixar de URL externa usando fetch
+  try {
+    if (imageUrl.startsWith('http')) {
+      console.log(`Tentando baixar imagem de URL externa: ${imageUrl}`);
+      
+      const response = await fetch(imageUrl);
+      if (!response.ok) {
+        throw new Error(`Erro ao baixar imagem (status ${response.status})`);
+      }
+      
+      const buffer = await response.arrayBuffer();
+      const contentType = response.headers.get('content-type') || 'image/jpeg';
+      
+      console.log(`✅ Imagem externa processada com sucesso: ${contentType}`);
+      return `data:${contentType};base64,${Buffer.from(buffer).toString('base64')}`;
+    }
+  } catch (fetchError) {
+    console.error(`⚠️ Erro ao processar imagem externa: ${imageUrl}`, fetchError);
+    // Continuar para o próximo método
+  }
+  
+  // MÉTODO 3: Se for URL relativa, tentar acessar localmente
+  try {
+    if (imageUrl.startsWith('/')) {
+      const localPath = path.join(process.cwd(), 'public', imageUrl);
+      console.log(`Tentando acessar imagem local: ${localPath}`);
+      
+      if (fs.existsSync(localPath)) {
+        const imageBuffer = fs.readFileSync(localPath);
+        
+        let mimeType = 'image/jpeg';
+        if (localPath.toLowerCase().endsWith('.png')) mimeType = 'image/png';
+        else if (localPath.toLowerCase().endsWith('.webp')) mimeType = 'image/webp';
+        else if (localPath.toLowerCase().endsWith('.gif')) mimeType = 'image/gif';
+        
+        console.log(`✅ Imagem local processada com sucesso: ${mimeType}`);
+        return `data:${mimeType};base64,${imageBuffer.toString('base64')}`;
+      }
+    }
+  } catch (localError) {
+    console.error(`⚠️ Erro ao processar imagem local: ${imageUrl}`, localError);
+    // Continuar para o próximo método
+  }
+  
+  // MÉTODO 4: Se a URL for um data:URI, já está em base64, retornar diretamente
+  if (imageUrl.startsWith('data:')) {
+    console.log(`✅ Imagem já está em formato data:URI, usando diretamente`);
+    return imageUrl;
+  }
+  
+  // Nenhum método funcionou
+  console.warn(`❌ Todos os métodos de acesso à imagem falharam: ${imageUrl}`);
+  return null;
 }
 
 // Helper para formatar preço para o template Handlebars
