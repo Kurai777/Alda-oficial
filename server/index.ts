@@ -5,6 +5,7 @@ import { createServer as createViteServer } from 'vite';
 import session from "express-session";
 import testRoutes from "./test-routes";
 import { reprocessRouter } from "./routes-reprocessor.js";
+import { pdfRouter } from "./pdf-routes";
 import path from "path";
 import fs from "fs";
 import { nanoid } from "nanoid";
