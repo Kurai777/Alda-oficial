@@ -7,6 +7,48 @@ import path from 'path';
 import handlebars from 'handlebars';
 import puppeteer from 'puppeteer';
 
+// Helper para converter imagem do S3 para base64 para incluir no HTML
+async function getBase64ImageFromS3(imageUrl: string | null): Promise<string | null> {
+  if (!imageUrl) return null;
+  
+  try {
+    console.log(`Obtendo imagem do S3: ${imageUrl}`);
+    
+    // Extrair a chave do S3 da URL
+    const urlParts = new URL(imageUrl);
+    const s3Key = decodeURIComponent(urlParts.pathname.substring(1));
+    
+    // Baixar o arquivo do S3
+    const imageUint8Array = await downloadFileFromS3(s3Key);
+    const imageBuffer = Buffer.from(imageUint8Array);
+    
+    // Determinar o tipo MIME com base na extensão
+    let mimeType = 'image/jpeg'; // Padrão
+    if (s3Key.toLowerCase().endsWith('.png')) {
+      mimeType = 'image/png';
+    } else if (s3Key.toLowerCase().endsWith('.webp')) {
+      mimeType = 'image/webp';
+    } else if (s3Key.toLowerCase().endsWith('.gif')) {
+      mimeType = 'image/gif';
+    }
+    
+    // Converter para base64
+    const base64 = imageBuffer.toString('base64');
+    return `data:${mimeType};base64,${base64}`;
+  } catch (error) {
+    console.error(`Erro ao obter imagem do S3 (${imageUrl}):`, error);
+    return null; // Retornar null em caso de erro
+  }
+}
+
+// Helper para formatar preço para o template Handlebars
+handlebars.registerHelper('formatPrice', function(price) {
+  return new Intl.NumberFormat('pt-BR', { 
+    style: 'currency', 
+    currency: 'BRL' 
+  }).format(price / 100);
+});
+
 // Interface para os dados do orçamento recebidos da rota
 interface QuoteDataInput {
   clientName: string;
@@ -430,7 +472,18 @@ export async function generateQuotePdfWithPuppeteer(quoteData: QuoteDataInput, c
     
     // Gerar PDF
     console.log("Gerando buffer do PDF...");
-    const pdfBuffer = await page.pdf({ /* ... opções ... */ });
+    const pdfBuffer = await page.pdf({ 
+      format: 'A4',
+      printBackground: true,
+      margin: {
+        top: '15mm',
+        bottom: '15mm',
+        left: '15mm',
+        right: '15mm'
+      },
+      preferCSSPageSize: true,
+      displayHeaderFooter: false
+    });
     console.log("PDF gerado com sucesso (Buffer). Tamanho:", pdfBuffer.length);
     return pdfBuffer;
 

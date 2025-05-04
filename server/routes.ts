@@ -33,7 +33,7 @@ import { spawn } from 'child_process';
 import { runPythonColumnExtractor } from './excel-image-extractor';
 import { processCatalogInBackground } from './catalog-processor';
 import bcrypt from 'bcrypt';
-import { generateQuotePdf } from './pdf-generator';
+import { generateQuotePdf, generateQuotePdfWithPuppeteer } from './pdf-generator';
 
 type MoodboardCreateInput = {
   userId: number;
