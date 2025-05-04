@@ -1,12 +1,22 @@
 import { Request, Response, Router, NextFunction } from "express";
 import { storage } from "./storage";
+import * as session from "express-session";
+
+// Adicionar extensão para permitir o userId na sessão
+declare module "express-session" {
+  interface SessionData {
+    userId?: number;
+  }
+}
 
 // Criar router independente para PDF
 const pdfRouter = Router();
 
-// Middleware de autenticação simplificado
+// Middleware de autenticação aprimorado
 function requireAuth(req: Request, res: Response, next: NextFunction) {
-  if (!req.session.userId) {
+  console.log("Verificando autenticação na rota PDF:", req.session);
+  // Verificação segura - req.session pode ser undefined
+  if (!req.session || req.session.userId === undefined) {
     return res.status(401).json({ message: "Não autorizado. Faça login para continuar." });
   }
   next();

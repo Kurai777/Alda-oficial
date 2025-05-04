@@ -18,16 +18,7 @@ const app = express();
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ extended: false, limit: '100mb' }));
 
-// Registrar rotas de teste
-app.use('/api/test', testRoutes);
-
-// Registrar rotas de reprocessamento
-app.use('/api/admin', reprocessRouter);
-
-// Registrar rotas especiais para PDF
-app.use('/api/pdf', pdfRouter);
-
-// Configuração da sessão
+// Configuração da sessão (DEVE SER ANTES DAS ROTAS DE PDF)
 const SESSION_SECRET = process.env.SESSION_SECRET || 'alda-session-secret';
 app.use(session({
   store: storage.sessionStore, // Usar o sessionStore configurado no storage
@@ -40,6 +31,15 @@ app.use(session({
     httpOnly: true
   }
 }));
+
+// Registrar rotas de teste
+app.use('/api/test', testRoutes);
+
+// Registrar rotas de reprocessamento
+app.use('/api/admin', reprocessRouter);
+
+// Registrar rotas especiais para PDF
+app.use('/api/pdf', pdfRouter);
 
 // COMENTAR TEMPORARIAMENTE O MIDDLEWARE DE LOG
 /*
