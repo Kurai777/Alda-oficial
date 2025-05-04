@@ -179,7 +179,9 @@
                 <th>Produto</th>
                 <th>Descrição</th>
                 <th style="width: 80px;">Cor</th>
-                <th class="price" style="width: 100px;">Preço Unitário</th>
+                <th style="width: 70px;">Quant.</th>
+                <th class="price" style="width: 100px;">Preço Unit.</th>
+                <th class="price" style="width: 100px;">Subtotal</th>
             </tr>
         </thead>
         <tbody>
@@ -196,14 +198,43 @@
                 <td>{{productName}}</td>
                 <td>{{description}}</td>
                 <td>{{color}}</td>
+                <td style="text-align: center;">{{quantity}}</td>
                 <td class="price">{{formatPrice price}}</td>
+                <td class="price">{{formatPrice (multiply price quantity)}}</td>
             </tr>
             {{/each}}
         </tbody>
     </table>
 
     <div class="total-section">
-        TOTAL DO ORÇAMENTO: {{formatPrice totalPrice}}
+        {{#if discountPercentage}}
+            <p style="font-size: 14px; margin-bottom: 5px;">Subtotal: {{formatPrice totalPrice}}</p>
+            <p style="font-size: 14px; margin-bottom: 5px; color: #27ae60;">Desconto à vista ({{discountPercentage}}%): -{{formatPrice (multiply totalPrice (divide discountPercentage 100))}}</p>
+            <p style="font-size: 16px; font-weight: 700;">TOTAL DO ORÇAMENTO: {{formatPrice finalPrice}}</p>
+        {{else}}
+            <p style="font-size: 16px; font-weight: 700;">TOTAL DO ORÇAMENTO: {{formatPrice totalPrice}}</p>
+        {{/if}}
+    </div>
+    
+    <div class="section-title">CONDIÇÕES DE PAGAMENTO</div>
+    <div class="payment-info">
+        <p><strong>Forma de pagamento:</strong> {{paymentInstallments}}</p>
+        <p><strong>Método:</strong> 
+            {{#if (eq paymentMethod "boleto")}}
+                Boleto Bancário
+            {{else if (eq paymentMethod "cartao")}}
+                Cartão de Crédito
+            {{else if (eq paymentMethod "cheque")}}
+                Cheque
+            {{else}}
+                {{paymentMethod}}
+            {{/if}}
+        </p>
+        {{#if (eq paymentInstallments "à vista")}}
+            {{#if applyCashDiscount}}
+                <p><strong>Desconto à vista:</strong> {{discountPercentage}}%</p>
+            {{/if}}
+        {{/if}}
     </div>
 
     {{#if notes}}

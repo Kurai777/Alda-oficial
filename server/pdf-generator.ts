@@ -96,6 +96,22 @@ async function getBase64ImageFromS3(imageUrl: string | null): Promise<string | n
   return null;
 }
 
+// Helpers para o template Handlebars
+// Helper para multiplicação
+handlebars.registerHelper('multiply', function(a, b) {
+  return Number(a) * Number(b);
+});
+
+// Helper para divisão
+handlebars.registerHelper('divide', function(a, b) {
+  return Number(a) / Number(b);
+});
+
+// Helper para comparação de igualdade
+handlebars.registerHelper('eq', function(a, b) {
+  return a === b;
+});
+
 // Helper para formatar preço para o template Handlebars
 handlebars.registerHelper('formatPrice', function(price) {
   return new Intl.NumberFormat('pt-BR', { 
@@ -117,9 +133,15 @@ interface QuoteDataInput {
     productCode: string | null;
     color: string;
     size?: string;
-    price: number; 
+    price: number;
+    quantity: number;
   }[];
   totalPrice: number;
+  finalPrice?: number;
+  paymentInstallments?: string;
+  paymentMethod?: string;
+  applyCashDiscount?: boolean;
+  discountPercentage?: number;
 }
 
 // Interface para os dados que serão injetados no template HBS
@@ -327,7 +349,9 @@ export async function generateQuotePdf(quoteData: QuoteDataInput, companyUser: U
   page.drawText('Produto', { x: currentX, y: yPos }); currentX += colWidths.product + 10;
   page.drawText('Descrição', { x: currentX, y: yPos }); currentX += colWidths.desc + 10;
   page.drawText('Cor', { x: currentX, y: yPos }); currentX += colWidths.color + 10;
-  page.drawText('Preço Unit.', { x: width - margin - colWidths.price, y: yPos }); // Alinhar Preço à direita
+  page.drawText('Qtd.', { x: currentX, y: yPos }); currentX += 40;
+  page.drawText('Preço Unit.', { x: width - margin - colWidths.price - 70, y: yPos }); 
+  page.drawText('Subtotal', { x: width - margin - colWidths.price + 10, y: yPos }); // Subtotal à direita
   yPos -= (1.5 * 10); // Espaço após cabeçalho
 
   // Linha abaixo do cabeçalho
@@ -342,7 +366,9 @@ export async function generateQuotePdf(quoteData: QuoteDataInput, companyUser: U
     const code = sanitizeWinAnsi(item.productCode);
     const name = sanitizeWinAnsi(item.productName);
     const color = sanitizeWinAnsi(item.color);
+    const quantity = item.quantity || 1;
     const priceText = formatBRLPrice(item.price);
+    const subtotalText = formatBRLPrice(item.price * quantity);
 
     // Calcular altura necessária para descrição (aproximação)
     const descLines = Math.ceil(helveticaFont.widthOfTextAtSize(description, 9) / colWidths.desc) + description.split('\n').length -1;
@@ -367,9 +393,13 @@ export async function generateQuotePdf(quoteData: QuoteDataInput, companyUser: U
     page.drawText(name, { x: currentX, y: textY }); currentX += colWidths.product + 10;
     await drawWrappedText(page, description, { x: currentX, y: textY, font: helveticaFont, size: 9, maxWidth: colWidths.desc, lineHeight: 11});
     currentX += colWidths.desc + 10;
-    page.drawText(color, { x: currentX, y: textY });
+    page.drawText(color, { x: currentX, y: textY }); currentX += colWidths.color + 10;
     
-    page.drawText(priceText, { x: width - margin - colWidths.price, y: textY }); // Usar largura da coluna para alinhar
+    // Adicionar coluna de quantidade
+    page.drawText(quantity.toString(), { x: currentX, y: textY }); currentX += 40;
+    
+    page.drawText(priceText, { x: width - margin - colWidths.price - 70, y: textY }); // Preço unitário
+    page.drawText(subtotalText, { x: width - margin - colWidths.price, y: textY }); // Subtotal
     
     yPos -= Math.max(rowHeight, descLines * 11); // Adjust yPos based on description height
     page.drawLine({ start: { x: margin, y: yPos }, end: { x: width - margin, y: yPos }, thickness: 0.5, color: rgb(0.9, 0.9, 0.9) });
