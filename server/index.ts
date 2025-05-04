@@ -35,18 +35,18 @@ app.use(session({
   }
 }));
 
-// === COMENTAR TEMPORARIAMENTE ROTAS ADICIONAIS ===
-/*
 // Registrar rotas de teste
-app.use('/api/test', testRoutes);
+//app.use('/api/test', testRoutes);
 
 // Registrar rotas de reprocessamento
-app.use('/api/admin', reprocessRouter);
+//app.use('/api/admin', reprocessRouter);
 
-// Registrar rotas especiais para PDF
-app.use('/api/pdf', pdfRouter);
-*/
-// === FIM DO COMENTÁRIO ===
+// Registrar rotas especiais para PDF (versão original)
+//app.use('/api/pdf', pdfRouter);
+
+// Importar e registrar rotas simplificadas para PDF
+import { pdfRouterSimple } from './pdf-routes-simple';
+app.use('/api/pdf', pdfRouterSimple);
 
 (async () => {
   // Executar migração
