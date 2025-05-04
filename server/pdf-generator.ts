@@ -493,6 +493,22 @@ export async function generateQuotePdfWithPuppeteer(quoteData: QuoteDataInput, c
   }
   
   // Registrar helper de formatação de preço
+  // Helper para multiplicação
+  handlebars.registerHelper('multiply', function(a, b) {
+    return Number(a) * Number(b);
+  });
+
+  // Helper para divisão
+  handlebars.registerHelper('divide', function(a, b) {
+    return Number(a) / Number(b);
+  });
+
+  // Helper para comparação de igualdade
+  handlebars.registerHelper('eq', function(a, b) {
+    return a === b;
+  });
+  
+  // Helper para formatar preço
   handlebars.registerHelper('formatPrice', function(price: number) {
     // Formatar o preço como R$ XX.XXX,XX
     try {
@@ -721,7 +737,23 @@ export async function generateQuotePdfWithHtmlPdf(quoteData: QuoteDataInput, com
     throw new Error("Falha ao carregar template do orçamento.");
   }
   
-  // 2. Registrar helper de formatação de preço
+  // 2. Registrar helpers
+  // Helper para multiplicação
+  handlebars.registerHelper('multiply', function(a, b) {
+    return Number(a) * Number(b);
+  });
+
+  // Helper para divisão
+  handlebars.registerHelper('divide', function(a, b) {
+    return Number(a) / Number(b);
+  });
+
+  // Helper para comparação de igualdade
+  handlebars.registerHelper('eq', function(a, b) {
+    return a === b;
+  });
+  
+  // Helper para formatação de preço
   handlebars.registerHelper('formatPrice', function(price: number) {
     try {
       const priceInCents = typeof price === 'number' ? price : parseInt(price);
