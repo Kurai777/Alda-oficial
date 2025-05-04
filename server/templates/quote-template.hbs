@@ -22,11 +22,17 @@
             padding-bottom: 15px;
             border-bottom: 1px solid #e0e0e0;
         }
+        .header .logo-container {
+            min-height: 70px;
+            display: flex;
+            align-items: center;
+        }
         .header img.logo {
             max-width: 180px;
             max-height: 70px;
             object-fit: contain;
             border-radius: 2px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
         }
         .company-details {
             text-align: right;
@@ -74,6 +80,12 @@
         .items-table td.price, .items-table th.price {
             text-align: right;
         }
+        .items-table .image-cell {
+            text-align: center;
+            vertical-align: middle;
+            height: 85px;
+            width: 85px;
+        }
         .items-table img.product-image {
             max-width: 80px;
             max-height: 80px;
@@ -85,6 +97,17 @@
             border: 1px solid #e2e2e2;
             padding: 2px;
             background-color: white;
+        }
+        .items-table .no-image {
+            font-size: 10px;
+            color: #888;
+            text-align: center;
+            border: 1px dashed #ccc;
+            border-radius: 3px;
+            padding: 8px 2px;
+            margin: 5px auto;
+            max-width: 75px;
+            background-color: #f9f9f9;
         }
         .total-section {
             margin-top: 25px;
@@ -122,7 +145,7 @@
 </head>
 <body>
     <div class="header">
-        <div>
+        <div class="logo-container">
             {{#if companyLogoBase64}}
                 <img src="{{companyLogoBase64}}" alt="Logo" class="logo">
             {{else}}
@@ -162,11 +185,11 @@
         <tbody>
             {{#each items}}
             <tr>
-                <td>
+                <td class="image-cell">
                     {{#if imageBase64}}
                     <img src="{{imageBase64}}" alt="{{productName}}" class="product-image">
                     {{else}}
-                    <span>Sem Imagem</span>
+                    <div class="no-image">Sem Imagem</div>
                     {{/if}}
                 </td>
                 <td>{{productCode}}</td>
