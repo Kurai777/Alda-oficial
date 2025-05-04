@@ -12,46 +12,24 @@ async function getBase64ImageFromS3(imageUrl: string | null): Promise<string | n
   if (!imageUrl) return null;
   
   try {
-    console.log(`Obtendo imagem do S3: ${imageUrl}`);
-    
-    // Se a URL não parece ser do S3, retornar a própria URL (pode ser uma URL externa)
-    if (imageUrl.startsWith('http') && !imageUrl.includes('amazonaws.com')) {
-      console.log(`URL externa detectada, usando diretamente: ${imageUrl}`);
-      return imageUrl;
-    }
-    
-    // Extrair a chave do S3 da URL
+    console.log(`Tentando baixar imagem de: ${imageUrl}`);
     const urlParts = new URL(imageUrl);
-    const s3Key = decodeURIComponent(urlParts.pathname.substring(1));
+    const s3Key = decodeURIComponent(urlParts.pathname.substring(1)); 
+    console.log(`Chave S3 extraída para imagem: ${s3Key}`);
     
-    // Baixar o arquivo do S3
-    const imageUint8Array = await downloadFileFromS3(s3Key);
+    const imageUint8Array = await downloadFileFromS3(s3Key); 
     const imageBuffer = Buffer.from(imageUint8Array);
     
-    // Determinar o tipo MIME com base na extensão
-    let mimeType = 'image/jpeg'; // Padrão
-    const lcPath = s3Key.toLowerCase();
-    if (lcPath.endsWith('.png')) {
-      mimeType = 'image/png';
-    } else if (lcPath.endsWith('.webp')) {
-      mimeType = 'image/webp';
-    } else if (lcPath.endsWith('.gif')) {
-      mimeType = 'image/gif';
-    } else if (lcPath.endsWith('.svg')) {
-      mimeType = 'image/svg+xml';
-    }
+    let mimeType = 'image/jpeg'; 
+    if (s3Key.toLowerCase().endsWith('.png')) mimeType = 'image/png';
+    else if (s3Key.toLowerCase().endsWith('.webp')) mimeType = 'image/webp';
+    else if (s3Key.toLowerCase().endsWith('.gif')) mimeType = 'image/gif';
     
-    // Converter para base64
-    const base64 = imageBuffer.toString('base64');
-    return `data:${mimeType};base64,${base64}`;
+    return `data:${mimeType};base64,${imageBuffer.toString('base64')}`;
+
   } catch (error) {
-    console.error(`Erro ao obter imagem do S3 (${imageUrl}):`, error);
-    // Tentar retornar a URL original como fallback
-    if (imageUrl.startsWith('http')) {
-      console.log(`Tentando usar URL original como fallback: ${imageUrl}`);
-      return imageUrl;
-    }
-    return null; // Retornar null em caso de erro
+    console.error(`Erro ao buscar/converter imagem ${imageUrl}:`, error);
+    return null; 
   }
 }
 
@@ -390,7 +368,7 @@ export async function generateQuotePdf(quoteData: QuoteDataInput, companyUser: U
 }
 
 // --- NOVA FUNÇÃO USANDO PUPPETEER ---
-export async function generateQuotePdfWithPuppeteer(quoteData: QuoteDataInput, companyUser: User): Promise<any> { // Usando 'any' temporariamente para resolver o erro de tipo
+export async function generateQuotePdfWithPuppeteer(quoteData: QuoteDataInput, companyUser: User): Promise<Buffer> {
   console.log("Iniciando geração de PDF com Puppeteer...");
 
   // 1. Carregar e compilar template HTML Handlebars
@@ -414,40 +392,23 @@ export async function generateQuotePdfWithPuppeteer(quoteData: QuoteDataInput, c
       console.log(`Logo ${companyLogoBase64 ? 'processado' : 'não encontrado/falhou'}`);
   } catch (err) {
       console.error("Erro ao processar logo:", err);
-      // Continuar sem logo se falhar
   }
 
-  // Buscar dados completos dos produtos (incluindo descrição e imageUrl)
   let itemsWithDetails: any[] = [];
   try {
       console.log(`Buscando detalhes para ${quoteData.items.length} itens...`);
-      
-      // Usar Promise.all para processar todos os itens em paralelo
       itemsWithDetails = await Promise.all(quoteData.items.map(async (item, index) => {
         console.log(`  Item ${index + 1}: Buscando produto ID ${item.productId}`);
-        
-        // Buscar informações detalhadas do produto no banco de dados
         const productDetails = await storage.getProduct(item.productId);
         console.log(`  Item ${index + 1}: Detalhes ${productDetails ? 'encontrados' : 'NÃO encontrados'}`);
-        
-        // Buscar e converter a imagem para base64 (se existir)
-        let imageBase64 = null;
-        if (productDetails?.imageUrl) {
-          imageBase64 = await getBase64ImageFromS3(productDetails.imageUrl);
-          console.log(`  Item ${index + 1}: Imagem ${imageBase64 ? 'processada' : 'não encontrada/falhou'}`);
-        } else {
-          console.log(`  Item ${index + 1}: Produto sem URL de imagem definida`);
-        }
-        
-        // Retornar objeto com todas as informações necessárias para o template
+        const imageBase64 = await getBase64ImageFromS3(productDetails?.imageUrl || null);
+        console.log(`  Item ${index + 1}: Imagem ${imageBase64 ? 'processada' : 'não encontrada/falhou'}`);
         return {
           ...item,
-          description: productDetails?.description || '-', // Usar '-' se descrição for null
+          description: productDetails?.description || '-', 
           imageBase64: imageBase64,
-          // Adicionamos outros campos relevantes do produto que possam ser úteis no template
-          manufacturer: productDetails?.manufacturer || null,
-          sizes: productDetails?.sizes || null,
-          materials: productDetails?.materials || []
+          productCode: item.productCode || '-', // Garantir que não é null
+          color: item.color || '-' // Garantir que não é null/undefined
         };
       }));
       console.log("Detalhes de todos os itens processados.");
@@ -456,17 +417,16 @@ export async function generateQuotePdfWithPuppeteer(quoteData: QuoteDataInput, c
       throw new Error("Falha ao buscar informações dos produtos.");
   }
   
-  // CORRIGIR: Restaurar a criação completa do objeto templateData
   const templateData: TemplateData = {
     ...quoteData,
-    items: itemsWithDetails, // Usar itens com detalhes
+    items: itemsWithDetails, 
     companyName: companyUser.companyName,
     companyLogoBase64: companyLogoBase64,
     companyAddress: companyUser.companyAddress,
     companyPhone: companyUser.companyPhone,
     companyCnpj: companyUser.companyCnpj,
     quotePaymentTerms: companyUser.quotePaymentTerms,
-    quoteValidityDays: companyUser.quoteValidityDays ?? '7', // Default 7 dias
+    quoteValidityDays: companyUser.quoteValidityDays ?? '7', 
     currentDate: new Date().toLocaleDateString('pt-BR'),
   };
 
@@ -485,23 +445,54 @@ export async function generateQuotePdfWithPuppeteer(quoteData: QuoteDataInput, c
   console.log("Lançando Puppeteer...");
   let browser;
   try {
-    const puppeteerArgs = ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']; // Adicionar flag comum
+    // Flags adicionais para melhorar compatibilidade em ambiente Replit
+    const puppeteerArgs = [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--single-process',
+      '--no-zygote',
+      '--disable-gpu',
+      '--disable-accelerated-2d-canvas'
+    ]; 
     console.log("Args Puppeteer:", puppeteerArgs);
     browser = await puppeteer.launch({ 
-        headless: true, 
+        headless: true, // Modo headless padrão para compatibilidade
         args: puppeteerArgs,
-        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined // Usar o do Nix se definido
+        timeout: 30000, // Aumentar timeout para 30 segundos
+        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined 
     });
     console.log("Navegador lançado.");
     const page = await browser.newPage();
     console.log("Nova página criada.");
+
+    // Configurar tamanho da página para A4
+    await page.setViewport({
+      width: 1240,
+      height: 1754,
+      deviceScaleFactor: 1.5,
+    });
     
-    // Definir conteúdo da página
+    // Definir timeout mais alto para carregamento de conteúdo
+    await page.setDefaultNavigationTimeout(30000);
+    
     console.log("Definindo conteúdo HTML na página...");
-    await page.setContent(htmlContent, { waitUntil: 'networkidle0' });
-    console.log("Conteúdo HTML definido.");
+    try {
+      await page.setContent(htmlContent, { 
+        waitUntil: 'networkidle0',
+        timeout: 25000 
+      });
+      console.log("Conteúdo HTML definido.");
+    } catch (contentError) {
+      console.error("Erro ao definir conteúdo HTML:", contentError);
+      // Tentar de novo com menos restrições no waitUntil
+      await page.setContent(htmlContent, { 
+        waitUntil: 'domcontentloaded',
+        timeout: 15000 
+      });
+      console.log("Conteúdo HTML definido (modo fallback).");
+    }
     
-    // Gerar PDF
     console.log("Gerando buffer do PDF...");
     const pdfBuffer = await page.pdf({ 
       format: 'A4',
@@ -515,13 +506,10 @@ export async function generateQuotePdfWithPuppeteer(quoteData: QuoteDataInput, c
       preferCSSPageSize: true,
       displayHeaderFooter: false
     });
-    
-    // O Puppeteer retorna um Buffer, mas podemos converter explicitamente para garantir compatibilidade
     console.log("PDF gerado com sucesso (Buffer). Tamanho:", pdfBuffer.length);
-    return Buffer.from(pdfBuffer);
+    return Buffer.from(pdfBuffer); // Garantir que é Buffer do Node
 
   } catch (error) {
-      // Log detalhado do erro do Puppeteer
       console.error("Erro DETALHADO durante a geração do PDF com Puppeteer:", error);
       throw new Error(`Falha ao gerar o PDF com Puppeteer: ${error instanceof Error ? error.message : String(error)}`);
   } finally {

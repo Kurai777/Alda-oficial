@@ -811,7 +811,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
   
-  // ROTA: Gerar PDF do Orçamento (voltando para pdf-lib básico)
+  // ROTA PRINCIPAL PARA GERAR PDF (Tenta Puppeteer, fallback para pdf-lib)
   app.post("/api/quotes/generate-pdf", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = req.session.userId!;
@@ -825,64 +825,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Dados do orçamento inválidos ou incompletos." });
       }
 
-      console.log("Gerando PDF para orçamento via pdf-lib...");
-      // Chamar a função ANTIGA
-      const pdfBytes = await generateQuotePdf(quoteData, user);
+      let pdfBytes: Uint8Array | Buffer;
+      let fileName = `Orcamento_${quoteData.clientName.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.pdf`;
+      
+      try {
+        console.log("Tentando gerar PDF via Puppeteer...");
+        pdfBytes = await generateQuotePdfWithPuppeteer(quoteData, user);
+        fileName = fileName.replace('.pdf', '_premium.pdf'); // Adicionar sufixo se Puppeteer funcionou
+        console.log("PDF gerado com Puppeteer!");
+      } catch (puppeteerError) {
+        console.error("Erro com Puppeteer, fallback para pdf-lib:", puppeteerError);
+        console.log("Gerando PDF para orçamento via pdf-lib (fallback)...");
+        pdfBytes = await generateQuotePdf(quoteData, user);
+        console.log("PDF gerado com pdf-lib (fallback).");
+      }
 
-      const fileName = `Orcamento_${quoteData.clientName.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.pdf`;
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`); 
-
-      // Enviar o buffer do PDF (converter Uint8Array para Buffer)
-      res.send(Buffer.from(pdfBytes));
+      res.send(Buffer.from(pdfBytes)); // Enviar Buffer
 
     } catch (error) {
-      console.error("Erro ao gerar PDF do orçamento:", error);
-      return res.status(500).json({ message: "Erro interno ao gerar PDF do orçamento." });
-    }
-  });
-  
-  // NOVA ROTA: Gerar PDF do Orçamento usando Puppeteer (template HTML avançado)
-  app.post("/api/quotes/generate-pdf-puppeteer", requireAuth, async (req: Request, res: Response) => {
-    try {
-      const userId = req.session.userId!;
-      const user = await storage.getUser(userId);
-      if (!user) {
-        return res.status(403).json({ message: "Usuário não encontrado ou não autorizado." });
-      }
-
-      const quoteData = req.body; 
-      if (!quoteData || !quoteData.clientName || !quoteData.items || quoteData.items.length === 0) {
-        return res.status(400).json({ message: "Dados do orçamento inválidos ou incompletos." });
-      }
-
-      console.log("Gerando PDF para orçamento via Puppeteer...");
-      try {
-        // Chamar a função que usa Puppeteer
-        const pdfBuffer = await generateQuotePdfWithPuppeteer(quoteData, user);
-
-        const fileName = `Orcamento_${quoteData.clientName.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}_premium.pdf`;
-        res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`); 
-
-        // Enviar o buffer do PDF
-        res.send(pdfBuffer);
-      } catch (puppeteerError) {
-        console.error("Erro na geração com Puppeteer, tentando método alternativo:", puppeteerError);
-        
-        // Fallback para o método antigo se Puppeteer falhar
-        console.log("Caindo para método alternativo pdf-lib...");
-        const pdfBytes = await generateQuotePdf(quoteData, user);
-        
-        const fileName = `Orcamento_${quoteData.clientName.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.pdf`;
-        res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`); 
-        
-        res.send(Buffer.from(pdfBytes));
-      }
-    } catch (error) {
-      console.error("Erro ao gerar PDF do orçamento:", error);
-      return res.status(500).json({ message: "Erro interno ao gerar PDF do orçamento." });
+      console.error("Erro GERAL ao gerar PDF do orçamento:", error);
+      // Evitar enviar HTML de erro, garantir JSON
+       if (!res.headersSent) {
+           res.status(500).json({ message: "Erro interno ao gerar PDF do orçamento." });
+       } else {
+           res.end();
+       }
     }
   });
   

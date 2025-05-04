@@ -126,36 +126,36 @@ export default function ProfilePage() {
         const logoFormData = new FormData();
         logoFormData.append('logoFile', companyLogoFile); 
 
-        // MUDAR URL DA CHAMADA FETCH
+        // TESTE: Fetch mais simples e logar resposta crua
         const uploadResponse = await fetch("/api/upload-logo", {
             method: "POST",
             body: logoFormData,
             credentials: "include" 
         });
+        
+        console.log("Status Resposta Upload:", uploadResponse.status);
+        console.log("Headers Resposta Upload:", Object.fromEntries(uploadResponse.headers.entries()));
+        const responseText = await uploadResponse.text(); // Ler como texto SEMPRE
+        console.log("Corpo Resposta Upload (Texto):", responseText);
 
         if (!uploadResponse.ok) {
-            let errorMsg = `Erro ${uploadResponse.status} no upload do logo.`;
-            try {
-              const errorData = await uploadResponse.json();
-              errorMsg = errorData.message || errorMsg;
-            } catch (e) { /* Ignorar */ }
-            throw new Error(errorMsg);
+            throw new Error(`Erro ${uploadResponse.status} no upload: ${responseText}`);
         }
         
-        // Verificar Content-Type e pegar URL
+        // Tentar parsear JSON APENAS se o content-type for correto
         const contentType = uploadResponse.headers.get("content-type");
         if (contentType && contentType.includes("application/json")) {
-            const result = await uploadResponse.json();
-            if (!result.logoUrl) { // Checar se a URL veio na resposta
+            const result = JSON.parse(responseText); // Parsear o texto que já lemos
+            if (!result.logoUrl) { 
                  console.error("API de upload retornou sucesso mas sem logoUrl", result);
-                 throw new Error("Resposta inválida do servidor após upload do logo.");
+                 throw new Error("Resposta JSON inválida do servidor (sem logoUrl).");
             }
             logoUrlToSave = result.logoUrl; 
             console.log("Upload do logo concluído, URL:", logoUrlToSave);
-            setCompanyLogoFile(null); // Limpa o estado do arquivo APENAS após upload BEM-SUCEDIDO
+            setCompanyLogoFile(null); 
         } else {
-            const responseBody = await uploadResponse.text();
-            console.error("Erro: Resposta inesperada do servidor (não JSON) para upload do logo. Content-Type:", contentType, "Body:", responseBody);
+            // Se não for JSON, o erro já foi logado acima, lançar erro genérico
+            console.error("Tipo de conteúdo inesperado recebido:", contentType);
             throw new Error("Resposta inesperada do servidor ao fazer upload do logo.");
         }
         
