@@ -4,9 +4,10 @@
 import { Router, Request, Response } from 'express';
 import { storage } from './storage';
 import { generateSimplePdf, QuoteDataInput } from './pdf-generator-simple';
+import { generateQuotePdfWithPuppeteer } from './pdf-generator-improved';
 import { User } from '@shared/schema';
 import path from 'path';
-import { uploadBufferToS3, downloadFileFromS3 } from './s3-service';
+import { uploadBufferToS3, downloadFileFromS3, generateS3Key } from './s3-service';
 import fs from 'fs';
 
 // Criar o router
@@ -40,29 +41,39 @@ router.post('/generate', requireAuth, async (req: Request, res: Response) => {
       return res.status(404).json({ message: 'Usuário não encontrado' });
     }
 
-    // Gerar o PDF usando nosso gerador simplificado
-    const pdfBuffer = await generateSimplePdf(quoteData, user);
+    // Gerar o PDF usando nosso gerador simplificado (pdf-lib)
+    console.log("Iniciando geração simples com pdf-lib..."); 
+    const pdfBytes = await generateSimplePdf(quoteData, user);
+    const pdfBuffer = Buffer.from(pdfBytes);
+    console.log("✅ PDF simples gerado com sucesso!");
 
-    // Nome do arquivo baseado no cliente e data
+    // Nome do arquivo original
     const dateStr = new Date().toISOString().replace(/[:.]/g, '-');
-    const filename = `orcamento-${quoteData.clientName.replace(/\s+/g, '-')}-${dateStr}.pdf`;
-    const s3Key = `users/${userId}/quotes/${filename}`;
-
-    // Fazer upload do PDF para o S3
-    const uploadResult = await uploadBufferToS3(pdfBuffer, s3Key, 'application/pdf');
+    const originalFilename = `orcamento-${quoteData.clientName.replace(/\s+/g, '-')}-${dateStr}-simple.pdf`; // Nome indica simple
     
-    console.log(`PDF enviado para S3: ${s3Key}`);
+    const s3Category = 'quotes';
 
-    // Retornar URL do S3 para o cliente
+    // Fazer upload do PDF para o S3 com os 5 argumentos corretos
+    const fileUrl = await uploadBufferToS3(
+        pdfBuffer,          // 1. Buffer
+        originalFilename,   // 2. Nome original do arquivo
+        userId,             // 3. ID do usuário
+        s3Category,         // 4. Categoria ('quotes')
+        null                // 5. SubId (nulo para quotes)
+    );
+    
+    console.log(`PDF enviado para S3. URL retornada: ${fileUrl}`);
+
     return res.status(200).json({
       message: 'Orçamento gerado com sucesso',
-      filename,
-      url: uploadResult.url,
-      key: s3Key
+      filename: originalFilename, 
+      url: fileUrl, 
     });
   } catch (error) {
-    console.error('Erro ao gerar PDF:', error);
-    return res.status(500).json({ message: 'Erro ao gerar o orçamento', error: error.message });
+    console.error('Erro GERAL ao gerar PDF:', error);
+    if (!res.headersSent) {
+        return res.status(500).json({ message: 'Erro ao gerar o orçamento', error: error.message });
+    }
   }
 });
 

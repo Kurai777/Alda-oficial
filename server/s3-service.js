@@ -356,6 +356,7 @@ export async function fileExistsInS3(s3Key) {
  */
 export async function downloadFileFromS3(s3Key) {
   try {
+    console.log(`[downloadFileFromS3] Tentando baixar ${s3Key}...`);
     const command = new GetObjectCommand({
       Bucket: S3_BUCKET,
       Key: s3Key
@@ -363,28 +364,43 @@ export async function downloadFileFromS3(s3Key) {
     
     const response = await s3Client.send(command);
     
+    // Verificar se response.Body existe e é um stream legível
+    if (!response.Body || typeof response.Body.pipe !== 'function') { 
+        console.error(`[downloadFileFromS3] Corpo da resposta S3 inválido ou ausente para ${s3Key}.`);
+        throw new Error(`Corpo da resposta S3 inválido para ${s3Key}`);
+    }
+    
+    console.log(`[downloadFileFromS3] Stream recebido para ${s3Key}, convertendo para buffer...`);
     // Converter o stream para buffer
-    return await streamToBuffer(response.Body);
+    const buffer = await streamToBuffer(response.Body);
+    console.log(`[downloadFileFromS3] Buffer criado para ${s3Key} (Tamanho: ${buffer.length})`);
+    return buffer; // Retornar o buffer diretamente
+
   } catch (error) {
-    console.error('Erro ao baixar arquivo do S3:', error);
-    throw error;
+    // Logar erro específico de S3 (ex: NoSuchKey)
+    console.error(`[downloadFileFromS3] Erro ao baixar arquivo ${s3Key} do S3:`, error);
+    // Lançar erro para ser pego pela função chamadora (getBase64ImageFromS3)
+    throw error; 
   }
 }
 
 /**
  * Converte um stream para buffer
- * 
- * @param {ReadableStream} stream Stream para converter
- * @returns {Promise<Buffer>} Buffer resultante
+ * TRATAMENTO DE ERRO ADICIONADO
  */
 async function streamToBuffer(stream) {
-  const chunks = [];
-  
-  for await (const chunk of stream) {
-    chunks.push(chunk instanceof Buffer ? chunk : Buffer.from(chunk));
-  }
-  
-  return Buffer.concat(chunks);
+  return new Promise((resolve, reject) => {
+      const chunks = [];
+      stream.on('data', (chunk) => chunks.push(chunk instanceof Buffer ? chunk : Buffer.from(chunk)));
+      stream.on('error', (err) => {
+          console.error("[streamToBuffer] Erro durante leitura do stream:", err);
+          reject(err); // Rejeitar a promessa em caso de erro no stream
+      });
+      stream.on('end', () => {
+          console.log("[streamToBuffer] Stream lido com sucesso.");
+          resolve(Buffer.concat(chunks)); // Resolver com o buffer concatenado
+      });
+  });
 }
 
 /**
@@ -395,48 +411,63 @@ async function streamToBuffer(stream) {
  */
 export async function getBase64ImageFromS3(imageUrl) {
   try {
-    // Extrair a chave S3 da URL
     let s3Key;
     
+    if (!imageUrl || typeof imageUrl !== 'string') {
+        console.error('[getBase64] URL da imagem inválida ou nula:', imageUrl);
+        return null;
+    }
+
     if (imageUrl.startsWith('http')) {
-      // É uma URL completa, extrair a chave
-      const s3Prefix = `https://${S3_BUCKET}.s3.${getNormalizedRegion()}.amazonaws.com/`;
-      if (imageUrl.startsWith(s3Prefix)) {
-        s3Key = imageUrl.substring(s3Prefix.length);
-      } else {
-        // Tentativa alternativa para extrair chave S3 de qualquer URL do S3
-        const url = new URL(imageUrl);
-        const pathParts = url.pathname.split('/');
-        
-        // Remover pasta vazia no início do caminho
-        if (pathParts[0] === '') pathParts.shift();
-        
-        // Se o primeiro segmento for o nome do bucket, removê-lo
-        if (pathParts[0] === S3_BUCKET) {
-          pathParts.shift();
-        }
-        
-        s3Key = pathParts.join('/');
+      // URL Completa: Remover https://[bucket].[region].amazonaws.com/
+      try {
+          const url = new URL(imageUrl);
+          // O pathname começa com /, então removemos ele e juntamos o resto
+          s3Key = decodeURIComponent(url.pathname.substring(1)); 
+          console.log(`[getBase64] Chave S3 extraída da URL (${imageUrl}): ${s3Key}`);
+      } catch (urlError) {
+          console.error(`[getBase64] Erro ao parsear URL ${imageUrl}:`, urlError);
+          return null;
       }
     } else {
-      // É apenas a chave
+      // Assumir que já é a chave S3
       s3Key = imageUrl;
+      console.log(`[getBase64] Usando URL como chave S3 direta: ${s3Key}`);
     }
     
     if (!s3Key) {
-      console.error('Não foi possível extrair a chave S3 da URL:', imageUrl);
+      console.error('[getBase64] Falha final ao determinar a chave S3.');
       return null;
     }
     
-    console.log(`Obtendo imagem do S3 usando chave: ${s3Key}`);
+    console.log(`[getBase64] Obtendo imagem do S3 usando chave final: ${s3Key}`);
     
     // Baixar o arquivo do S3
-    const buffer = await downloadFileFromS3(s3Key);
+    console.log(`[getBase64] Chamando downloadFileFromS3 para ${s3Key}...`);
+    const buffer = await downloadFileFromS3(s3Key); 
+    console.log(`[getBase64] downloadFileFromS3 retornou tipo: ${typeof buffer}, é Buffer? ${Buffer.isBuffer(buffer)}`);
+    
+    // <<< ADICIONAR CHECK ANTES DE USAR >>>
+    if (!buffer || !Buffer.isBuffer(buffer)) {
+      console.error(`[getBase64] Falha no download ou retorno inválido de downloadFileFromS3 para ${s3Key}. Recebido:`, buffer);
+      return null;
+    }
     
     // Converter para base64
-    return buffer.toString('base64');
+    console.log(`[getBase64] Convertendo buffer para base64 para ${s3Key}...`);
+    const base64String = buffer.toString('base64');
+    console.log(`[getBase64] Conversão ok para ${s3Key}.`);
+    // Determinar mime type para prefixo data:image
+    let mimeType = 'image/jpeg'; 
+    if (s3Key.toLowerCase().endsWith('.png')) mimeType = 'image/png';
+    else if (s3Key.toLowerCase().endsWith('.webp')) mimeType = 'image/webp';
+    else if (s3Key.toLowerCase().endsWith('.gif')) mimeType = 'image/gif';
+    
+    return `data:${mimeType};base64,${base64String}`;
+
   } catch (error) {
-    console.error('Erro ao obter imagem do S3 como base64:', error);
+    // <<< ADICIONAR LOG NO CATCH >>>
+    console.error(`[getBase64] Erro GERAL ao obter/processar imagem do S3 (${imageUrl || 'URL Nula'}):`, error);
     return null;
   }
 }

@@ -101,8 +101,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       // Limpar queries pode ser necessário dependendo da sua lógica de cache
       // queryClient.invalidateQueries(); // Invalidar tudo ou queries específicas
-      queryClient.invalidateQueries({ queryKey: ['/api/catalogs'] });
-      queryClient.invalidateQueries({ queryKey: ['/api/products'] });
+      queryClient.invalidateQueries({ queryKey: ['/backend/catalogs'] });
+      queryClient.invalidateQueries({ queryKey: ['/backend/products'] });
 
       toast({
         title: "Login bem-sucedido",
@@ -131,8 +131,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(userData);
 
       // Limpar queries
-      queryClient.invalidateQueries({ queryKey: ['/api/catalogs'] });
-      queryClient.invalidateQueries({ queryKey: ['/api/products'] });
+      queryClient.invalidateQueries({ queryKey: ['/backend/catalogs'] });
+      queryClient.invalidateQueries({ queryKey: ['/backend/products'] });
 
       toast({
         title: "Registro bem-sucedido",

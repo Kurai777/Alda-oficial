@@ -1,6 +1,7 @@
-import { pgTable, text, serial, integer, boolean, json, timestamp, varchar } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, integer, boolean, json, timestamp, varchar, uuid, real, vector } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
+import { relations } from "drizzle-orm";
 
 export const users = pgTable("users", {
   id: serial("id").primaryKey(),
@@ -43,6 +44,7 @@ export const products = pgTable("products", {
   location: text("location"), // Localização do produto (ex: 2º Piso, Depósito, etc)
   stock: integer("stock"), // Quantidade em estoque
   excelRowNumber: integer("excel_row_number"), // Número da linha original no Excel
+  embedding: vector('embedding', { dimensions: 1536 }),
   createdAt: timestamp("created_at").defaultNow(),
   firestoreId: text("firestore_id"), // ID do produto no Firestore
   firebaseUserId: text("firebase_user_id"), // ID do usuário no Firebase
@@ -209,3 +211,95 @@ export const session = pgTable("session", {
   sess: json("sess").notNull(),
   expire: timestamp("expire", { mode: 'date', withTimezone: true }).notNull(),
 });
+
+// Novas tabelas para a funcionalidade de Design com IA
+
+export const designProjects = pgTable("design_projects", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  status: text("status").notNull().default("new"), // Ex: new, processing, awaiting_selection, completed
+  clientRenderImageUrl: text("client_render_image_url"),
+  clientFloorPlanImageUrl: text("client_floor_plan_image_url"), // Opcional
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+});
+
+export type DesignProject = typeof designProjects.$inferSelect;
+export type NewDesignProject = typeof designProjects.$inferInsert;
+
+export const designProjectItems = pgTable("design_project_items", {
+  id: serial("id").primaryKey(),
+  designProjectId: integer("design_project_id")
+    .notNull()
+    .references(() => designProjects.id, { onDelete: "cascade" }),
+  
+  detectedObjectDescription: text("detected_object_description"), // Descrição da IA sobre o objeto
+  detectedObjectBoundingBox: json("detected_object_bounding_box"), // MODIFICADO de jsonb para json para resolver linter error
+
+  // Podemos ter uma lista de sugestões ou campos separados. Começando com 3.
+  suggestedProductId1: integer("suggested_product_id_1").references(() => products.id, { onDelete: "set null" }), // Assume que a tabela 'products' já existe
+  matchScore1: real("match_score_1"), // Similaridade da sugestão 1
+
+  suggestedProductId2: integer("suggested_product_id_2").references(() => products.id, { onDelete: "set null" }),
+  matchScore2: real("match_score_2"),
+
+  suggestedProductId3: integer("suggested_product_id_3").references(() => products.id, { onDelete: "set null" }),
+  matchScore3: real("match_score_3"),
+
+  selectedProductId: integer("selected_product_id").references(() => products.id, { onDelete: "set null" }), // Produto escolhido pelo usuário
+  
+  userFeedback: text("user_feedback"), // Ex: "good_match", "bad_match", "notes: ..."
+
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+});
+
+export type DesignProjectItem = typeof designProjectItems.$inferSelect;
+export type NewDesignProjectItem = typeof designProjectItems.$inferInsert;
+
+// Adicionar relações
+export const designProjectsRelations = relations(designProjects, ({ many, one }) => ({
+  items: many(designProjectItems),
+  user: one(users, { // Assume que a tabela 'users' e seu objeto de relações já existem
+    fields: [designProjects.userId],
+    references: [users.id],
+  }),
+}));
+
+export const designProjectItemsRelations = relations(designProjectItems, ({ one }) => ({
+  project: one(designProjects, {
+    fields: [designProjectItems.designProjectId],
+    references: [designProjects.id],
+  }),
+  suggestedProduct1: one(products, { // Assume que a tabela 'products' e seu objeto de relações já existem
+    fields: [designProjectItems.suggestedProductId1],
+    references: [products.id],
+    relationName: "suggestedProduct1",
+  }),
+  suggestedProduct2: one(products, {
+    fields: [designProjectItems.suggestedProductId2],
+    references: [products.id],
+    relationName: "suggestedProduct2",
+  }),
+  suggestedProduct3: one(products, {
+    fields: [designProjectItems.suggestedProductId3],
+    references: [products.id],
+    relationName: "suggestedProduct3",
+  }),
+  selectedProduct: one(products, {
+    fields: [designProjectItems.selectedProductId],
+    references: [products.id],
+    relationName: "selectedProduct",
+  }),
+}));

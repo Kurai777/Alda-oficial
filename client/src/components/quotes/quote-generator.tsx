@@ -42,6 +42,7 @@ export default function QuoteGenerator({ items = [], onClearItems }: QuoteGenera
   const [paymentInstallments, setPaymentInstallments] = useState<string>("à vista");
   const [paymentMethod, setPaymentMethod] = useState<string>("boleto");
   const [applyCashDiscount, setApplyCashDiscount] = useState<boolean>(true);
+  const [deliveryTime, setDeliveryTime] = useState<string>("");
   
   const { toast } = useToast();
   const { user } = useAuth();
@@ -145,6 +146,7 @@ export default function QuoteGenerator({ items = [], onClearItems }: QuoteGenera
         clientPhone,
         architectName,
         notes,
+        deliveryTime,
         items: quoteItems.map(item => ({
           productId: item.product.id,
           productName: item.product.name,
@@ -197,6 +199,7 @@ export default function QuoteGenerator({ items = [], onClearItems }: QuoteGenera
         setQuoteItems([]);
       }
       setNotes("");
+      setDeliveryTime("");
       
     } catch (error) {
       console.error("Quote generation failed:", error);
@@ -434,100 +437,112 @@ export default function QuoteGenerator({ items = [], onClearItems }: QuoteGenera
                   />
                 </div>
                 
-                <div>
-                  <Label htmlFor="architect-name" className="text-xs text-gray-500 mb-1">Nome do Arquiteto (opcional)</Label>
+                <div className="grid gap-1.5">
+                  <Label htmlFor="architect">Nome do Arquiteto (opcional)</Label>
                   <Input 
-                    id="architect-name"
+                    id="architect" 
+                    placeholder="Nome do arquiteto" 
                     value={architectName}
                     onChange={(e) => setArchitectName(e.target.value)}
                   />
                 </div>
                 
-                <div>
-                  <Label htmlFor="notes" className="text-xs text-gray-500 mb-1">Observações</Label>
+                <div className="grid gap-1.5">
+                  <Label htmlFor="notes">Observações</Label>
                   <Textarea 
-                    id="notes"
-                    rows={3}
+                    id="notes" 
+                    placeholder="Observações gerais sobre o orçamento" 
                     value={notes}
                     onChange={(e) => setNotes(e.target.value)}
+                    rows={3}
                   />
                 </div>
                 
-                <div className="mt-5 space-y-4">
-                  <div>
-                    <Label className="text-xs text-gray-500 mb-1">Condições de Pagamento</Label>
-                    <Select
-                      value={paymentInstallments}
-                      onValueChange={setPaymentInstallments}
-                    >
-                      <SelectTrigger className="w-full">
-                        <SelectValue placeholder="Selecione a condição" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="à vista">À vista</SelectItem>
-                        <SelectItem value="entrada + 1x">Entrada + 1x</SelectItem>
-                        <SelectItem value="entrada + 2x">Entrada + 2x</SelectItem>
-                        <SelectItem value="entrada + 3x">Entrada + 3x</SelectItem>
-                        <SelectItem value="entrada + 4x">Entrada + 4x</SelectItem>
-                        <SelectItem value="entrada + 5x">Entrada + 5x</SelectItem>
-                        <SelectItem value="5x sem entrada">5x sem entrada</SelectItem>
-                        <SelectItem value="10x sem entrada">10x sem entrada</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  
-                  <div>
-                    <Label className="text-xs text-gray-500 mb-1">Método de Pagamento</Label>
-                    <RadioGroup 
-                      value={paymentMethod}
-                      onValueChange={setPaymentMethod}
-                      className="flex flex-col space-y-1"
-                    >
-                      <div className="flex items-center space-x-2">
-                        <RadioGroupItem value="boleto" id="boleto" />
-                        <Label htmlFor="boleto">Boleto</Label>
-                      </div>
-                      <div className="flex items-center space-x-2">
-                        <RadioGroupItem value="cartao" id="cartao" />
-                        <Label htmlFor="cartao">Cartão de Crédito</Label>
-                      </div>
-                      <div className="flex items-center space-x-2">
-                        <RadioGroupItem value="cheque" id="cheque" />
-                        <Label htmlFor="cheque">Cheque</Label>
-                      </div>
-                    </RadioGroup>
-                  </div>
-                  
-                  {paymentInstallments === "à vista" && (
-                    <div className="flex items-center space-x-2">
-                      <Checkbox 
-                        id="cash-discount"
-                        checked={applyCashDiscount}
-                        onCheckedChange={(checked) => setApplyCashDiscount(checked as boolean)}
-                      />
-                      <Label htmlFor="cash-discount" className="text-sm">
-                        Aplicar desconto de 10% para pagamento à vista
-                      </Label>
-                    </div>
-                  )}
-                  
-                  {quoteItems.length > 0 && paymentInstallments === "à vista" && applyCashDiscount && (
-                    <div className="p-2 bg-green-50 border border-green-100 rounded-md">
-                      <div className="flex justify-between items-center">
-                        <span className="text-sm text-gray-700">Subtotal:</span>
-                        <span className="text-sm font-medium">{formatPrice(getTotalPrice())}</span>
-                      </div>
-                      <div className="flex justify-between items-center mt-1">
-                        <span className="text-sm text-gray-700">Desconto (10%):</span>
-                        <span className="text-sm font-medium text-green-600">-{formatPrice(getTotalPrice() * 0.1)}</span>
-                      </div>
-                      <div className="flex justify-between items-center mt-1 pt-1 border-t border-green-100">
-                        <span className="text-sm font-medium text-gray-700">Total com desconto:</span>
-                        <span className="text-sm font-bold">{formatPrice(getFinalPrice())}</span>
-                      </div>
-                    </div>
-                  )}
+                <div className="grid gap-1.5">
+                  <Label htmlFor="deliveryTime">Prazo de Entrega (opcional)</Label>
+                  <Input 
+                    id="deliveryTime" 
+                    placeholder="Ex: 30 dias úteis" 
+                    value={deliveryTime}
+                    onChange={(e) => setDeliveryTime(e.target.value)}
+                  />
                 </div>
+              </div>
+              
+              <div className="mt-5 space-y-4">
+                <div>
+                  <Label className="text-xs text-gray-500 mb-1">Condições de Pagamento</Label>
+                  <Select
+                    value={paymentInstallments}
+                    onValueChange={setPaymentInstallments}
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Selecione a condição" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="à vista">À vista</SelectItem>
+                      <SelectItem value="entrada + 1x">Entrada + 1x</SelectItem>
+                      <SelectItem value="entrada + 2x">Entrada + 2x</SelectItem>
+                      <SelectItem value="entrada + 3x">Entrada + 3x</SelectItem>
+                      <SelectItem value="entrada + 4x">Entrada + 4x</SelectItem>
+                      <SelectItem value="entrada + 5x">Entrada + 5x</SelectItem>
+                      <SelectItem value="5x sem entrada">5x sem entrada</SelectItem>
+                      <SelectItem value="10x sem entrada">10x sem entrada</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                
+                <div>
+                  <Label className="text-xs text-gray-500 mb-1">Método de Pagamento</Label>
+                  <RadioGroup 
+                    value={paymentMethod}
+                    onValueChange={setPaymentMethod}
+                    className="flex flex-col space-y-1"
+                  >
+                    <div className="flex items-center space-x-2">
+                      <RadioGroupItem value="boleto" id="boleto" />
+                      <Label htmlFor="boleto">Boleto</Label>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <RadioGroupItem value="cartao" id="cartao" />
+                      <Label htmlFor="cartao">Cartão de Crédito</Label>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <RadioGroupItem value="cheque" id="cheque" />
+                      <Label htmlFor="cheque">Cheque</Label>
+                    </div>
+                  </RadioGroup>
+                </div>
+                
+                {paymentInstallments === "à vista" && (
+                  <div className="flex items-center space-x-2">
+                    <Checkbox 
+                      id="cash-discount"
+                      checked={applyCashDiscount}
+                      onCheckedChange={(checked) => setApplyCashDiscount(checked as boolean)}
+                    />
+                    <Label htmlFor="cash-discount" className="text-sm">
+                      Aplicar desconto de 10% para pagamento à vista
+                    </Label>
+                  </div>
+                )}
+                
+                {quoteItems.length > 0 && paymentInstallments === "à vista" && applyCashDiscount && (
+                  <div className="p-2 bg-green-50 border border-green-100 rounded-md">
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm text-gray-700">Subtotal:</span>
+                      <span className="text-sm font-medium">{formatPrice(getTotalPrice())}</span>
+                    </div>
+                    <div className="flex justify-between items-center mt-1">
+                      <span className="text-sm text-gray-700">Desconto (10%):</span>
+                      <span className="text-sm font-medium text-green-600">-{formatPrice(getTotalPrice() * 0.1)}</span>
+                    </div>
+                    <div className="flex justify-between items-center mt-1 pt-1 border-t border-green-100">
+                      <span className="text-sm font-medium text-gray-700">Total com desconto:</span>
+                      <span className="text-sm font-bold">{formatPrice(getFinalPrice())}</span>
+                    </div>
+                  </div>
+                )}
               </div>
               
               <div className="mt-5 space-y-3">

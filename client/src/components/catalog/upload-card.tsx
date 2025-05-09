@@ -93,7 +93,7 @@ export default function UploadCard() {
       const result = await response.json();
       
       // Invalidate catalogs query to refresh the list
-      queryClient.invalidateQueries({ queryKey: ["/api/catalogs"] });
+      queryClient.invalidateQueries({ queryKey: ["/backend/catalogs"] });
       
       toast({
         title: "Catálogo enviado com sucesso",

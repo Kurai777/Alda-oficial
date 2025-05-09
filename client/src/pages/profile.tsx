@@ -130,7 +130,7 @@ export default function ProfilePage() {
         logoFormData.append('logoFile', companyLogoFile); 
 
         // TESTE: Fetch mais simples e logar resposta crua
-        const uploadResponse = await fetch("/api/upload-logo", {
+        const uploadResponse = await fetch("/backend/upload-logo", {
             method: "POST",
             body: logoFormData,
             credentials: "include" 
@@ -195,12 +195,29 @@ export default function ProfilePage() {
 
     try {
       // 3. Chamar API para atualizar dados do perfil
-      console.log("Enviando dados para atualização (PUT /api/auth/me):", updateData);
-      await apiRequest("PUT", "/api/auth/me", updateData); 
+      console.log("Enviando dados para atualização (PUT /backend/auth/me):", updateData);
+      const response = await apiRequest("PUT", "/backend/auth/me", updateData); 
       
       // 4. Recarregar dados do usuário
-      await checkAuthStatus(); 
-      
+      if (response && response.id) {
+          form.reset({
+            name: response.name || "",
+            companyName: response.companyName || "",
+            companyAddress: response.companyAddress || "",
+            companyPhone: response.companyPhone || "",
+            companyCnpj: response.companyCnpj || "",
+            quotePaymentTerms: response.quotePaymentTerms || "",
+            quoteValidityDays: response.quoteValidityDays?.toString() || "", 
+            cashDiscountPercentage: response.cashDiscountPercentage?.toString() || "",
+          });
+          setCompanyLogoPreview(response.companyLogoUrl || null);
+          
+          await checkAuthStatus(); 
+      } else {
+          console.warn("API de atualização não retornou dados do usuário esperados. Forçando recarga.");
+          await checkAuthStatus(); 
+      }
+
       toast({ 
         title: "Perfil atualizado",
         description: "Suas informações foram salvas com sucesso." 
@@ -339,7 +356,13 @@ export default function ProfilePage() {
                       <FormItem>
                         <FormLabel>Validade Padrão Orçamento (dias)</FormLabel>
                         <FormControl>
-                          <Input type="number" placeholder="Ex: 7" {...field} onChange={e => field.onChange(parseInt(e.target.value, 10) || 0)} />
+                          <Input 
+                            type="number" 
+                            placeholder="Ex: 7" 
+                            {...field}
+                            value={field.value ?? ''}
+                            onChange={e => field.onChange(e.target.value)}
+                          />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -353,7 +376,13 @@ export default function ProfilePage() {
                       <FormItem>
                         <FormLabel>Desconto Padrão Pagamento à Vista (%)</FormLabel>
                         <FormControl>
-                          <Input type="number" placeholder="Ex: 10" {...field} onChange={e => field.onChange(parseInt(e.target.value, 10) || 0)} />
+                          <Input 
+                            type="number" 
+                            placeholder="Ex: 10" 
+                            {...field} 
+                            value={field.value ?? ''}
+                            onChange={e => field.onChange(e.target.value)}
+                          />
                         </FormControl>
                          <FormDescription>
                             Percentual (0-100) aplicado se "à vista" for selecionado.

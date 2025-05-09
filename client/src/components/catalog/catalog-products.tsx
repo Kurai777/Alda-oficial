@@ -82,8 +82,8 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
       console.log(`Buscando produtos para catalogId=${catalogId}`);
       
       try {
-        // Buscar produtos através da API do backend
-        const response = await fetch(`/api/products?catalogId=${catalogId}`, {
+        // CORRIGIDO: Usar /backend/products
+        const response = await fetch(`/backend/products?catalogId=${catalogId}`, {
           method: 'GET',
           headers: {
             'Content-Type': 'application/json',
@@ -92,6 +92,9 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
         
         // Se a resposta não for ok, lançar erro
         if (!response.ok) {
+          // Logar a resposta como texto para depuração
+          const errorText = await response.text();
+          console.error(`Erro ao buscar produtos (status ${response.status}) - Resposta não JSON:`, errorText);
           throw new Error(`Erro HTTP: ${response.status}`);
         }
         
@@ -109,6 +112,7 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
         return [];
       } catch (error) {
         console.error("Erro ao buscar produtos:", error);
+        // Retornar array vazio em caso de erro
         return [];
       }
     },

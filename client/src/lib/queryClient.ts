@@ -60,14 +60,23 @@ export async function apiRequest(
     console.log("apiRequest: Retornando Texto");
     return await res.text();
   } else { // Default 'json'
-    console.log("apiRequest: Retornando JSON");
-    // Lidar com respostas JSON vazias (ex: 204 No Content)
-    const text = await res.text();
+    console.log("apiRequest: Tentando retornar JSON diretamente");
     try {
-        return text ? JSON.parse(text) : null; // Retorna null se corpo vazio
+      // Verificar se o status é 204 (No Content) - não tem corpo
+      if (res.status === 204) {
+        console.log("apiRequest: Resposta 204 (No Content), retornando null.");
+        return null; 
+      }
+      // Para outros status OK (200-299), tentar parsear como JSON diretamente
+      return await res.json();
     } catch (e) {
-        console.error("Falha ao parsear JSON:", e, "Texto recebido:", text);
-        throw new Error("Falha ao processar resposta JSON do servidor.");
+      // Se falhar ao parsear JSON (mesmo com status OK, o que seria estranho)
+      console.error("Falha ao parsear JSON mesmo com resposta OK:", e);
+      // Ler como texto para log, mas o corpo já foi consumido por res.json()
+      // então precisamos de um fallback ou apenas lançar o erro.
+      // const fallbackText = await res.text().catch(() => '[corpo já consumido]'); 
+      // console.error("Texto (pode já ter sido consumido):", fallbackText);
+      throw new Error("Falha ao processar resposta JSON do servidor, mesmo com status OK.");
     }
   }
 }

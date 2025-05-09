@@ -1,6 +1,6 @@
 import { storage } from './storage';
 import { processExcelWithAI, verifyImageMatchWithVision, describeImageWithVision } from './ai-excel-processor.js';
-import { uploadBufferToS3 } from './s3-service';
+import { uploadBufferToS3, downloadFileFromS3 } from './s3-service';
 import fs from 'fs';
 import path from 'path';
 import XLSX from 'xlsx'; // Importar XLSX para ler o arquivo
@@ -131,31 +131,45 @@ function compareFurnitureType(productText: string | null | undefined, imageDescr
  * Atualiza o status do catálogo no banco de dados.
  */
 export async function processCatalogInBackground(data: CatalogJobData): Promise<void> {
-  const { catalogId, userId, s3Key, processingFilePath, fileName, fileType } = data;
-  console.log(`[BG Proc ${catalogId}] Iniciando processamento para: ${fileName}`);
+  const { catalogId, userId, s3Key, processingFilePath: s3Url, fileName, fileType } = data;
+  console.log(`[BG Proc ${catalogId}] INICIANDO background job para: ${fileName} (S3 Key: ${s3Key}, URL: ${s3Url})`);
 
+  let localTempFilePath: string | null = null; // Caminho para o arquivo baixado
   let productsData: any[] = [];
   let savedLocalProducts: Product[] = []; // Definir tipo Product
   let uploadedImages: UploadedImageInfo[] = []; // Lista de imagens após upload
   let extractionInfo = `Iniciando processamento para ${fileType}`;
 
   try {
-    // CORRIGIDO: Garantir que o status 'processing' é definido aqui
+    // 0. Log de início e dados recebidos
+    console.log(`[BG Proc ${catalogId}] Dados recebidos: ${JSON.stringify(data)}`);
+
+    // 1. Baixar arquivo do S3 para local temporário
+    const tempDir = path.join(process.cwd(), 'temp');
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir, { recursive: true });
+    }
+    localTempFilePath = path.join(tempDir, `${catalogId}-${Date.now()}-${fileName}`);
+    console.log(`[BG Proc ${catalogId}] Baixando arquivo S3 (${s3Key}) para ${localTempFilePath}...`);
+    const fileBufferFromS3 = await downloadFileFromS3(s3Key);
+    fs.writeFileSync(localTempFilePath, fileBufferFromS3);
+    console.log(`[BG Proc ${catalogId}] Download do S3 concluído e salvo em ${localTempFilePath}.`);
+
+    // 2. CORRIGIDO: Garantir que o status 'processing' é definido aqui
     await storage.updateCatalogStatus(catalogId, 'processing');
     console.log(`[BG Proc ${catalogId}] Status atualizado para 'processing'.`);
 
     if (fileType === 'xlsx' || fileType === 'xls') {
-        // 1. Ler TODOS os dados do Excel
-        console.log(`[BG Proc ${catalogId}] Lendo arquivo Excel: ${processingFilePath}`);
-        const fileBuffer = fs.readFileSync(processingFilePath);
-        const workbook = XLSX.read(fileBuffer, { type: 'buffer' });
+        // 3. Ler TODOS os dados do Excel (do arquivo local baixado)
+        console.log(`[BG Proc ${catalogId}] Lendo arquivo Excel local: ${localTempFilePath}`);
+        const workbook = XLSX.read(fileBufferFromS3, { type: 'buffer' });
         const firstSheetName = workbook.SheetNames[0];
         const sheet = workbook.Sheets[firstSheetName];
         const rawData = XLSX.utils.sheet_to_json(sheet, { header: 'A', defval: null });
         console.log(`[BG Proc ${catalogId}] Total de ${rawData.length} linhas lidas do Excel.`);
 
-        // 2. Processamento IA em Blocos
-        const CHUNK_SIZE = 75;
+        // 4. Processamento IA em Blocos
+        const CHUNK_SIZE = 25;
         let allAiProducts: any[] = [];
 
         for (let i = 0; i < rawData.length; i += CHUNK_SIZE) {
@@ -235,10 +249,10 @@ export async function processCatalogInBackground(data: CatalogJobData): Promise<
              throw new Error("Nenhum produto pôde ser salvo no banco de dados.");
         }
 
-        // --- Extrair e Fazer Upload de TODAS as Imagens ---
-        console.log(`[BG Proc ${catalogId}] Extraindo TODAS as imagens e suas âncoras via Python...`);
+        // --- Extrair e Fazer Upload de TODAS as Imagens (usar arquivo local) ---
+        console.log(`[BG Proc ${catalogId}] Extraindo TODAS as imagens e suas âncoras via Python (usando ${localTempFilePath})...`);
         try {
-            const pythonResult = await runPythonImageRowExtractor(processingFilePath);
+            const pythonResult = await runPythonImageRowExtractor(localTempFilePath);
             const extractedRawImages: ExtractedImageData[] = pythonResult.images || [];
             console.log(`[BG Proc ${catalogId}] Python extraiu ${extractedRawImages.length} imagens com linha.`);
 
@@ -359,27 +373,26 @@ export async function processCatalogInBackground(data: CatalogJobData): Promise<
     }
 
     // Se chegou aqui sem erro, marca como completo
-    await storage.updateCatalogStatus(catalogId, 'completed', extractionInfo);
-    console.log(`[BG Proc ${catalogId}] Processamento concluído com sucesso. Status: completed.`);
+    await storage.updateCatalogStatus(catalogId, 'completed');
+    console.log(`[BG Proc ${catalogId}] Processamento concluído com sucesso. Status: completed. Info: ${extractionInfo}`);
 
   } catch (error) {
     console.error(`[BG Proc ${catalogId}] ERRO GERAL no processamento background:`, error);
     try {
-        // Lógica de tratamento de erro movida para cá
         const errorMessage = error instanceof Error ? error.message : String(error);
-        await storage.updateCatalogStatus(catalogId, 'failed', errorMessage);
-        console.log(`[BG Proc ${catalogId}] Status atualizado para 'failed'.`);
+        await storage.updateCatalogStatus(catalogId, 'failed');
+        console.log(`[BG Proc ${catalogId}] Status atualizado para 'failed'. Erro: ${errorMessage}`);
     } catch (statusUpdateError) {
         console.error(`[BG Proc ${catalogId}] FALHA CRÍTICA ao atualizar status para failed:`, statusUpdateError);
     }
   } finally {
     // Limpar arquivo temporário baixado do S3 (se existir)
-    if (processingFilePath && fs.existsSync(processingFilePath)) {
+    if (localTempFilePath && fs.existsSync(localTempFilePath)) {
       try {
-        fs.unlinkSync(processingFilePath);
-        console.log(`[BG Proc ${catalogId}] Arquivo temporário ${processingFilePath} removido.`);
+        fs.unlinkSync(localTempFilePath);
+        console.log(`[BG Proc ${catalogId}] Arquivo temporário ${localTempFilePath} removido.`);
       } catch (unlinkError) {
-        console.error(`[BG Proc ${catalogId}] Erro ao remover arquivo temporário ${processingFilePath}:`, unlinkError);
+        console.error(`[BG Proc ${catalogId}] Erro ao remover arquivo temporário ${localTempFilePath}:`, unlinkError);
       }
     }
   }

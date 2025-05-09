@@ -14,6 +14,7 @@ interface QuoteItem {
   product: Product;
   color: string;
   size?: string;
+  quantity: number;
 }
 
 export default function Dashboard() {
@@ -37,12 +38,13 @@ export default function Dashboard() {
     isLoading: isLoadingProducts,
     error: errorProducts
   } = useQuery<Product[]>({ 
-    queryKey: ["/api/products", user?.id],
+    queryKey: ["/backend/products", user?.id],
     queryFn: async () => {
       console.log(`[Dashboard] Buscando TODOS os produtos do usuário ${user?.id}`);
-      const response = await fetch(`/api/products`);       
+      const response = await fetch(`/backend/products`);       
       if (!response.ok) {
-        console.error(`[Dashboard] Erro HTTP buscando produtos: ${response.status}`);
+        const errorText = await response.text(); 
+        console.error(`[Dashboard] Erro HTTP buscando produtos: ${response.status}`, errorText);
         throw new Error(`Erro HTTP buscando produtos: ${response.status}`);
       }
       const data = await response.json();
@@ -53,9 +55,8 @@ export default function Dashboard() {
     refetchOnWindowFocus: true,
   });
 
-  // isLoadingUI e errorUI podem ser diretamente isLoadingProducts e errorProducts
-  const isLoadingUI = isLoadingProducts;
-  const errorUI = errorProducts;
+  // Adicionar log para verificar os produtos brutos recebidos
+  // console.log("[Dashboard] Raw products received from query:", products);
 
   const handleAddToQuote = (product: Product, color: string) => {
     // Check if product is already in the quote
@@ -72,7 +73,7 @@ export default function Dashboard() {
     }
 
     // Add product to quote
-    setQuoteItems([...quoteItems, { product, color }]);
+    setQuoteItems([...quoteItems, { product, color, quantity: 1 }]);
 
     toast({
       title: "Produto adicionado",
@@ -169,9 +170,9 @@ export default function Dashboard() {
         })
     : [];
 
-  console.log("[Dashboard] filteredProducts após filtros/sort:", filteredProducts);
+  // console.log("[Dashboard] filteredProducts após filtros/sort:", filteredProducts);
 
-  return (
+ return (
     <div className="flex-1 flex flex-col md:flex-row">
       {/* Sidebar for filters */}
       <FilterSidebar onFiltersChange={handleFiltersChange} />
@@ -179,23 +180,28 @@ export default function Dashboard() {
       {/* Main content container */}
       <div className="flex-1 overflow-hidden">
         <div className="p-4 h-full overflow-y-auto">
-          {/* ADICIONAR/DESCOMENTAR BUSCA VISUAL AQUI */}
+          {/* Visual Search */}
           <div className="mb-8">
              <VisualSearch />
           </div>
           
-          {/* Mostrar estado inicial ou se não houver catálogos */}
-      
-          {!products && (
+          {/* Se não houver produtos iniciais (antes de filtrar) */}
+          {isLoadingProducts && !products && ( /* Melhor checar isLoading aqui */
+             <div className="text-center py-10">
+               <p className="text-gray-500">Carregando produtos...</p> {/* Mensagem de loading inicial */}
+             </div>
+          )}
+
+          {errorProducts && ( /* Mostrar erro se a query inicial falhar */
             <div className="text-center py-10">
-              <p className="text-gray-500">
-                Nenhum produto encontrado. Importe um catálogo na página 'Catálogos' ou ajuste seus filtros.
+              <p className="text-red-500">
+                Erro ao carregar produtos iniciais {errorProducts instanceof Error ? `(${errorProducts.message})` : ''}.
               </p>
             </div>
           )}
-          
-          {/* Renderizar produtos apenas se tiver um catálogo selecionado */}
-          {!!products && (
+
+          {/* Renderizar barra de busca e produtos APENAS se a query inicial foi OK (mesmo que vazia) */}
+          {!isLoadingProducts && !errorProducts && (
             <>
               {/* Search and Sort Bar */}
               <SearchSort
@@ -203,36 +209,21 @@ export default function Dashboard() {
                 onSort={handleSort}
                 onViewChange={handleViewChange}
               />
-              {/* Product Grid */}
-              {isLoadingUI ? (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mb-8 animate-pulse">
-                  {[...Array(8)].map((_, index) => (
-                    <div
-                      key={index}
-                      className="bg-white rounded-lg shadow-sm overflow-hidden h-80"
-                    >
-                      <div className="h-48 bg-gray-200"></div>
-                      <div className="p-4 space-y-3">
-                        <div className="h-4 bg-gray-200 rounded w-3/4"></div>
-                        <div className="h-3 bg-gray-100 rounded w-1/2"></div>
-                        <div className="h-5 bg-gray-200 rounded w-1/4"></div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : errorUI ? (
-                <div className="text-center py-10">
-                  <p className="text-red-500">
-                    Erro ao carregar produtos {errorUI instanceof Error ? `(${errorUI.message})` : ''}. Por favor, tente novamente.
-                  </p>
-                </div>
-              ) : filteredProducts.length === 0 ? (
+
+              {/* Product Grid/List - Renderização condicional baseada nos filteredProducts */}
+              {filteredProducts.length === 0 && !isLoadingProducts && !searchQuery && !filters.categories.length && !filters.colors.length && !filters.materials.length && filters.priceRange[0] === 0 && filters.priceRange[1] === 100000 ? ( // Mensagem inicial se não houver produtos e nenhum filtro ativo
                 <div className="text-center py-10">
                   <p className="text-gray-500">
-                    Nenhum produto encontrado. Importe um catálogo na página 'Catálogos' ou ajuste seus filtros.
+                    Nenhum produto encontrado. Importe um catálogo na página 'Catálogos'.
                   </p>
                 </div>
-              ) : (
+              ) : filteredProducts.length === 0 && !isLoadingProducts ? ( // Mensagem se filtros não retornaram nada
+                 <div className="text-center py-10">
+                   <p className="text-gray-500">
+                     Nenhum produto encontrado com os filtros atuais.
+                   </p>
+                 </div>
+              ) : ( // Renderiza a grade/lista se houver produtos filtrados
                 <div
                   className={
                     view === "grid"
@@ -249,62 +240,14 @@ export default function Dashboard() {
                   ))}
                 </div>
               )}
-              {console.log("[Dashboard] Renderizando UI - Produtos (deve aparecer se selectedCatalogId existir)")}
-          {/* Search and Sort Bar */}
-          <SearchSort
-            onSearch={handleSearch}
-            onSort={handleSort}
-            onViewChange={handleViewChange}
-          />
-          {/* Product Grid */}
-              {isLoadingUI ? (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mb-8 animate-pulse">
-              {[...Array(8)].map((_, index) => (
-                <div
-                  key={index}
-                  className="bg-white rounded-lg shadow-sm overflow-hidden h-80"
-                >
-                  <div className="h-48 bg-gray-200"></div>
-                  <div className="p-4 space-y-3">
-                    <div className="h-4 bg-gray-200 rounded w-3/4"></div>
-                    <div className="h-3 bg-gray-100 rounded w-1/2"></div>
-                    <div className="h-5 bg-gray-200 rounded w-1/4"></div>
-                  </div>
-                </div>
-              ))}
-            </div>
-              ) : errorUI ? (
-            <div className="text-center py-10">
-              <p className="text-red-500">
-                    Erro ao carregar produtos {errorUI instanceof Error ? `(${errorUI.message})` : ''}. Por favor, tente novamente.
-              </p>
-            </div>
-          ) : filteredProducts.length === 0 ? (
-            <div className="text-center py-10">
-              <p className="text-gray-500">
-                    Nenhum produto encontrado com os filtros atuais neste catálogo.
-              </p>
-            </div>
-          ) : (
-            <div
-              className={
-                view === "grid"
-                  ? "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mb-8"
-                  : "flex flex-col gap-4 mb-8"
-              }
-            >
-              {filteredProducts.map((product: Product) => (
-                <ProductCard
-                  key={product.id}
-                  product={product}
-                  onAddToQuote={handleAddToQuote}
-                />
-              ))}
-            </div>
+              {/* FIM DO BLOCO ÚNICO DE PRODUTOS */}
+            </>
           )}
+
           {/* Budget Generator Section */}
           <QuoteGenerator items={quoteItems} onClearItems={handleClearQuoteItems} />
-              {/* Pagination (pode precisar ser ajustada com base nos produtos filtrados) */}
+
+          {/* Pagination (pode precisar ser ajustada com base nos produtos filtrados) */}
           <div className="flex justify-center my-8">
             <nav className="inline-flex rounded-md shadow-sm -space-x-px" aria-label="Pagination">
               <a href="#" className="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50">
@@ -313,12 +256,10 @@ export default function Dashboard() {
                   <path fillRule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clipRule="evenodd" />
                 </svg>
               </a>
+              {/* Paginação precisa ser implementada dinamicamente */}
               <a href="#" className="relative inline-flex items-center px-4 py-2 border border-gray-300 bg-white text-sm font-medium text-gray-700 hover:bg-gray-50">1</a>
-              <a href="#" className="relative inline-flex items-center px-4 py-2 border border-gray-300 bg-primary-50 text-sm font-medium text-primary-600 hover:bg-primary-100">2</a>
-              <a href="#" className="relative inline-flex items-center px-4 py-2 border border-gray-300 bg-white text-sm font-medium text-gray-700 hover:bg-gray-50">3</a>
-              <span className="relative inline-flex items-center px-4 py-2 border border-gray-300 bg-white text-sm font-medium text-gray-700">...</span>
-              <a href="#" className="relative inline-flex items-center px-4 py-2 border border-gray-300 bg-white text-sm font-medium text-gray-700 hover:bg-gray-50">8</a>
-              <a href="#" className="relative inline-flex items-center px-4 py-2 border border-gray-300 bg-white text-sm font-medium text-gray-700 hover:bg-gray-50">9</a>
+              {/* <a href="#" className="relative inline-flex items-center px-4 py-2 border border-gray-300 bg-primary-50 text-sm font-medium text-primary-600 hover:bg-primary-100">2</a> */}
+              {/* <span className="relative inline-flex items-center px-4 py-2 border border-gray-300 bg-white text-sm font-medium text-gray-700">...</span> */}
               <a href="#" className="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50">
                 <span className="sr-only">Próxima</span>
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
@@ -327,8 +268,7 @@ export default function Dashboard() {
               </a>
             </nav>
           </div>
-            </>
-          )}
+
         </div>
       </div>
     </div>

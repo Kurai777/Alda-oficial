@@ -1,4 +1,4 @@
-import { Switch, Route } from "wouter";
+import { Switch, Route, Link, Redirect } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -16,6 +16,8 @@ import AiDesign from "@/pages/ai-design";
 import AiDesignChat from "@/pages/ai-design-chat";
 import Layout from "@/components/layout/layout";
 import { AuthProvider } from "@/lib/auth";
+import DesignAiPage from "@/pages/design-ai";
+import DesignAiProjectPage from "@/pages/design-ai-project";
 
 import { ProtectedRoute } from "./lib/protected-route";
 
@@ -81,6 +83,22 @@ function Router() {
           <ProtectedRoute>
             <Layout>
               <ProductDetail />
+            </Layout>
+          </ProtectedRoute>
+        )}
+      </Route>
+      
+      <ProtectedRoute path="/design-ai">
+        <Layout>
+          <DesignAiPage />
+        </Layout>
+      </ProtectedRoute>
+      
+      <Route path="/design-ai/:id">
+        {params => (
+          <ProtectedRoute>
+            <Layout>
+              <DesignAiProjectPage />
             </Layout>
           </ProtectedRoute>
         )}

@@ -63,19 +63,19 @@ export default function Catalogs() {
 
   // Fetch catalogs
   const { data: catalogs = [], isLoading } = useQuery({
-    queryKey: ["/api/catalogs"],
+    queryKey: ["/backend/catalogs"],
     enabled: !!user,
   });
 
   // Mutation to process catalog
   const processMutation = useMutation({
     mutationFn: async (catalogId: number) => {
-      await apiRequest("PUT", `/api/catalogs/${catalogId}/status`, {
+      await apiRequest("PUT", `/backend/catalogs/${catalogId}/status`, {
         status: "processed",
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/catalogs"] });
+      queryClient.invalidateQueries({ queryKey: ["/backend/catalogs"] });
       toast({
         title: "Catálogo processado",
         description: "O catálogo foi processado com sucesso.",
@@ -97,7 +97,7 @@ export default function Catalogs() {
     mutationFn: async (catalogId: number) => {
       console.log(`Solicitando exclusão do catálogo ID ${catalogId}`);
       try {
-        const response = await apiRequest("DELETE", `/api/catalogs/${catalogId}`);
+        const response = await apiRequest("DELETE", `/backend/catalogs/${catalogId}`);
         
         if (!response.ok) {
           const errorText = await response.text();
@@ -112,8 +112,8 @@ export default function Catalogs() {
       }
     },
     onSuccess: (catalogId) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/catalogs"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+      queryClient.invalidateQueries({ queryKey: ["/backend/catalogs"] });
+      queryClient.invalidateQueries({ queryKey: ["/backend/products"] });
       
       toast({
         title: "Catálogo removido",

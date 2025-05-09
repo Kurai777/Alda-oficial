@@ -4,6 +4,7 @@ import { serveStatic, log } from "./vite";
 import { createServer as createViteServer } from 'vite';
 import session from "express-session";
 import testRoutes from "./test-routes";
+// @ts-ignore
 import { reprocessRouter } from "./routes-reprocessor.js";
 import { pdfRouter } from "./pdf-routes";
 import path from "path";
@@ -135,6 +136,7 @@ app.use('/api/pdf', pdfRouterSimple);
 
   // ===== CRIAR HTTP SERVER E WEBSOCKET SERVER =====
   const httpServer = createServer(app);
+  /* // <<<< INÍCIO DO BLOCO COMENTADO
   const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
   
   wss.on('connection', (ws) => {
@@ -147,6 +149,7 @@ app.use('/api/pdf', pdfRouterSimple);
     });
   });
   console.log("Servidor WebSocket configurado.");
+  */ // <<<< FIM DO BLOCO COMENTADO
   // ================================================
 
   // Iniciar servidor USANDO o httpServer
