@@ -148,30 +148,7 @@ export class DatabaseStorage implements IStorage {
   async getProduct(id: number): Promise<Product | undefined> {
     try {
       console.log(`Buscando produto com ID: ${id}`);
-      // Selecionamos manualmente todas as colunas EXCETO embedding para evitar o erro
-      const columns = {
-        id: products.id,
-        userId: products.userId,
-        catalogId: products.catalogId,
-        name: products.name,
-        code: products.code,
-        description: products.description,
-        price: products.price,
-        category: products.category,
-        manufacturer: products.manufacturer,
-        imageUrl: products.imageUrl,
-        colors: products.colors,
-        materials: products.materials,
-        sizes: products.sizes,
-        location: products.location,
-        stock: products.stock,
-        excelRowNumber: products.excelRowNumber,
-        createdAt: products.createdAt,
-        firestoreId: products.firestoreId,
-        firebaseUserId: products.firebaseUserId,
-        isEdited: products.isEdited
-      };
-      const [product] = await db.select(columns).from(products).where(eq(products.id, id));
+      const [product] = await db.select().from(products).where(eq(products.id, id));
       console.log(`Produto encontrado:`, product);
       return product;
     } catch (error) {
@@ -185,33 +162,9 @@ export class DatabaseStorage implements IStorage {
       const parsedUserId = typeof userId === 'string' ? parseInt(userId) : userId;
       console.log(`Buscando produtos para userId=${parsedUserId}, catalogId=${catalogId}`);
       
-      // Selecionamos manualmente todas as colunas EXCETO embedding para evitar o erro
-      const columns = {
-        id: products.id,
-        userId: products.userId,
-        catalogId: products.catalogId,
-        name: products.name,
-        code: products.code,
-        description: products.description,
-        price: products.price,
-        category: products.category,
-        manufacturer: products.manufacturer,
-        imageUrl: products.imageUrl,
-        colors: products.colors,
-        materials: products.materials,
-        sizes: products.sizes,
-        location: products.location,
-        stock: products.stock,
-        excelRowNumber: products.excelRowNumber,
-        createdAt: products.createdAt,
-        firestoreId: products.firestoreId,
-        firebaseUserId: products.firebaseUserId,
-        isEdited: products.isEdited
-      };
-      
       if (catalogId) {
         console.log(`Filtrando por catalogId=${catalogId}`);
-        const query = db.select(columns).from(products).where(
+        const query = db.select().from(products).where(
           and(eq(products.userId, parsedUserId), eq(products.catalogId, catalogId))
         );
         console.log(`Query SQL (aproximada): ${query.toSQL ? query.toSQL().sql : 'Não disponível'}`);
@@ -220,7 +173,7 @@ export class DatabaseStorage implements IStorage {
         return result;
       } else {
         console.log(`Retornando todos os produtos do usuário ${parsedUserId}`);
-        const query = db.select(columns).from(products).where(eq(products.userId, parsedUserId));
+        const query = db.select().from(products).where(eq(products.userId, parsedUserId));
         console.log(`Query SQL (aproximada): ${query.toSQL ? query.toSQL().sql : 'Não disponível'}`);
         const result = await query;
         console.log(`Encontrados ${result.length} produtos`);
@@ -236,31 +189,7 @@ export class DatabaseStorage implements IStorage {
     try {
       const parsedUserId = typeof userId === 'string' ? parseInt(userId) : userId;
       
-      // Selecionamos manualmente todas as colunas EXCETO embedding para evitar o erro
-      const columns = {
-        id: products.id,
-        userId: products.userId,
-        catalogId: products.catalogId,
-        name: products.name,
-        code: products.code,
-        description: products.description,
-        price: products.price,
-        category: products.category,
-        manufacturer: products.manufacturer,
-        imageUrl: products.imageUrl,
-        colors: products.colors,
-        materials: products.materials,
-        sizes: products.sizes,
-        location: products.location,
-        stock: products.stock,
-        excelRowNumber: products.excelRowNumber,
-        createdAt: products.createdAt,
-        firestoreId: products.firestoreId,
-        firebaseUserId: products.firebaseUserId,
-        isEdited: products.isEdited
-      };
-      
-      return await db.select(columns).from(products).where(
+      return await db.select().from(products).where(
         and(
           eq(products.userId, parsedUserId),
           eq(products.category, category)
