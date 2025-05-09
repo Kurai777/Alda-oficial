@@ -236,7 +236,31 @@ export class DatabaseStorage implements IStorage {
     try {
       const parsedUserId = typeof userId === 'string' ? parseInt(userId) : userId;
       
-      return await db.select().from(products).where(
+      // Selecionamos manualmente todas as colunas EXCETO embedding para evitar o erro
+      const columns = {
+        id: products.id,
+        userId: products.userId,
+        catalogId: products.catalogId,
+        name: products.name,
+        code: products.code,
+        description: products.description,
+        price: products.price,
+        category: products.category,
+        manufacturer: products.manufacturer,
+        imageUrl: products.imageUrl,
+        colors: products.colors,
+        materials: products.materials,
+        sizes: products.sizes,
+        location: products.location,
+        stock: products.stock,
+        excelRowNumber: products.excelRowNumber,
+        createdAt: products.createdAt,
+        firestoreId: products.firestoreId,
+        firebaseUserId: products.firebaseUserId,
+        isEdited: products.isEdited
+      };
+      
+      return await db.select(columns).from(products).where(
         and(
           eq(products.userId, parsedUserId),
           eq(products.category, category)
@@ -269,30 +293,8 @@ export class DatabaseStorage implements IStorage {
   async getProductsByCatalogId(catalogId: number): Promise<Product[]> {
     try {
       console.log(`DB: Buscando produtos para o catálogo ${catalogId}...`);
-      // Selecionamos manualmente todas as colunas EXCETO embedding para evitar o erro
-      const columns = {
-        id: products.id,
-        userId: products.userId,
-        catalogId: products.catalogId,
-        name: products.name,
-        code: products.code,
-        description: products.description,
-        price: products.price,
-        category: products.category,
-        manufacturer: products.manufacturer,
-        imageUrl: products.imageUrl,
-        colors: products.colors,
-        materials: products.materials,
-        sizes: products.sizes,
-        location: products.location,
-        stock: products.stock,
-        excelRowNumber: products.excelRowNumber,
-        createdAt: products.createdAt,
-        firestoreId: products.firestoreId,
-        firebaseUserId: products.firebaseUserId,
-        isEdited: products.isEdited
-      };
-      const result = await db.select(columns).from(products)
+      // REVERTIDO: Selecionar todas as colunas, incluindo embedding
+      const result = await db.select().from(products)
         .where(eq(products.catalogId, catalogId));
       console.log(`DB: Encontrados ${result.length} produtos para o catálogo ${catalogId}`);
       return result;
@@ -313,30 +315,8 @@ export class DatabaseStorage implements IStorage {
   async getProductsByImageUrl(imageUrl: string): Promise<Product[]> {
     try {
       console.log(`DB: Buscando produtos que usam a imagem: ${imageUrl}`);
-      // Selecionamos manualmente todas as colunas EXCETO embedding para evitar o erro
-      const columns = {
-        id: products.id,
-        userId: products.userId,
-        catalogId: products.catalogId,
-        name: products.name,
-        code: products.code,
-        description: products.description,
-        price: products.price,
-        category: products.category,
-        manufacturer: products.manufacturer,
-        imageUrl: products.imageUrl,
-        colors: products.colors,
-        materials: products.materials,
-        sizes: products.sizes,
-        location: products.location,
-        stock: products.stock,
-        excelRowNumber: products.excelRowNumber,
-        createdAt: products.createdAt,
-        firestoreId: products.firestoreId,
-        firebaseUserId: products.firebaseUserId,
-        isEdited: products.isEdited
-      };
-      const result = await db.select(columns).from(products)
+      // REVERTIDO: Selecionar todas as colunas, incluindo embedding
+      const result = await db.select().from(products)
         .where(eq(products.imageUrl, imageUrl));
       console.log(`DB: Encontrados ${result.length} produtos que usam a mesma imagem: ${imageUrl}`);
       return result;
@@ -554,7 +534,6 @@ export class DatabaseStorage implements IStorage {
       const parsedUserId = typeof userId === 'string' ? parseInt(userId) : userId;
       console.log(`DB: Buscando produtos para userId=${parsedUserId} com texto: "${searchText}"`);
 
-      // Processar texto de busca: minúsculas, remover acentos, split em palavras
       const searchTerms = searchText
         .toLowerCase()
         .normalize("NFD")
@@ -571,46 +550,21 @@ export class DatabaseStorage implements IStorage {
 
       console.log("DB: Termos de busca processados:", searchTerms);
 
-      // Selecionamos manualmente todas as colunas EXCETO embedding para evitar o erro
-      const columns = {
-        id: products.id,
-        userId: products.userId,
-        catalogId: products.catalogId,
-        name: products.name,
-        code: products.code,
-        description: products.description,
-        price: products.price,
-        category: products.category,
-        manufacturer: products.manufacturer,
-        imageUrl: products.imageUrl,
-        colors: products.colors,
-        materials: products.materials,
-        sizes: products.sizes,
-        location: products.location,
-        stock: products.stock,
-        excelRowNumber: products.excelRowNumber,
-        createdAt: products.createdAt,
-        firestoreId: products.firestoreId,
-        firebaseUserId: products.firebaseUserId,
-        isEdited: products.isEdited
-      };
-
-      // Construir condições OR para ILIKE em nome OU descrição
+      // REVERTIDO: Selecionar todas as colunas, incluindo embedding
       const searchConditions = or(
         ...searchTerms.map(term => ilike(products.name, `%${term}%`)),
         ...searchTerms.map(term => ilike(products.description, `%${term}%`))
       );
 
-      const results = await db.select(columns)
+      const results = await db.select()
         .from(products)
         .where(and(
             eq(products.userId, parsedUserId),
-            searchConditions // Aplicar condições OR
+            searchConditions 
         ))
-        // TODO: Adicionar limite? Ordenar por relevância?
-        .limit(20); // Limitar a 20 resultados por segurança
+        .limit(20); 
 
-      console.log(`DB: Encontrados ${results.length} produtos na busca visual.`);
+      console.log(`DB: Encontrados ${results.length} produtos na busca textual.`); // Ajustado log message
       return results;
 
     } catch (error) {
@@ -640,44 +594,20 @@ export class DatabaseStorage implements IStorage {
 
       console.log("DB: Termos de busca relevantes processados:", searchTerms);
 
-      // Selecionamos manualmente todas as colunas EXCETO embedding para evitar o erro
-      const columns = {
-        id: products.id,
-        userId: products.userId,
-        catalogId: products.catalogId,
-        name: products.name,
-        code: products.code,
-        description: products.description,
-        price: products.price,
-        category: products.category,
-        manufacturer: products.manufacturer,
-        imageUrl: products.imageUrl,
-        colors: products.colors,
-        materials: products.materials,
-        sizes: products.sizes,
-        location: products.location,
-        stock: products.stock,
-        excelRowNumber: products.excelRowNumber,
-        createdAt: products.createdAt,
-        firestoreId: products.firestoreId,
-        firebaseUserId: products.firebaseUserId,
-        isEdited: products.isEdited
-      };
-
-      // Buscar em name, description, e category
+      // REVERTIDO: Selecionar todas as colunas, incluindo embedding
       const searchConditions = or(
         ...searchTerms.map(term => ilike(products.name, `%${term}%`)),
         ...searchTerms.map(term => ilike(products.description, `%${term}%`)),
         ...searchTerms.map(term => ilike(products.category, `%${term}%`))
       );
 
-      const results = await db.select(columns)
+      const results = await db.select()
         .from(products)
         .where(and(
             eq(products.userId, parsedUserId),
             searchConditions
         ))
-        .limit(10); // Limitar um pouco menos para começar
+        .limit(10); 
 
       console.log(`DB: Encontrados ${results.length} produtos relevantes.`);
       // Aqui poderíamos adicionar lógica de ranking no futuro
@@ -700,34 +630,10 @@ export class DatabaseStorage implements IStorage {
     }
     try {
       console.log(`DB: Buscando detalhes para ${productIds.length} produtos... IDs: ${productIds.join(', ')}`);
-      // Garantir que productIds não está vazio para evitar erro no inArray
       if (productIds.length === 0) return {}; 
       
-      // Selecionamos manualmente todas as colunas EXCETO embedding para evitar o erro
-      const columns = {
-        id: products.id,
-        userId: products.userId,
-        catalogId: products.catalogId,
-        name: products.name,
-        code: products.code,
-        description: products.description,
-        price: products.price,
-        category: products.category,
-        manufacturer: products.manufacturer,
-        imageUrl: products.imageUrl,
-        colors: products.colors,
-        materials: products.materials,
-        sizes: products.sizes,
-        location: products.location,
-        stock: products.stock,
-        excelRowNumber: products.excelRowNumber,
-        createdAt: products.createdAt,
-        firestoreId: products.firestoreId,
-        firebaseUserId: products.firebaseUserId,
-        isEdited: products.isEdited
-      };
-      
-      const results = await db.select(columns)
+      // REVERTIDO: Selecionar todas as colunas, incluindo embedding
+      const results = await db.select()
         .from(products)
         .where(inArray(products.id, productIds)); 
       
