@@ -2,7 +2,7 @@ import type { Express, Request, Response, NextFunction } from "express";
 import { Router } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { type InsertUser, type Catalog, type InsertCatalog, type DesignProject, type NewDesignProject, type DesignProjectItem, User, Catalog as SharedCatalog } from '@shared/schema';
+import { type InsertUser, type Catalog, type InsertCatalog, type DesignProject, type NewDesignProject, type DesignProjectItem, User, Catalog as SharedCatalog, type AiDesignChatMessage, type InsertAiDesignChatMessage } from '@shared/schema';
 import multer from "multer";
 import * as fs from "fs";
 import path from "path";
@@ -1011,7 +1011,10 @@ export async function registerRoutes(app: Express): Promise<void> {
     }
   });
 
-  app.post("/backend/design-projects", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+  // =======================================
+  // ROTAS DE DESIGN COM IA
+  // =======================================
+  app.post("/api/ai-design-projects", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
     try {
       const userId = req.session.userId!;
       const { name, title } = req.body;
@@ -1030,12 +1033,12 @@ export async function registerRoutes(app: Express): Promise<void> {
       const newDesignProject = await storage.createDesignProject(projectData);
       return res.status(201).json(newDesignProject);
     } catch (error) {
-      console.error("[Route /design-projects POST] Erro:", error);
+      console.error("[Route /api/ai-design-projects POST] Erro:", error);
       return next(error);
     }
   });
 
-  app.get("/backend/design-projects/:projectId", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+  app.get("/api/ai-design-projects/:projectId", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
     try {
       const userId = req.session.userId!;
       const projectId = parseInt(req.params.projectId);
@@ -1051,13 +1054,13 @@ export async function registerRoutes(app: Express): Promise<void> {
       const items: DesignProjectItem[] = await storage.getDesignProjectItems(projectId);
       return res.status(200).json({ ...project, items: items ?? [] });
     } catch (error) {
-      console.error(`[Route /design-projects/:id GET ${req.params.projectId}] Erro:`, error);
+      console.error(`[Route /api/ai-design-projects/:id GET ${req.params.projectId}] Erro:`, error);
       return next(error);
     }
   });
 
   app.post(
-    "/backend/design-projects/:projectId/upload-render",
+    "/api/ai-design-projects/:projectId/upload-render",
     requireAuth,
     renderUploadInMemory.single("renderFile"), 
     handleMulterError, 
@@ -1096,13 +1099,13 @@ export async function registerRoutes(app: Express): Promise<void> {
           imageUrl: renderImageUrl 
         });
       } catch (error) { 
-        console.error(`[Route /design-projects/:id/upload-render POST ${req.params.projectId}] Erro:`, error);
+        console.error(`[Route /api/ai-design-projects/:id/upload-render POST ${req.params.projectId}] Erro:`, error);
         return next(error);
       }
     }
   );
 
-  app.put("/backend/design-projects/:projectId/items/:itemId", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+  app.put("/api/ai-design-projects/:projectId/items/:itemId", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
      try {
         const userId = req.session.userId!;
       const projectId = parseInt(req.params.projectId);
@@ -1150,7 +1153,74 @@ export async function registerRoutes(app: Express): Promise<void> {
       return res.status(200).json({ message: "Atualização do item recebida (lógica de DB pendente)", itemBeforeUpdate: existingItem }); 
 
     } catch (error) {
-      console.error(`[Route /design-projects/:pid/items/:iid PUT] Erro:`, error);
+      console.error(`[Route /api/ai-design-projects/:pid/items/:iid PUT] Erro:`, error);
+      return next(error);
+    }
+  });
+
+  // NOVA ROTA: GET para buscar mensagens de um projeto de design
+  app.get("/api/ai-design-projects/:projectId/messages", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const userId = req.session.userId!;
+      const projectId = parseInt(req.params.projectId);
+
+      if (isNaN(projectId)) {
+        const err: HttpError = new Error("ID do projeto inválido.");
+        err.status = 400; err.isOperational = true; return next(err);
+      }
+
+      // Verificar se o projeto pertence ao usuário (opcional, mas bom para segurança)
+      const project = await storage.getDesignProject(projectId);
+      if (!project || project.userId !== userId) {
+        const err: HttpError = new Error("Projeto de design não encontrado ou acesso não autorizado.");
+        err.status = 404; err.isOperational = true; return next(err);
+      }
+
+      const messages = await storage.getAiDesignChatMessages(projectId);
+      return res.status(200).json(messages);
+
+    } catch (error) {
+      console.error(`[Route /api/ai-design-projects/:id/messages GET] Erro:`, error);
+      return next(error);
+    }
+  });
+
+  // NOVA ROTA: POST para criar uma nova mensagem em um projeto de design
+  app.post("/api/ai-design-projects/:projectId/messages", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const userId = req.session.userId!;
+      const projectId = parseInt(req.params.projectId);
+      const { role, content, attachmentUrl } = req.body;
+
+      if (isNaN(projectId)) {
+        const err: HttpError = new Error("ID do projeto inválido.");
+        err.status = 400; err.isOperational = true; return next(err);
+      }
+
+      if (!role || !content) {
+        const err: HttpError = new Error("Role e content são obrigatórios para a mensagem.");
+        err.status = 400; err.isOperational = true; return next(err);
+      }
+
+      // Verificar se o projeto pertence ao usuário (opcional, mas bom para segurança)
+      const project = await storage.getDesignProject(projectId);
+      if (!project || project.userId !== userId) {
+        const err: HttpError = new Error("Projeto de design não encontrado ou acesso não autorizado.");
+        err.status = 404; err.isOperational = true; return next(err);
+      }
+
+      const messageData: InsertAiDesignChatMessage = {
+        projectId,
+        role, // 'user' ou 'assistant'
+        content,
+        attachmentUrl: attachmentUrl || null, // attachmentUrl é opcional
+      };
+
+      const newMessage = await storage.createAiDesignChatMessage(messageData);
+      return res.status(201).json(newMessage);
+
+    } catch (error) {
+      console.error(`[Route /api/ai-design-projects/:id/messages POST] Erro:`, error);
       return next(error);
     }
   });
