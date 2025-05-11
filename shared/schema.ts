@@ -176,7 +176,7 @@ export const aiDesignProjects = pgTable("ai_design_projects", {
 // AI Design Chat Messages
 export const aiDesignChatMessages = pgTable("ai_design_chat_messages", {
   id: serial("id").primaryKey(),
-  projectId: integer("project_id").references(() => aiDesignProjects.id).notNull(),
+  projectId: integer("project_id").references(() => designProjects.id, { onDelete: "cascade" }).notNull(),
   createdAt: timestamp("created_at").defaultNow(),
   role: text("role").notNull(), // user, assistant, system
   content: text("content").notNull(),

@@ -16,6 +16,7 @@ import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import { formatDistanceToNow } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
+import ReactMarkdown from 'react-markdown';
 
 export default function AiDesignChatPage({ params }: { params: { id: string } }) {
   const projectId = parseInt(params.id);
@@ -85,16 +86,26 @@ export default function AiDesignChatPage({ params }: { params: { id: string } })
     const formData = new FormData();
     formData.append('file', file);
     
-    const response = await fetch('/uploads', {
+    const response = await fetch(`/api/ai-design-projects/${projectId}/attachments`, {
       method: 'POST',
       body: formData,
     });
     
     if (!response.ok) {
-      throw new Error('Falha ao fazer upload do arquivo');
+      let errorMsg = 'Falha ao fazer upload do arquivo';
+      try {
+        const errorData = await response.json();
+        errorMsg = errorData.message || errorMsg;
+      } catch (e) {
+        errorMsg = response.statusText || errorMsg;
+      }
+      throw new Error(errorMsg);
     }
     
     const data = await response.json();
+    if (!data.url) {
+      throw new Error('URL do anexo não retornada pelo servidor.');
+    }
     return data.url;
   };
 
@@ -343,8 +354,19 @@ export default function AiDesignChatPage({ params }: { params: { id: string } })
                             {msg.role === 'user' ? 'U' : 'AI'}
                           </AvatarFallback>
                         </Avatar>
-                        <div className={`rounded-lg p-3 ${msg.role === 'user' ? 'bg-primary text-primary-foreground' : msg.role === 'system' ? 'bg-muted text-muted-foreground' : 'bg-secondary text-secondary-foreground'}`}>
-                          {msg.content}
+                        <div className={`rounded-lg p-3 break-words ${msg.role === 'user' ? 'bg-primary text-primary-foreground' : msg.role === 'system' ? 'bg-muted text-muted-foreground' : 'bg-secondary text-secondary-foreground'}`}>
+                          {msg.role === 'assistant' ? (
+                            <ReactMarkdown
+                              components={{
+                                // Opcional: customizar como as imagens são renderizadas, se necessário
+                                // img: ({node, ...props}) => <img style={{maxWidth: '100%', maxHeight: '300px', borderRadius: '4px'}} {...props} />
+                              }}
+                            >
+                              {msg.content}
+                            </ReactMarkdown>
+                          ) : (
+                            <div style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</div>
+                          )}
                           {msg.attachmentUrl && (
                             <div className="mt-2">
                               <img

@@ -1088,7 +1088,7 @@ export async function registerRoutes(app: Express): Promise<void> {
         const renderImageUrl = await uploadBufferToS3(buffer, filename, userId, category, subId);
         await storage.updateDesignProject(projectId, { clientRenderImageUrl: renderImageUrl, status: 'render_uploaded', updatedAt: new Date() });
         
-        processDesignProjectImage(projectId).catch(err => {
+        processDesignProjectImage(projectId, renderImageUrl).catch(err => {
           console.error(`ERRO ASYNC no processamento de imagem do projeto de design ${projectId}:`, err);
           storage.updateDesignProject(projectId, { status: 'processing_failed', updatedAt: new Date() })
             .catch(updateErr => console.error("Erro ao atualizar status para falha (design project):", updateErr));
@@ -1217,10 +1217,69 @@ export async function registerRoutes(app: Express): Promise<void> {
       };
 
       const newMessage = await storage.createAiDesignChatMessage(messageData);
+
+      // Se a mensagem criada tiver um anexo, disparar o processamento da imagem
+      if (newMessage.attachmentUrl && newMessage.content) { // Passar também o conteúdo da mensagem
+        console.log(`[Chat Message] Mensagem ${newMessage.id} com anexo ${newMessage.attachmentUrl}. Disparando processamento de imagem...`);
+        processDesignProjectImage(projectId, newMessage.attachmentUrl, newMessage.content).catch(err => {
+          console.error(`[Chat Message] ERRO ASYNC no processamento de imagem para anexo da mensagem ${newMessage.id} (projeto ${projectId}):`, err);
+          // Opcional: Enviar outra mensagem no chat informando sobre a falha no processamento do anexo?
+        });
+      } else if (newMessage.attachmentUrl) {
+        // Caso haja anexo mas não conteúdo (improvável para mensagens de usuário, mas para cobrir)
+        console.log(`[Chat Message] Mensagem ${newMessage.id} com anexo ${newMessage.attachmentUrl} mas sem conteúdo de texto. Disparando processamento de imagem...`);
+        processDesignProjectImage(projectId, newMessage.attachmentUrl).catch(err => {
+          console.error(`[Chat Message] ERRO ASYNC no processamento de imagem (sem texto) para anexo da mensagem ${newMessage.id} (projeto ${projectId}):`, err);
+        });
+      }
+
       return res.status(201).json(newMessage);
 
     } catch (error) {
       console.error(`[Route /api/ai-design-projects/:id/messages POST] Erro:`, error);
+      return next(error);
+    }
+  });
+
+  // NOVA ROTA: POST para fazer upload de anexos para mensagens de chat de um projeto de design
+  app.post("/api/ai-design-projects/:projectId/attachments", 
+    requireAuth, 
+    renderUploadInMemory.single("file"), // Usar o mesmo nome de campo que o FormData no frontend usa ('file')
+    handleMulterError, // Reutilizar o handler de erro do Multer
+    async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const userId = req.session.userId!;
+      const projectId = parseInt(req.params.projectId);
+
+      if (isNaN(projectId)) {
+        const err: HttpError = new Error("ID do projeto inválido.");
+        err.status = 400; err.isOperational = true; return next(err);
+      }
+
+      if (!req.file || !req.file.buffer) {
+        const err: HttpError = new Error("Nenhum arquivo enviado para anexo.");
+        err.status = 400; err.isOperational = true; return next(err);
+      }
+
+      const project = await storage.getDesignProject(projectId);
+      if (!project || project.userId !== userId) {
+        const err: HttpError = new Error("Projeto de design não encontrado ou acesso não autorizado.");
+        err.status = 404; err.isOperational = true; return next(err);
+      }
+
+      const buffer = req.file.buffer;
+      const originalFilename = req.file.originalname;
+      const category = 'design-project-attachments'; 
+      const subId = projectId.toString(); 
+
+      const attachmentS3Url = await uploadBufferToS3(buffer, originalFilename, userId, category, subId);
+      
+      console.log(`[Route /api/ai-design-projects/:id/attachments POST] Anexo ${originalFilename} enviado para ${attachmentS3Url}`);
+
+      return res.status(200).json({ url: attachmentS3Url });
+
+    } catch (error) {
+      console.error(`[Route /api/ai-design-projects/:id/attachments POST] Erro ao fazer upload do anexo:`, error);
       return next(error);
     }
   });

@@ -20,6 +20,8 @@ const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY
 });
 
+const EMBEDDING_MODEL = 'text-embedding-3-small';
+
 /**
  * Interface para armazenar resultados da análise de imagem
  */
@@ -188,7 +190,11 @@ async function analyzeFloorPlanImageWithClaude(imageUrl: string): Promise<ImageA
       ]
     });
 
-    const textContent = response.content[0]?.text ?? '';
+    let textContent = '';
+    if (response.content && response.content[0] && response.content[0].type === 'text') {
+      textContent = response.content[0].text;
+    }
+    
     const jsonMatch = textContent.match(/\{[\s\S]*\}/);
     
     if (jsonMatch && jsonMatch[0]) {
@@ -252,7 +258,11 @@ async function analyzeRenderImageWithClaude(imageUrl: string): Promise<ImageAnal
       ]
     });
 
-    const textContent = response.content[0]?.text ?? '';
+    let textContent = '';
+    if (response.content && response.content[0] && response.content[0].type === 'text') {
+      textContent = response.content[0].text;
+    }
+
     const jsonMatch = textContent.match(/\{[\s\S]*\}/);
     
     if (jsonMatch && jsonMatch[0]) {
@@ -424,37 +434,59 @@ async function fetchImageAsBuffer(imageUrl: string): Promise<Buffer> {
   return Buffer.from(arrayBuffer);
 }
 
+function normalizeText(text: string): string {
+  if (!text) return '';
+  return text.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
 /**
- * Analisa a imagem de um projeto de design, identifica móveis, 
- * busca produtos similares no catálogo e salva os resultados.
+ * Analisa UMA imagem específica (seja um render do projeto ou um anexo de chat),
+ * identifica móveis, busca produtos similares no catálogo e salva os resultados como DesignProjectItems.
+ * ATENÇÃO: Esta função agora recebe a URL da imagem e o texto da mensagem do usuário (opcional).
  */
-export async function processDesignProjectImage(projectId: number): Promise<void> {
-  console.log(`[AI Design Processor] Iniciando processamento para projeto ID: ${projectId}`);
+export async function processDesignProjectImage(projectId: number, imageUrlToProcess: string, userMessageText?: string): Promise<void> {
+  console.log(`[AI Design Processor] Iniciando processamento para projeto ID: ${projectId}, Imagem URL: ${imageUrlToProcess}`);
+  let mainKeyword = null;
+  let normalizedMainKeyword = null;
+  let userRequestedSpecificItem = false;
+  if (userMessageText) {
+    console.log(`[AI Design Processor] Texto da mensagem do usuário recebido: "${userMessageText}"`);
+    const keywords = ["sofá", "sofa", "poltrona", "cadeira", "mesa", "estante", "cama", "tapete", "luminária", "buffet", "aparador", "pintura", "quadro"];
+    const normalizedUserMessage = normalizeText(userMessageText);
+    for (const kw of keywords) {
+      const normalizedKw = normalizeText(kw);
+      if (normalizedUserMessage.includes(normalizedKw)) {
+        mainKeyword = kw;
+        normalizedMainKeyword = normalizedKw;
+        userRequestedSpecificItem = true;
+        console.log(`[AI Design Processor] Palavra-chave de foco detectada: "${mainKeyword}" (normalizada: "${normalizedMainKeyword}")`);
+        break;
+      }
+    }
+  }
 
   if (!openai) {
     console.error('[AI Design Processor] Chave da API OpenAI não configurada.');
-    await storage.updateDesignProject(projectId, { status: 'failed', updatedAt: new Date() });
     throw new Error("OpenAI API Key not configured");
   }
 
   try {
-    // 1. Buscar dados do projeto
     const project = await storage.getDesignProject(projectId);
-    if (!project || !project.clientRenderImageUrl) {
-      console.error(`[AI Design Processor] Projeto ${projectId} ou URL da imagem não encontrado(a).`);
-      // Atualiza status para falha se não achou o projeto
-      if (!project) await storage.updateDesignProject(projectId, { status: 'failed', updatedAt: new Date() });
-      return; // Não pode continuar sem imagem
+    if (!project) {
+      console.error(`[AI Design Processor] Projeto ${projectId} não encontrado.`);
+      return; 
     }
 
-    // Atualizar status para 'processing'
-    await storage.updateDesignProject(projectId, { status: 'processing', updatedAt: new Date() });
-    console.log(`[AI Design Processor] Status do projeto ${projectId} atualizado para processing.`);
+    if (imageUrlToProcess === project.clientRenderImageUrl) {
+        await storage.updateDesignProject(projectId, { status: 'processing', updatedAt: new Date() });
+        console.log(`[AI Design Processor] Status do projeto ${projectId} (render principal) atualizado para processing.`);
+    } else {
+        console.log(`[AI Design Processor] Processando imagem de anexo (${imageUrlToProcess}), status do projeto ${projectId} não alterado diretamente por esta função.`);
+    }
 
-    // 2. Chamar OpenAI Vision API
-    console.log(`[AI Design Processor] Analisando imagem: ${project.clientRenderImageUrl}`);
+    console.log(`[AI Design Processor] Analisando imagem: ${imageUrlToProcess}`);
     const visionResponse = await openai.chat.completions.create({
-      model: "gpt-4o", // Usando o modelo mais recente
+      model: "gpt-4o", 
       messages: [
         {
           role: "user",
@@ -462,107 +494,190 @@ export async function processDesignProjectImage(projectId: number): Promise<void
             {
               type: "text",
               text: `Analise esta imagem de um ambiente. Identifique os principais móveis (como sofás, mesas, cadeiras, estantes, camas, etc.). Para cada móvel identificado, forneça:
-                     1. Uma descrição detalhada (tipo de móvel, estilo, cor principal, material aparente, características marcantes).
-                     2. Opcional: Se possível, as coordenadas aproximadas da caixa delimitadora (bounding box) do móvel na imagem (formato: { x_min, y_min, x_max, y_max } com valores percentuais ou em pixels se souber as dimensões).
-                     Responda em formato JSON, com uma lista chamada 'identified_furniture', onde cada item da lista é um objeto com as chaves 'description' e 'bounding_box' (se disponível). 
-                     Exemplo de item na lista: { "description": "Sofá de 3 lugares em tecido cinza claro, estilo moderno, pés de madeira finos", "bounding_box": { "x_min": 10, "y_min": 40, "x_max": 60, "y_max": 80 } }`,
+                     1. Um 'name' curto e genérico do tipo de móvel (ex: 'Sofá', 'Mesa de Centro', 'Cadeira', 'Tapete').
+                     2. Uma 'description' detalhada (estilo, cor principal, material aparente, características marcantes).
+                     3. Opcional: 'bounding_box' (formato: { x_min, y_min, x_max, y_max } com valores percentuais ou em pixels).
+                     Responda em formato JSON, com uma lista chamada 'identified_furniture', onde cada item da lista é um objeto com as chaves 'name', 'description' e 'bounding_box' (se disponível).
+                     Exemplo de item na lista: { "name": "Sofá", "description": "Sofá de canto grande em tecido cinza escuro, estilo contemporâneo", "bounding_box": { "x_min": 10, "y_min": 40, "x_max": 60, "y_max": 80 } }`,
             },
             {
               type: "image_url",
-              image_url: { url: project.clientRenderImageUrl },
+              image_url: { url: imageUrlToProcess }, 
             },
           ],
         },
       ],
-      max_tokens: 1000, // Ajustar conforme necessário
-      response_format: { type: "json_object" }, // Pedir resposta em JSON
+      max_tokens: 1500, 
+      response_format: { type: "json_object" }, 
     });
 
     const messageContent = visionResponse.choices[0]?.message?.content;
-    if (!messageContent) {
-      throw new Error("Resposta da API Vision vazia ou inválida.");
-    }
-
+    if (!messageContent) throw new Error("Resposta da API Vision vazia ou inválida.");
     console.log("[AI Design Processor] Resposta da API Vision recebida.");
-    // TODO: Adicionar log mais detalhado da resposta da IA (cuidado com o tamanho)
-    // console.log(messageContent);
 
-    // 3. Parsear a resposta JSON
-    let identifiedFurniture: { description: string; bounding_box?: any }[] = [];
+    let identifiedFurniture: { name: string; description: string; bounding_box?: any }[] = [];
     try {
       const parsedJson = JSON.parse(messageContent);
       if (parsedJson && Array.isArray(parsedJson.identified_furniture)) {
-        identifiedFurniture = parsedJson.identified_furniture;
+        identifiedFurniture = parsedJson.identified_furniture.map((item: any) => ({
+          description: item.description, 
+          bounding_box: item.bounding_box, 
+          name: item.name || item.description?.split(' ')[0] || 'Móvel' 
+        }));
         console.log(`[AI Design Processor] ${identifiedFurniture.length} móveis identificados pela IA.`);
       } else {
         console.warn("[AI Design Processor] Formato JSON inesperado da API Vision:", messageContent);
       }
     } catch (parseError) {
-      console.error("[AI Design Processor] Erro ao parsear JSON da API Vision:", parseError, "\nConteúdo:", messageContent);
-      throw new Error("Erro ao interpretar a resposta da análise da imagem.");
+      console.error("[AI Design Processor] Erro ao parsear JSON da API Vision:", parseError, "Conteúdo:", messageContent);
+      throw new Error("Falha ao parsear resposta da IA.");
     }
 
-    // 4. Processar cada item identificado
-    let itemsCreatedCount = 0;
-    for (const furniture of identifiedFurniture) {
-      if (!furniture.description || typeof furniture.description !== 'string') {
-         console.warn(`[AI Design Processor] Item de mobília sem descrição válida encontrado.`);
-         continue; // Pular item sem descrição válida
+    const createdItemsWithSuggestions: { detectedName: string, suggestedProduct: Product | null }[] = [];
+    let focusedItemsOutput: { detectedName: string, suggestedProduct: Product | null }[] = [];
+
+    if (identifiedFurniture.length > 0) {
+      console.log(`[AI Design Processor] Buscando produtos similares para ${identifiedFurniture.length} móveis...`);
+      for (const furniture of identifiedFurniture) {
+        if (!furniture.description || !furniture.name) continue;
+
+        // Busca textual (como antes)
+        const relevantProductsTextual = await storage.findRelevantProducts(project.userId, furniture.description);
+        console.log(`[AI Design Processor] Para "${furniture.name}" (busca textual), encontrados ${relevantProductsTextual.length} produtos relevantes.`);
+
+        // --- NOVA LÓGICA DE EMBEDDING ---
+        let similarProductsFromEmbedding: Product[] = [];
+        try {
+          console.log(`   Gerando embedding para a DESCRIÇÃO do móvel detectado: "${furniture.description.substring(0,50)}..."`);
+          const descriptionEmbeddingResponse = await openai.embeddings.create({
+            model: EMBEDDING_MODEL, // Usando o mesmo modelo que para os produtos
+            input: furniture.description,
+          });
+          const descriptionEmbeddingVector = descriptionEmbeddingResponse.data[0]?.embedding;
+
+          if (descriptionEmbeddingVector) {
+            console.log(`   Embedding da descrição obtido. Chamando findProductsByEmbedding...`);
+            similarProductsFromEmbedding = await storage.findProductsByEmbedding(project.userId, descriptionEmbeddingVector, 5); // Pega até 5 similares
+            console.log(`   [Embedding Search] Para "${furniture.name}", encontrados ${similarProductsFromEmbedding.length} produtos por similaridade de embedding da descrição.`);
+            if (similarProductsFromEmbedding.length > 0) {
+              // console.log("      Produtos por embedding (IDs):", similarProductsFromEmbedding.map(p => p.id));
+            }
+          } else {
+            console.warn(`   Não foi possível gerar embedding para a descrição do móvel: ${furniture.name}`);
+          }
+        } catch (embeddingError) {
+          console.error(`   Erro ao gerar/buscar embedding para descrição de "${furniture.name}":`, embeddingError);
+        }
+        // --- FIM DA NOVA LÓGICA DE EMBEDDING ---
+
+        // Por enquanto, continuamos usando relevantProductsTextual para as sugestões principais e DesignProjectItem
+        const productsToSuggest = relevantProductsTextual; // Poderíamos combinar/priorizar no futuro
+
+        const newItemData: NewDesignProjectItem = {
+          designProjectId: projectId,
+          detectedObjectDescription: furniture.description,
+          detectedObjectBoundingBox: furniture.bounding_box || null,
+          suggestedProductId1: productsToSuggest[0]?.id || null, 
+          matchScore1: productsToSuggest[0] ? 1.0 : null, 
+          suggestedProductId2: productsToSuggest[1]?.id || null, 
+          matchScore2: productsToSuggest[1] ? 1.0 : null, 
+          suggestedProductId3: productsToSuggest[2]?.id || null, 
+          matchScore3: productsToSuggest[2] ? 1.0 : null, 
+          userFeedback: 'pending', 
+        };
+
+        try {
+          const createdItem = await storage.createDesignProjectItem(newItemData);
+          console.log(`[AI Design Processor] Item de design criado para "${furniture.name}", ID: ${createdItem.id}`);
+          
+          const mainSuggestedProduct = productsToSuggest[0] ? await storage.getProduct(productsToSuggest[0].id) : null;
+          const itemResult = { detectedName: furniture.name, suggestedProduct: mainSuggestedProduct || null };
+          createdItemsWithSuggestions.push(itemResult);
+
+          if (normalizedMainKeyword && furniture.name && 
+              (normalizeText(furniture.name).includes(normalizedMainKeyword) || 
+               (furniture.description && normalizeText(furniture.description).includes(normalizedMainKeyword))) ) {
+            focusedItemsOutput.push(itemResult);
+          }
+        } catch (dbError) {
+          console.error(`[AI Design Processor] Erro ao salvar DesignProjectItem para "${furniture.name}":`, dbError);
+        }
       }
-
-      const currentDescription = furniture.description; // Agora é garantido ser string
-      console.log(`[AI Design Processor] Processando item: ${currentDescription}`);
-
-      // 5. Buscar produtos similares
-      let suggestedProducts: Product[] = [];
-      try {
-        // Passar a variável garantida como string
-        suggestedProducts = await storage.searchProducts(project.userId, currentDescription);
-        console.log(`[AI Design Processor] Encontrados ${suggestedProducts.length} produtos similares para "${currentDescription}".`);
-      } catch (searchError) {
-         console.error(`[AI Design Processor] Erro ao buscar produtos para "${currentDescription}":`, searchError);
-      }
-
-      // 6. Preparar e salvar DesignProjectItem
-      const newItemData: NewDesignProjectItem = {
-        designProjectId: projectId,
-        detectedObjectDescription: currentDescription, // Usar a variável garantida
-        detectedObjectBoundingBox: furniture.bounding_box || null,
-        // Pegar os IDs dos top 3 produtos (ou menos se houver menos)
-        suggestedProductId1: suggestedProducts[0]?.id ?? null,
-        matchScore1: suggestedProducts[0] ? 0.9 : null, // Score Fixo Temporário (Placeholder)
-        suggestedProductId2: suggestedProducts[1]?.id ?? null,
-        matchScore2: suggestedProducts[1] ? 0.8 : null, // Score Fixo Temporário
-        suggestedProductId3: suggestedProducts[2]?.id ?? null,
-        matchScore3: suggestedProducts[2] ? 0.7 : null, // Score Fixo Temporário
-        selectedProductId: null, // Nenhum selecionado ainda
-        userFeedback: null,
-        // createdAt e updatedAt serão adicionados pelo DB/Schema
-      };
-
-      try {
-        await storage.createDesignProjectItem(newItemData);
-        itemsCreatedCount++;
-      } catch (dbError) {
-        console.error(`[AI Design Processor] Erro ao salvar item no DB para "${currentDescription}":`, dbError);
-        // Decidir se deve parar ou continuar?
-      }
+      console.log("[AI Design Processor] Processamento de itens de design concluído.");
+    } else {
+      console.log("[AI Design Processor] Nenhum móvel identificado pela IA ou falha no parse.");
+      await storage.createAiDesignChatMessage({ projectId, role: "assistant", content: "Não consegui identificar móveis nesta imagem. Você pode tentar outra imagem ou descrever o que procura?" });
     }
 
-    // 7. Atualizar status final do projeto
-    const finalStatus = itemsCreatedCount > 0 ? 'awaiting_selection' : 'processed_no_items';
-    await storage.updateDesignProject(projectId, { status: finalStatus, updatedAt: new Date() });
-    console.log(`[AI Design Processor] Processamento concluído para projeto ${projectId}. Status: ${finalStatus}. ${itemsCreatedCount} itens criados.`);
+    let chatMessageContent = "";
+    let itemsToDisplayInChatMessage: typeof createdItemsWithSuggestions = [];
+
+    if (userRequestedSpecificItem) {
+        if (focusedItemsOutput.length > 0) {
+            itemsToDisplayInChatMessage = focusedItemsOutput;
+            chatMessageContent = `Analisei a imagem que você enviou, focando em encontrar '${mainKeyword}'. Veja o que encontrei para '${mainKeyword}':\n`;
+        } else {
+            chatMessageContent = `Você pediu por '${mainKeyword}', mas não identifiquei esse item específico na imagem ou não encontrei sugestões para ele.`;
+        }
+    } else {
+        itemsToDisplayInChatMessage = createdItemsWithSuggestions;
+        if (itemsToDisplayInChatMessage.length > 0) {
+            chatMessageContent = "Analisei a imagem que você enviou! Veja o que encontrei:\n";
+        } else if (identifiedFurniture.length > 0) {
+            chatMessageContent = "Analisei a imagem e identifiquei alguns objetos, mas não encontrei sugestões correspondentes no catálogo no momento.";
+        } else {
+            chatMessageContent = ""; 
+        }
+    }
+
+    if (itemsToDisplayInChatMessage.length > 0 && chatMessageContent) {
+        for (const item of itemsToDisplayInChatMessage) {
+            chatMessageContent += `\nPara o item detectado '${item.detectedName}':\n`;
+            if (item.suggestedProduct && item.suggestedProduct.imageUrl && item.suggestedProduct.name) {
+                chatMessageContent += `Sugiro: ${item.suggestedProduct.name}\n![${item.suggestedProduct.name}](${item.suggestedProduct.imageUrl})\n`;
+            } else {
+                chatMessageContent += "Não encontrei uma sugestão clara no catálogo para este item.\n";
+            }
+        }
+        chatMessageContent += "\nVocê pode ver mais detalhes e ajustar as sugestões na interface do projeto.";
+    }
+
+    if (chatMessageContent.trim() !== "") {
+        await storage.createAiDesignChatMessage({ projectId, role: "assistant", content: chatMessageContent });
+    }
+
+    if (imageUrlToProcess === project.clientRenderImageUrl) {
+        let projectStatusAfterProcessing: DesignProject['status'] = 'completed';
+        if (identifiedFurniture.length === 0) {
+            projectStatusAfterProcessing = 'processed_no_items';
+        } else if (itemsToDisplayInChatMessage.length > 0) {
+            projectStatusAfterProcessing = 'awaiting_selection';
+        } else if (userRequestedSpecificItem && focusedItemsOutput.length === 0) {
+            projectStatusAfterProcessing = 'processed_no_match_for_focus';
+        }
+        await storage.updateDesignProject(projectId, { status: projectStatusAfterProcessing, updatedAt: new Date() });
+        console.log(`[AI Design Processor] Status final do projeto ${projectId} (render principal) atualizado para ${projectStatusAfterProcessing}.`);
+    }
+    
+    console.log(`[AI Design Processor] Processamento da imagem de anexo ${imageUrlToProcess} para projeto ${projectId} concluído.`);
 
   } catch (error) {
-    console.error(`[AI Design Processor] ERRO FATAL no processamento do projeto ${projectId}:`, error);
-    // Tentar atualizar o status para 'failed'
+    console.error(`[AI Design Processor] Erro GERAL no processamento da imagem para projeto ${projectId}:`, error);
     try {
-      await storage.updateDesignProject(projectId, { status: 'failed', updatedAt: new Date() });
-    } catch (updateError) {
-      console.error(`[AI Design Processor] Falha ao atualizar status para 'failed' do projeto ${projectId}:`, updateError);
+      const projectForStatus = await storage.getDesignProject(projectId);
+      if (projectForStatus && imageUrlToProcess === projectForStatus.clientRenderImageUrl) {
+        await storage.updateDesignProject(projectId, { status: 'failed', updatedAt: new Date() });
+      }
+      await storage.createAiDesignChatMessage({
+        projectId: projectId,
+        role: "assistant",
+        content: `Desculpe, ocorreu um erro ao tentar analisar a imagem que você enviou. Detalhes do erro: ${error instanceof Error ? error.message : String(error)}`
+      });
+    } catch (nestedError) {
+      console.error(`[AI Design Processor] Erro CRÍTICO ao tentar lidar com erro anterior ou atualizar status para falha (Projeto ${projectId}):`, nestedError);
     }
-    // Rethrow ou tratar o erro conforme necessário
-    // throw error;
   }
 }
+
+// Se houver mais código depois desta função no arquivo, ele deve ser preservado.
+// Se esta for a última função, o arquivo termina aqui.

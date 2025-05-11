@@ -12,7 +12,7 @@ import session from "express-session";
 import { MemoryStore } from "express-session";
 import { pool, db } from "./db";
 import connectPgSimple from "connect-pg-simple";
-import { eq, and, ilike, or, inArray } from 'drizzle-orm';
+import { eq, and, ilike, or, inArray, sql, isNotNull } from 'drizzle-orm';
 
 // Criar store de sessão PostgreSQL
 const PostgresSessionStore = connectPgSimple(session);
@@ -79,6 +79,7 @@ export interface IStorage {
   searchProducts(userId: number | string, searchText: string): Promise<Product[]>;
   findRelevantProducts(userId: number, description: string): Promise<Product[]>;
   getProductsDetails(productIds: number[]): Promise<Record<number, Product>>;
+  findProductsByEmbedding(userId: number, imageEmbeddingVector: number[], limit?: number): Promise<Product[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -683,6 +684,39 @@ export class DatabaseStorage implements IStorage {
     } catch (error) {
       console.error('Error creating Design project item:', error);
       throw error;
+    }
+  }
+
+  // <<< NOVO MÉTODO ADICIONADO AQUI >>>
+  async findProductsByEmbedding(userId: number, imageEmbeddingVector: number[], limit: number = 5): Promise<Product[]> {
+    if (!imageEmbeddingVector || imageEmbeddingVector.length === 0) {
+      console.warn("[Storage.findProductsByEmbedding] Vetor de embedding da imagem está vazio. Retornando array vazio.");
+      return [];
+    }
+    // CORREÇÃO: pgvector espera o vetor como uma string [f1,f2,f3...], sem aspas simples externas.
+    const embeddingStringInput = `[${imageEmbeddingVector.join(',')}]`;
+
+    console.log(`[Storage.findProductsByEmbedding] Buscando produtos para userId: ${userId} com similaridade de embedding. Limite: ${limit}.`);
+    // console.log(`[Storage.findProductsByEmbedding] Embedding da imagem (parcial): ${embeddingStringInput.substring(0,100)}...`);
+
+    try {
+      const similarProducts = await db.select()
+        .from(products)
+        .where(and(
+          eq(products.userId, userId),
+          isNotNull(products.embedding) 
+        ))
+        // Passar a string diretamente. O driver/Drizzle deve lidar com as aspas da query SQL.
+        // Se pgvector exigir um CAST explícito, seria .orderBy(sql`${products.embedding} <-> CAST(${embeddingStringInput} AS vector)`)
+        // Ou, mais simples, se o driver/Drizzle for inteligente: .orderBy(sql`${products.embedding} <-> ${embeddingStringInput}`)
+        .orderBy(sql`${products.embedding} <-> ${embeddingStringInput}`) 
+        .limit(limit);
+
+      console.log(`[Storage.findProductsByEmbedding] Encontrados ${similarProducts.length} produtos por similaridade de embedding.`);
+      return similarProducts;
+    } catch (error) {
+      console.error(`[Storage.findProductsByEmbedding] Erro ao buscar produtos por embedding para userId ${userId}:`, error);
+      return [];
     }
   }
 }
