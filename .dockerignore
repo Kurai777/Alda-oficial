@@ -1,0 +1,39 @@
+
+# Dependencies
+node_modules/
+.git/
+
+# Development files
+*.log
+.env
+.env.*
+.DS_Store
+.vscode/
+.cursor/
+
+# Python files and cache
+server/python-scripts/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Test and documentation
+test-*
+*.test.js
+*.test.ts
+docx/
+scripts/
+
+# Build artifacts
+dist/
+build/
+.next/
+.nuxt/
+
+# Temporary files
+temp/
+tmp/
+uploads/
+users/
+attached_assets/

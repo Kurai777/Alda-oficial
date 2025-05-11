@@ -45,9 +45,15 @@ app.use(session({
 // Registrar rotas especiais para PDF (versão original)
 //app.use('/api/pdf', pdfRouter);
 
-// Importar e registrar rotas simplificadas para PDF
-import { pdfRouterSimple } from './pdf-routes-simple';
-app.use('/api/pdf', pdfRouterSimple);
+// Only import PDF routes in development
+if (process.env.NODE_ENV === 'development') {
+  const { pdfRouterSimple } = require('./pdf-routes-simple');
+  app.use('/api/pdf', pdfRouterSimple);
+} else {
+  app.use('/api/pdf', (req, res) => {
+    res.status(503).json({ message: 'PDF processing not available in production' });
+  });
+}
 
 (async () => {
   // Executar migração
