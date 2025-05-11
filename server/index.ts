@@ -153,7 +153,7 @@ app.use('/api/pdf', pdfRouterSimple);
   // ================================================
 
   // Iniciar servidor USANDO o httpServer
-  const port = 5000;
+  const port = process.env.PORT || 5000;
   httpServer.listen(port, "0.0.0.0", () => {
      log(`serving on port ${port}`);
   });
