@@ -12,7 +12,7 @@ import session from "express-session";
 import { MemoryStore } from "express-session";
 import { pool, db } from "./db";
 import connectPgSimple from "connect-pg-simple";
-import { eq, and, ilike, or, inArray, sql, isNotNull } from 'drizzle-orm';
+import { eq, and, ilike, or, inArray, sql, isNotNull, getTableColumns } from 'drizzle-orm';
 
 // Criar store de sessão PostgreSQL
 const PostgresSessionStore = connectPgSimple(session);
@@ -79,7 +79,7 @@ export interface IStorage {
   searchProducts(userId: number | string, searchText: string): Promise<Product[]>;
   findRelevantProducts(userId: number, description: string): Promise<Product[]>;
   getProductsDetails(productIds: number[]): Promise<Record<number, Product>>;
-  findProductsByEmbedding(userId: number, imageEmbeddingVector: number[], limit?: number): Promise<Product[]>;
+  findProductsByEmbedding(userId: number, imageEmbeddingVector: number[], limit?: number): Promise<(Product & { distance?: number })[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -202,12 +202,95 @@ export class DatabaseStorage implements IStorage {
     }
   }
   
-  async createProduct(insertProduct: InsertProduct): Promise<Product> {
-    throw new Error("Method temporarily disabled due to unresolved Drizzle type issues.");
+  async createProduct(insertProductData: InsertProduct): Promise<Product> {
+    try {
+      const productForDb: { [K in keyof InsertProduct]?: InsertProduct[K] } = { ...insertProductData };
+      // Nota: O tipo acima permite que todas as chaves de InsertProduct sejam opcionais,
+      // o que é útil para construir o objeto passo a passo.
+
+      productForDb.colors = (insertProductData.colors === null || insertProductData.colors === undefined) ? 
+                             (insertProductData.colors === undefined ? undefined : []) : 
+                             [...insertProductData.colors];
+      productForDb.materials = (insertProductData.materials === null || insertProductData.materials === undefined) ?
+                                (insertProductData.materials === undefined ? undefined : []) :
+                                [...insertProductData.materials];
+      productForDb.sizes = (insertProductData.sizes === null || insertProductData.sizes === undefined) ?
+                            (insertProductData.sizes === undefined ? undefined : []) :
+                            insertProductData.sizes.map(s => ({ ...s }));
+  
+      // Remover campos explicitamente undefined para permitir que defaults do DB funcionem corretamente
+      if (productForDb.colors === undefined) delete productForDb.colors;
+      if (productForDb.materials === undefined) delete productForDb.materials;
+      if (productForDb.sizes === undefined) delete productForDb.sizes;
+      // Outros campos opcionais de InsertProduct que podem ser undefined e têm default no DB
+      // também seriam omitidos se não estiverem presentes em insertProductData devido ao spread inicial.
+
+      const [createdProduct] = await db.insert(products)
+        .values(productForDb as InsertProduct) // Cast para InsertProduct; Drizzle deve lidar com campos opcionais
+        .returning();
+      return createdProduct;
+    } catch (error) {
+      console.error('Error creating product in storage:', error);
+      if (error instanceof Error && 'message' in error) {
+          console.error('Error message:', (error as any).message);
+          if ((error as any).detail) console.error('Error detail:', (error as any).detail);
+      }
+      throw error; 
+    }
   }
   
-  async updateProduct(id: number, productUpdate: Partial<InsertProduct>): Promise<Product | undefined> {
-    throw new Error("Method temporarily disabled due to unresolved Drizzle type issues.");
+  async updateProduct(id: number, productUpdateData: Partial<InsertProduct>): Promise<Product | undefined> {
+    try {
+      const dataToSet: { [key: string]: any } = {};
+  
+      let hasChanges = false;
+      for (const key in productUpdateData) {
+        if (Object.prototype.hasOwnProperty.call(productUpdateData, key)) {
+          const typedKey = key as keyof Partial<InsertProduct>;
+          const value = productUpdateData[typedKey];
+  
+          if (value === undefined) continue; // Pular campos não fornecidos para atualização
+          hasChanges = true;
+  
+          if (typedKey === 'colors') {
+            dataToSet.colors = value === null ? [] : (Array.isArray(value) ? [...value] : []);
+          } else if (typedKey === 'materials') {
+            dataToSet.materials = value === null ? [] : (Array.isArray(value) ? [...value] : []);
+          } else if (typedKey === 'sizes') {
+            // Garantir que value é um array antes de chamar map
+            dataToSet.sizes = value === null ? [] : (Array.isArray(value) ? value.map(s => ({ ...s })) : []);
+          } else {
+            dataToSet[typedKey] = value;
+          }
+        }
+      }
+      
+      if (!hasChanges) {
+         const existingProduct = await this.getProduct(id);
+         console.log(`No changes to apply for product ${id}. Returning existing.`);
+         return existingProduct; 
+      }
+      dataToSet.updatedAt = new Date();
+  
+      delete dataToSet.id; // Não deve estar no set
+      delete dataToSet.embedding; // Gerenciado separadamente
+      delete dataToSet.userId; // Geralmente não se muda
+      delete dataToSet.catalogId; // Geralmente não se muda
+      delete dataToSet.createdAt; // Nunca se muda
+        
+      const [updatedProduct] = await db.update(products)
+        .set(dataToSet)
+        .where(eq(products.id, id))
+        .returning();
+      return updatedProduct;
+    } catch (error) {
+      console.error(`Error updating product ${id} in storage:`, error);
+      if (error instanceof Error && 'message' in error) {
+          console.error('Error message:', (error as any).message);
+          if ((error as any).detail) console.error('Error detail:', (error as any).detail);
+      }
+      return undefined;
+    }
   }
   
   async deleteProduct(id: number): Promise<boolean> {
@@ -688,32 +771,38 @@ export class DatabaseStorage implements IStorage {
   }
 
   // <<< NOVO MÉTODO ADICIONADO AQUI >>>
-  async findProductsByEmbedding(userId: number, imageEmbeddingVector: number[], limit: number = 5): Promise<Product[]> {
+  async findProductsByEmbedding(userId: number, imageEmbeddingVector: number[], limit: number = 5): Promise<(Product & { distance?: number })[]> {
     if (!imageEmbeddingVector || imageEmbeddingVector.length === 0) {
       console.warn("[Storage.findProductsByEmbedding] Vetor de embedding da imagem está vazio. Retornando array vazio.");
       return [];
     }
-    // CORREÇÃO: pgvector espera o vetor como uma string [f1,f2,f3...], sem aspas simples externas.
     const embeddingStringInput = `[${imageEmbeddingVector.join(',')}]`;
 
     console.log(`[Storage.findProductsByEmbedding] Buscando produtos para userId: ${userId} com similaridade de embedding. Limite: ${limit}.`);
-    // console.log(`[Storage.findProductsByEmbedding] Embedding da imagem (parcial): ${embeddingStringInput.substring(0,100)}...`);
 
     try {
-      const similarProducts = await db.select()
-        .from(products)
-        .where(and(
-          eq(products.userId, userId),
-          isNotNull(products.embedding) 
-        ))
-        // Passar a string diretamente. O driver/Drizzle deve lidar com as aspas da query SQL.
-        // Se pgvector exigir um CAST explícito, seria .orderBy(sql`${products.embedding} <-> CAST(${embeddingStringInput} AS vector)`)
-        // Ou, mais simples, se o driver/Drizzle for inteligente: .orderBy(sql`${products.embedding} <-> ${embeddingStringInput}`)
-        .orderBy(sql`${products.embedding} <-> ${embeddingStringInput}`) 
-        .limit(limit);
+      const results = await db.select({
+        // Selecionar todas as colunas da tabela products, aninhadas sob a chave 'product'
+        product: getTableColumns(products),
+        // Selecionar a distância calculada pelo pgvector
+        distance: sql<number>`${products.embedding} <-> ${embeddingStringInput}`.as('distance')
+      })
+      .from(products)
+      .where(and(
+        eq(products.userId, userId),
+        isNotNull(products.embedding) 
+      ))
+      .orderBy(sql`${products.embedding} <-> ${embeddingStringInput}`) 
+      .limit(limit);
 
-      console.log(`[Storage.findProductsByEmbedding] Encontrados ${similarProducts.length} produtos por similaridade de embedding.`);
-      return similarProducts;
+      // Mapear os resultados para o formato esperado: (Product & { distance: number })[]
+      const similarProductsWithDistance = results.map(res => ({
+        ...res.product,
+        distance: res.distance
+      }));
+
+      console.log(`[Storage.findProductsByEmbedding] Encontrados ${similarProductsWithDistance.length} produtos por similaridade de embedding.`);
+      return similarProductsWithDistance;
     } catch (error) {
       console.error(`[Storage.findProductsByEmbedding] Erro ao buscar produtos por embedding para userId ${userId}:`, error);
       return [];

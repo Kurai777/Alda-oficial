@@ -1,4 +1,3 @@
-
 # Dependencies
 node_modules/
 .git/
@@ -17,6 +16,10 @@ server/python-scripts/
 *.pyc
 *.pyo
 *.pyd
+.pythonlibs/
+
+# Cache genérico
+.cache/
 
 # Test and documentation
 test-*

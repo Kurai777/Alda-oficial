@@ -18,6 +18,9 @@ import { addS3ImageRoutes } from "./s3-image-routes";
 import { migrate } from "./db";
 import { storage } from "./storage";
 
+// Importe para rotas de PDF simples (corrigindo o erro de require)
+import { pdfRouterSimple } from './pdf-routes-simple';
+
 const app = express();
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ extended: false, limit: '100mb' }));
@@ -47,7 +50,6 @@ app.use(session({
 
 // Only import PDF routes in development
 if (process.env.NODE_ENV === 'development') {
-  const { pdfRouterSimple } = require('./pdf-routes-simple');
   app.use('/api/pdf', pdfRouterSimple);
 } else {
   app.use('/api/pdf', (req, res) => {
@@ -159,7 +161,9 @@ if (process.env.NODE_ENV === 'development') {
   // ================================================
 
   // Iniciar servidor USANDO o httpServer
-  const port = process.env.PORT || 5000;
+  const portString = process.env.PORT || "5000";
+  const port = parseInt(portString, 10);
+  
   httpServer.listen(port, "0.0.0.0", () => {
      log(`serving on port ${port}`);
   });

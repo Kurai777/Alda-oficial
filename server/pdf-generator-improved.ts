@@ -14,7 +14,7 @@ import { PDFDocument, StandardFonts, rgb, PDFFont, PDFPage } from 'pdf-lib';
 import * as path from 'path';
 import * as fs from 'fs';
 import handlebars from 'handlebars';
-import puppeteer from 'puppeteer';
+// import puppeteer from 'puppeteer'; // COMENTADO - REMOVENDO PUPPETEER
 import { storage } from './storage';
 import { downloadFileFromS3 } from './s3-service';
 import { User } from '@shared/schema';
@@ -681,7 +681,8 @@ export async function generateQuotePdf(quoteData: QuoteDataInput, companyUser: U
   return await pdfDoc.save();
 }
 
-// Método 2: Gerar PDF com HTML e Puppeteer (melhor qualidade visual)
+// Método 2: Gerar PDF com HTML e Puppeteer (melhor qualidade visual) // COMENTADO - REMOVENDO PUPPETEER
+/* // COMENTADO - REMOVENDO PUPPETEER
 export async function generateQuotePdfWithPuppeteer(quoteData: QuoteDataInput, companyUser: User): Promise<Buffer> {
   console.log("Iniciando geração com Puppeteer...");
   
@@ -824,14 +825,15 @@ export async function generateQuotePdfWithPuppeteer(quoteData: QuoteDataInput, c
   }
   
   // 4. Gerar PDF com o Puppeteer
-  let pdfBuffer: Buffer;
+  // let pdfBuffer: Buffer; // COMENTADO - REMOVENDO PUPPETEER
   try {
       console.log("Iniciando Puppeteer para geração do PDF...");
       
-      const browser = await puppeteer.launch({
-          headless: 'new', // 'new' é a nova forma para headless
-          args: ['--no-sandbox', '--disable-setuid-sandbox']
-      });
+      // const browser = await puppeteer.launch({ // COMENTADO - REMOVENDO PUPPETEER
+      //     headless: 'new', // 'new' é a nova forma para headless
+      //     args: ['--no-sandbox', '--disable-setuid-sandbox']
+      // });
+      throw new Error("Puppeteer está desativado. Esta função não deve ser chamada."); // Adicionado para indicar que não deve ser usado
       
       const page = await browser.newPage();
       console.log("Carregando HTML no Puppeteer...");
@@ -854,6 +856,7 @@ export async function generateQuotePdfWithPuppeteer(quoteData: QuoteDataInput, c
       throw err; // Propagar o erro para que o próximo método seja tentado
   }
 }
+*/ // COMENTADO - REMOVENDO PUPPETEER
 
 // Método 3: Gerar PDF com html-pdf (PhantomJS - alternativa mais leve)
 export async function generateQuotePdfWithHtmlPdf(quoteData: QuoteDataInput, companyUser: User): Promise<Buffer> {

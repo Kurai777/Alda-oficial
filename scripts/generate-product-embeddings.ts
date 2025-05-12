@@ -1,110 +1,156 @@
-import OpenAI from 'openai';
-import { db } from '../server/db'; // Path correto
-import { products } from '../shared/schema'; // Path correto
-import { eq, isNull } from 'drizzle-orm';
+import { db } from '../server/db'; 
+import { products } from '../shared/schema'; 
+import { eq, isNull, sql } from 'drizzle-orm'; // Adicionado sql para possível delete futuro
+import { getClipEmbeddingFromImageUrl } from '../server/clip-service'; // Importar novo serviço
 
-console.log("[SCRIPT START] Iniciando generate-product-embeddings.ts...");
+console.log("[SCRIPT START] Iniciando generate-product-embeddings.ts (VERSÃO CLIP - TESTE DE SCHEMA)...");
 
-// Configurar cliente OpenAI
-const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
-const EMBEDDING_MODEL = 'text-embedding-3-small';
+// DEBUG: Verificar DATABASE_URL
+console.log(`[DEBUG] DATABASE_URL usada pelo script: ${process.env.DATABASE_URL ? 'Definida (verifique Secrets)' : 'NÃO DEFINIDA'}`);
+if(process.env.DATABASE_URL) {
+    try {
+        const url = new URL(process.env.DATABASE_URL);
+        console.log(`[DEBUG] Host da DATABASE_URL: ${url.hostname}, Usuário: ${url.username}`);
+    } catch (e) {
+        console.log(`[DEBUG] DATABASE_URL parece estar mal formatada.`);
+    }
+}
 
-async function generateEmbeddings() {
-  console.log("===> [generateEmbeddings] Função iniciada.");
-  if (!openai) {
-    console.error('!!! Chave da API OpenAI não configurada. Abortando. !!!');
-    process.exit(1); // Sair explicitamente se a chave não estiver configurada
-    return; // Adicionado para satisfazer o linter sobre possível não saída
+const HUGGINGFACE_API_TOKEN = process.env.HUGGINGFACE_API_TOKEN;
+
+async function generateClipEmbeddingsForProducts() {
+  console.log("===> [generateClipEmbeddings] Função iniciada.");
+  if (!HUGGINGFACE_API_TOKEN) {
+    console.error('!!! Token da API Hugging Face (HUGGINGFACE_API_TOKEN) não configurado. Abortando. !!!');
+    process.exit(1);
+    return;
   }
-  console.log("===> [generateEmbeddings] Chave OpenAI verificada (OK).");
+  console.log("===> [generateClipEmbeddings] Token Hugging Face verificado (OK).");
 
-  console.log("===> [generateEmbeddings] Buscando produtos sem embedding do DB...");
-  let productsToProcess;
+  // DEBUG: Verificar colunas do schema products que o script está vendo
+  console.log("[DEBUG] Colunas conhecidas para 'products' pelo Drizzle (do shared/schema.ts):");
+  console.log(Object.keys(products));
+  // @ts-ignore
+  if (products.embedding) {
+    // @ts-ignore
+    console.log(`[DEBUG] Detalhes da coluna 'embedding': type=${products.embedding.dataType}, dimensions=${(products.embedding as any).dimensions}`); 
+  } else {
+    console.log("[DEBUG] A coluna 'embedding' NÃO FOI ENCONTRADA no objeto 'products' importado!");
+  }
+
   try {
-    productsToProcess = await db.select({
+    // TESTE DE SANIDADE: Contar todos os produtos
+    const allProductsCountResult = await db.select({ count: sql<number>`count(*)`.mapWith(Number) }).from(products);
+    const totalProductsInDb = allProductsCountResult[0]?.count ?? 0;
+    console.log(`[DEBUG] Total de produtos na tabela 'products' (via script): ${totalProductsInDb}`);
+
+    if (totalProductsInDb === 0 && process.env.NODE_ENV !== 'test') { // Não abortar se for ambiente de teste que pode ter DB vazio
+        console.error("!!! [DEBUG] A tabela 'products' parece estar vazia ou inacessível pelo script. Verifique a conexão/dados no NeonDB e a DATABASE_URL nos Secrets do Replit.");
+        // process.exit(1); // Comentar para permitir que o resto do script tente rodar para mais logs
+        // return; 
+    }
+
+    console.log("===> [generateClipEmbeddings] Buscando produtos COM imageUrl (ignorando status do embedding por enquanto)...");
+    let productsToProcess = await db.select({
         id: products.id,
         name: products.name,
-        description: products.description,
-        category: products.category
+        imageUrl: products.imageUrl,
+        embedding: products.embedding // Selecionar o embedding para debug
       })
       .from(products)
-      .where(isNull(products.embedding));
+      .where(sql`${products.imageUrl} IS NOT NULL AND ${products.imageUrl} != ''`);
       
-    console.log(`===> [generateEmbeddings] Produtos buscados. Encontrados: ${productsToProcess.length}`);
+    console.log(`===> [generateClipEmbeddings] Produtos buscados com imageUrl (sem filtro de embedding NULL). Encontrados: ${productsToProcess.length}`);
 
-    if (productsToProcess.length === 0) {
-      console.log('===> [generateEmbeddings] Nenhum produto novo para gerar embeddings. Saindo educadamente.');
-      return; 
+    if (productsToProcess.length > 0) {
+      console.log(`[DEBUG] Amostra dos produtos encontrados (sem filtro de embedding NULL):`);
+      productsToProcess.slice(0, 5).forEach(p => { 
+        // @ts-ignore 
+        const embeddingPreview = p.embedding ? (Array.isArray(p.embedding) ? `Array[${p.embedding.length}]` : typeof p.embedding) : 'NULL';
+        console.log(`  ID: ${p.id}, Nome: ${p.name}, ImageURL: ${p.imageUrl ? 'Presente' : 'Ausente'}, Embedding: ${embeddingPreview}`);
+      });
+    }
+
+    if (productsToProcess.length === 0 && totalProductsInDb > 0) {
+      console.log('===> [generateClipEmbeddings] Nenhum produto com imageUrl válida encontrado, embora existam produtos na tabela. Verifique os dados das imageUrls.');
+      // Não retorna aqui, para que o filtro de productsNeedingClipEmbedding seja testado
+    } else if (productsToProcess.length === 0) {
+        console.log('===> [generateClipEmbeddings] Nenhum produto com imageUrl válida encontrado.');
+        return; // Se não há produtos com imagem, não há o que processar.
     }
     
-    const productsToProcessInThisRun = productsToProcess.slice(0, 50); 
-    console.log(`===> [generateEmbeddings] Encontrados ${productsToProcess.length} produtos no total. Processando os primeiros ${productsToProcessInThisRun.length} nesta execução...`);
+    const productsNeedingClipEmbedding = productsToProcess.filter(p => {
+      // @ts-ignore
+      return !(Array.isArray(p.embedding) && p.embedding.length === 768);
+    });
+    
+    console.log(`===> [generateClipEmbeddings] Destes, ${productsNeedingClipEmbedding.length} produtos precisam de embedding CLIP (não são NULL ou não têm 768 dimensões).`);
+
+    if (productsNeedingClipEmbedding.length === 0) {
+      console.log('===> [generateClipEmbeddings] Todos os produtos com imagem já parecem ter embedding CLIP (768 dims) ou nenhum produto com imagem foi encontrado. Saindo.');
+      return;
+    }
+
+    const BATCH_SIZE = 10;
+    const productsToProcessInThisRun = productsNeedingClipEmbedding.slice(0, BATCH_SIZE); 
+    console.log(`===> [generateClipEmbeddings] Processando os primeiros ${productsToProcessInThisRun.length} de ${productsNeedingClipEmbedding.length} produtos que precisam de embedding...`);
 
     let processedCount = 0;
+    let successCount = 0;
     for (const product of productsToProcessInThisRun) {
-      console.log(`---> Processando produto ID: ${product.id} - Nome: ${product.name}`);
+      processedCount++;
+      console.log(`---> (${processedCount}/${productsToProcessInThisRun.length}) Processando produto ID: ${product.id} - Nome: ${product.name}`);
 
-      const inputText = `Nome: ${product.name || ''}\nCategoria: ${product.category || ''}\nDescrição: ${product.description || ''}`;
-      
-      if (!inputText.trim() || inputText.trim() === "Nome: \nCategoria: \nDescrição:"){
-        console.warn(`     Produto ID: ${product.id} tem texto de input vazio ou apenas labels. Pulando.`);
+      if (!product.imageUrl) {
+        console.warn(`     Produto ID: ${product.id} não tem imageUrl (não deveria acontecer após o filtro). Pulando.`);
         continue;
       }
 
       try {
-        console.log(`     Chamando OpenAI API para embedding do produto ID: ${product.id}...`);
-        // console.log(`     Texto de input: "${inputText.substring(0, 150)}..."`); // Log opcional do texto
+        console.log(`     Chamando CLIP Service para imagem: ${product.imageUrl.substring(0, 70)}...`);
         
-        const embeddingResponse = await openai.embeddings.create({
-          model: EMBEDDING_MODEL,
-          input: inputText,
-        });
-
-        const embeddingVector = embeddingResponse.data[0]?.embedding;
+        const clipEmbeddingVector = await getClipEmbeddingFromImageUrl(product.imageUrl, HUGGINGFACE_API_TOKEN);
         
-        if (!embeddingVector) {
-          console.error(`     !!! Falha ao gerar embedding para produto ID: ${product.id}. Resposta da API não continha vetor. !!!`);
+        if (!clipEmbeddingVector || clipEmbeddingVector.length !== 768) { 
+          console.error(`     !!! Falha ao gerar/validar embedding CLIP para produto ID: ${product.id}. Vetor inválido ou dimensão incorreta. Esperado 768, recebido: ${clipEmbeddingVector?.length}`);
           continue; 
         }
-        console.log(`     Embedding recebido da OpenAI para ID: ${product.id}. Dimensões: ${embeddingVector.length}.`);
+        console.log(`     Embedding CLIP recebido para ID: ${product.id}. Dimensões: ${clipEmbeddingVector.length}.`);
 
-        console.log(`     Salvando embedding no banco de dados para ID: ${product.id}...`);
+        console.log(`     Salvando embedding CLIP no banco de dados para ID: ${product.id}...`);
         await db.update(products)
-          .set({ embedding: embeddingVector })
+          .set({ embedding: clipEmbeddingVector as any })
           .where(eq(products.id, product.id));
 
-        console.log(`     ---> Embedding salvo com sucesso para produto ID: ${product.id}.`);
-        processedCount++;
+        console.log(`     ---> Embedding CLIP salvo com sucesso para produto ID: ${product.id}.`);
+        successCount++;
 
-        // Adicionar um pequeno delay para evitar rate limiting da API OpenAI
-        if (productsToProcessInThisRun.length > 1 && processedCount < productsToProcessInThisRun.length) { // Não adicionar delay após o último item
-            console.log("     Aguardando 200ms antes do próximo produto...");
-            await new Promise(resolve => setTimeout(resolve, 200)); 
+        if (processedCount < productsToProcessInThisRun.length) {
+            const delayMs = 1000; 
+            console.log(`     Aguardando ${delayMs}ms antes do próximo produto...`);
+            await new Promise(resolve => setTimeout(resolve, delayMs)); 
         }
 
       } catch (error: any) {
-        console.error(`     !!! Erro ao processar produto ID: ${product.id} (durante chamada OpenAI ou DB update): !!!`, error.message || error);
-        // Continuar para o próximo produto em caso de erro individual
+        console.error(`     !!! Erro ao processar embedding CLIP para produto ID: ${product.id}: !!!`, error.message || error);
       }
     }
-    console.log(`===> [generateEmbeddings] Loop de processamento concluído. ${processedCount} produtos tiveram embeddings gerados e salvos nesta execução.`);
+    console.log(`===> [generateClipEmbeddings] Loop de processamento concluído. ${successCount} de ${processedCount} produtos tiveram embeddings CLIP gerados e salvos nesta execução.`);
+
 
   } catch (dbError) {
-    console.error('!!! Erro durante a lógica principal de generateEmbeddings (provavelmente DB): !!!', dbError);
-    process.exit(1); // Sair explicitamente em caso de erro no DB
-    return; // Adicionado para linter
+    console.error('!!! Erro durante a lógica principal de generateClipEmbeddings (provavelmente DB): !!!', dbError);
+    process.exit(1);
+    return;
   }
 }
 
-console.log("[SCRIPT FLOW] Chamando generateEmbeddings()...");
-generateEmbeddings().then(() => {
-  console.log("[SCRIPT FLOW] generateEmbeddings() PROMISE resolvida.");
-  // Não sair aqui ainda, deixar o script terminar naturalmente se tudo der certo dentro da função,
-  // ou a própria função chamará process.exit()
-  // Se chegou aqui e não houve process.exit(1) antes, é um sucesso para esta etapa.
-  console.log("===> SUCESSO PARCIAL: Script chegou ao final do .then() sem erros fatais nesta etapa.");
-  process.exit(0); // Sucesso explícito para esta etapa
+console.log("[SCRIPT FLOW] Chamando generateClipEmbeddingsForProducts()...");
+generateClipEmbeddingsForProducts().then(() => {
+  console.log("[SCRIPT FLOW] generateClipEmbeddingsForProducts() PROMISE resolvida.");
+  console.log("===> SUCESSO: Script de geração de embeddings CLIP chegou ao final do .then() sem erros fatais.");
+  process.exit(0); 
 }).catch(err => {
-  console.error("!!! [SCRIPT FLOW] Erro INESPERADO pego pelo .catch() final: !!!", err);
-  process.exit(1); // Falha explícita
+  console.error("!!! [SCRIPT FLOW] Erro INESPERADO pego pelo .catch() final ao rodar generateClipEmbeddingsForProducts: !!!", err);
+  process.exit(1);
 }); 

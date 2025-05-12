@@ -5,7 +5,7 @@ import { storage } from './storage'; // Para buscar descrição do produto
 import * as fs from 'fs'; // Usar fs normal para ter acesso às funções sync
 import path from 'path';
 import handlebars from 'handlebars';
-import puppeteer from 'puppeteer';
+// import puppeteer from 'puppeteer'; // COMENTADO - REMOVENDO PUPPETEER
 import { execSync } from 'child_process'; // Para comandos do sistema
 import htmlPdf from 'html-pdf'; // Alternativa leve ao Puppeteer
 import { promisify } from 'util';
@@ -526,7 +526,8 @@ export async function generateQuotePdf(quoteData: QuoteDataInput, companyUser: U
   return pdfBytes;
 }
 
-// --- NOVA FUNÇÃO USANDO PUPPETEER ---
+// --- NOVA FUNÇÃO USANDO PUPPETEER --- // COMENTADO - REMOVENDO PUPPETEER
+/* // COMENTADO - REMOVENDO PUPPETEER
 export async function generateQuotePdfWithPuppeteer(quoteData: QuoteDataInput, companyUser: User): Promise<Buffer> {
   console.log("Iniciando geração de PDF com Puppeteer...");
 
@@ -660,7 +661,7 @@ export async function generateQuotePdfWithPuppeteer(quoteData: QuoteDataInput, c
         };
       }));
       console.log("✅ Detalhes de todos os itens processados.");
-  } catch (err) {
+  } catch (err: any) { // Adicionado 'any' para compatibilidade com o throw abaixo
       console.error("❌ Erro ao buscar detalhes dos produtos:", err);
       throw new Error("Falha ao buscar informações dos produtos para o PDF.");
   }
@@ -713,11 +714,13 @@ export async function generateQuotePdfWithPuppeteer(quoteData: QuoteDataInput, c
     console.log("Args Puppeteer:", puppeteerArgs.join(' '));
     
     // Abordagem simplificada - deixar o Puppeteer usar seu próprio Chromium
-    browser = await puppeteer.launch({ 
-        headless: true,
-        args: puppeteerArgs,
-        timeout: 60000, // Timeout mais alto (60 segundos)
-    });
+    // browser = await puppeteer.launch({  // LINHA ORIGINAL COMENTADA
+    //     headless: true,
+    //     args: puppeteerArgs,
+    //     timeout: 60000, // Timeout mais alto (60 segundos)
+    // });
+    throw new Error("Puppeteer está desativado. Esta função não deve ser chamada."); // Adicionado para indicar que não deve ser usado
+
     console.log("Navegador lançado.");
     const page = await browser.newPage();
     console.log("Nova página criada.");
@@ -775,6 +778,9 @@ export async function generateQuotePdfWithPuppeteer(quoteData: QuoteDataInput, c
       }
   }
 }
+*/ // COMENTADO - REMOVENDO PUPPETEER
+
+// --- FIM DA FUNÇÃO PUPPETEER ---
 
 // --- TERCEIRA FUNÇÃO DE FALLBACK USANDO HTML-PDF ---
 export async function generateQuotePdfWithHtmlPdf(quoteData: QuoteDataInput, companyUser: User): Promise<Buffer> {

@@ -10,7 +10,7 @@ import { PDFDocument, StandardFonts, rgb, PDFFont, PDFPage } from 'pdf-lib';
 import * as path from 'path';
 import * as fs from 'fs';
 import handlebars from 'handlebars';
-import puppeteer from 'puppeteer';
+// import puppeteer from 'puppeteer'; // COMENTADO - REMOVENDO PUPPETEER
 import { storage } from './storage';
 import { downloadFileFromS3 } from './s3-service';
 import { User } from '@shared/schema';
@@ -170,7 +170,8 @@ handlebars.registerHelper('formatPrice', function(price) {
   }).format(price / 100);
 });
 
-// Método 1: Gerar PDF com Puppeteer
+// Método 1: Gerar PDF com Puppeteer // COMENTADO - REMOVENDO PUPPETEER
+/* // COMENTADO - REMOVENDO PUPPETEER
 export async function generateQuotePdfWithPuppeteer(quoteData: QuoteDataInput, companyUser: User): Promise<Buffer> {
   console.log("Iniciando geração com Puppeteer...");
   
@@ -238,7 +239,7 @@ export async function generateQuotePdfWithPuppeteer(quoteData: QuoteDataInput, c
         // Estratégia 4: Se tudo falhou, tentar imagens adicionais (se houver)
         if (!imageBase64 && productDetails?.additionalImages?.length > 0) {
           console.log(`  Item ${index + 1}: Tentando primeira imagem adicional`);
-          imageBase64 = await getBase64ImageFromS3(productDetails.additionalImages[0]);
+          // imageBase64 = await getBase64ImageFromS3(productDetails.additionalImages[0]); // LINHA ORIGINAL COMENTADA POIS additionalImages PODE NÃO EXISTIR
         }
         
         // Estratégia 5: Usar imagem de placeholder caso nenhuma das opções acima funcione
@@ -314,10 +315,11 @@ export async function generateQuotePdfWithPuppeteer(quoteData: QuoteDataInput, c
     try {
       console.log("Iniciando Puppeteer para geração do PDF...");
       
-      const browser = await puppeteer.launch({
-        headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox']
-      });
+      // const browser = await puppeteer.launch({ // COMENTADO - REMOVENDO PUPPETEER
+      //   headless: true,
+      //   args: ['--no-sandbox', '--disable-setuid-sandbox']
+      // });
+      throw new Error("Puppeteer está desativado. Esta função não deve ser chamada."); // Adicionado para indicar que não deve ser usado
       
       const page = await browser.newPage();
       console.log("Carregando HTML no Puppeteer...");
@@ -344,8 +346,9 @@ export async function generateQuotePdfWithPuppeteer(quoteData: QuoteDataInput, c
     throw err;
   }
 }
+*/ // COMENTADO - REMOVENDO PUPPETEER
 
-// Método 2: Gerar PDF com html-pdf (PhantomJS - alternativa mais leve)
+// Método 2: Gerar PDF com html-pdf (PhantomJS)
 export async function generateQuotePdfWithHtmlPdf(quoteData: QuoteDataInput, companyUser: User): Promise<Buffer> {
   console.log("Iniciando geração com html-pdf (PhantomJS)...");
   

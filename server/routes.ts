@@ -845,37 +845,37 @@ export async function registerRoutes(app: Express): Promise<void> {
     }
   });
   
-  app.post("/backend/quotes/generate-pdf-puppeteer", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const userId = req.session.userId!;
-      const user = await storage.getUser(userId);
-      if (!user) {
-        const err: HttpError = new Error("Usuário não encontrado"); 
-        err.status = 403; err.isOperational = true; return next(err);
-      }
-      const quoteData = req.body;
-      if (!quoteData || !quoteData.clientName || !quoteData.items || quoteData.items.length === 0) {
-        const err: HttpError = new Error("Dados do orçamento inválidos ou incompletos para PDF.");
-        err.status = 400; err.isOperational = true; return next(err);
-      }
-      try {
-        const pdfBuffer = await generateQuotePdfWithPuppeteer(quoteData, user);
-        res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', `attachment; filename="Orcamento_${quoteData.clientName.replace(/s+/g, '_')}_P.pdf"`);
-        return res.send(pdfBuffer);
-      } catch (puppeteerError: any) {
-        console.error("⚠️ Falha no Puppeteer, tentando fallback pdf-lib:", puppeteerError);
-        const pdfBytes = await generateQuotePdf(quoteData, user);
-          res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', `attachment; filename="Orcamento_${quoteData.clientName.replace(/s+/g, '_')}_Lib.pdf"`);
-          return res.send(Buffer.from(pdfBytes));
-      }
-    } catch (error) {
-      console.error("[Route /quotes/generate-pdf-puppeteer POST] Erro geral:", error);
-      return next(error);
-    }
-  });
-  
+  //   app.post("/backend/quotes/generate-pdf-puppeteer", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+  //     try {
+  //       const userId = req.session.userId!;
+  //       const user = await storage.getUser(userId);
+  //       if (!user) {
+  //         const err: HttpError = new Error("Usuário não encontrado"); 
+  //         err.status = 403; err.isOperational = true; return next(err);
+  //       }
+  //       const quoteData = req.body;
+  //       if (!quoteData || !quoteData.clientName || !quoteData.items || quoteData.items.length === 0) {
+  //         const err: HttpError = new Error("Dados do orçamento inválidos ou incompletos para PDF.");
+  //         err.status = 400; err.isOperational = true; return next(err);
+  //       }
+  //       try {
+  //         const pdfBuffer = await generateQuotePdfWithPuppeteer(quoteData, user);
+  //         res.setHeader('Content-Type', 'application/pdf');
+  //         res.setHeader('Content-Disposition', `attachment; filename="Orcamento_${quoteData.clientName.replace(/\s+/g, '_')}_P.pdf"`);
+  //         return res.send(pdfBuffer);
+  //       } catch (puppeteerError: any) {
+  //         console.error("⚠️ Falha no Puppeteer, tentando fallback pdf-lib:", puppeteerError);
+  //         const pdfBytes = await generateQuotePdf(quoteData, user); // Supondo que generateQuotePdf usa pdf-lib
+  //         res.setHeader('Content-Type', 'application/pdf');
+  //         res.setHeader('Content-Disposition', `attachment; filename="Orcamento_${quoteData.clientName.replace(/\s+/g, '_')}_Lib.pdf"`);
+  //         return res.send(Buffer.from(pdfBytes));
+  //       }
+  //     } catch (error) {
+  //       console.error("[Route /quotes/generate-pdf-puppeteer POST] Erro geral:", error);
+  //       return next(error);
+  //     }
+  //   });
+
   app.post("/backend/quotes/generate-pdf", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
     try {
       const userId = req.session.userId!;
