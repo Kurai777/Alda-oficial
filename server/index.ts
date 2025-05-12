@@ -11,36 +11,61 @@ import path from "path";
 import fs from "fs";
 import { nanoid } from "nanoid";
 import { createServer } from "http";
-import { WebSocketServer } from "ws";
+import { WebSocketServer, WebSocket } from "ws";
 import { addS3ImageRoutes } from "./s3-image-routes";
 // Importar middleware CORS
-import cors from "cors";
+import cors, { CorsOptions } from "cors";
 
 // Importar módulos de banco de dados e storage
 import { migrate } from "./db";
 import { storage } from "./storage";
+import { initializeClipModel } from './clip-service';
 
 // Importe para rotas de PDF simples (corrigindo o erro de require)
 import { pdfRouterSimple } from './pdf-routes-simple';
 
 const app = express();
+const httpServer = createServer(app); // Criar httpServer no escopo superior
+
+// Exportar wss para que outros módulos possam usá-lo para enviar mensagens
+export const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
+
+const activeConnections = new Map<string, Set<WebSocket>>();
+
+// Função para enviar mensagens para todos os clientes de um projeto específico
+export function broadcastToProject(projectId: string, message: object) {
+    // ADICIONAR LOGS DE DEBUG AQUI
+    console.log(`[WebSocket Backend] Tentando broadcast para projeto ID: '${projectId}' (tipo: ${typeof projectId})`);
+    console.log('[WebSocket Backend] Conexões ativas no Map (chaves dos projetos):', Array.from(activeConnections.keys()));
+
+    const connections = activeConnections.get(projectId);
+    if (connections) {
+        console.log(`[WebSocket Backend] Encontradas ${connections.size} conexões para o projeto ${projectId}. Fazendo broadcast...`);
+        const messageString = JSON.stringify(message);
+        connections.forEach(client => {
+            if (client.readyState === WebSocket.OPEN) {
+                client.send(messageString);
+            } else {
+                console.warn(`[WebSocket Backend] Cliente para projeto ${projectId} não está com readyState OPEN.`);
+            }
+        });
+    } else {
+        console.log(`[WebSocket Backend] Nenhuma conexão WebSocket ativa encontrada para o projeto ${projectId} no Map.`);
+    }
+}
 
 // Configurar CORS para permitir requisições do domínio de deploy
-const corsOptions = {
-  origin: function(origin, callback) {
-    // Em desenvolvimento, permita qualquer origem
+const corsOptions: CorsOptions = {
+  origin: function(origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) {
     if (!origin || process.env.NODE_ENV !== 'production') {
       callback(null, true);
       return;
     }
-    
-    // Em produção, permita apenas domínios específicos
     const allowedOrigins = [
       'https://alda-automation-brunoeted.replit.app',
       'https://ald-a.com.br',
       'https://www.ald-a.com.br'
     ];
-    
     if (allowedOrigins.indexOf(origin) !== -1 || origin.endsWith('.replit.app')) {
       callback(null, true);
     } else {
@@ -95,6 +120,17 @@ if (process.env.NODE_ENV === 'development') {
     console.log("Migração concluída com sucesso!");
   } catch (error) {
     console.error("Erro durante migração do banco de dados:", error);
+    // Considerar se deve sair em caso de falha na migração, dependendo da criticidade
+  }
+
+  // Inicializar o modelo CLIP localmente
+  try {
+    console.log("Inicializando modelo CLIP local...");
+    await initializeClipModel(); 
+    console.log("Modelo CLIP local inicializado com sucesso.");
+  } catch (error) {
+    console.error("Falha ao inicializar modelo CLIP local:", error);
+    process.exit(1); // Sair se o modelo essencial não puder ser carregado
   }
 
   // ===== ADICIONAR CONFIGURAÇÃO S3 E ROTAS DE IMAGEM =====
@@ -173,24 +209,6 @@ if (process.env.NODE_ENV === 'development') {
   } 
 
   // ===== CRIAR HTTP SERVER E WEBSOCKET SERVER =====
-  const httpServer = createServer(app);
-  /* // <<<< INÍCIO DO BLOCO COMENTADO
-  const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
-  
-  wss.on('connection', (ws) => {
-    console.log('Cliente WebSocket conectado');
-    ws.on('message', (message) => {
-      // ... (lógica broadcast)
-    });
-    ws.on('close', () => {
-      console.log('Cliente WebSocket desconectado');
-    });
-  });
-  console.log("Servidor WebSocket configurado.");
-  */ // <<<< FIM DO BLOCO COMENTADO
-  // ================================================
-
-  // Iniciar servidor USANDO o httpServer
   const portString = process.env.PORT || "5000";
   const port = parseInt(portString, 10);
   

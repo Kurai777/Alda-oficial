@@ -103,6 +103,7 @@ Refira-se ao `README.md` para detalhes sobre as funcionalidades.
   - [x] Chamada inicial para `storage.findProductsByEmbedding` usando os embeddings das descrições.
   - [x] Feedback no chat para o usuário com as sugestões (incluindo imagens e foco no pedido do usuário).
 - [ ] Integrar com APIs de IA para geração de planta baixa/render (escopo futuro).
+- [x] Aperfeiçoar a busca por similaridade visual de produtos a partir de imagens enviadas pelo usuário, integrando embedding visual real (CLIP/HuggingFace) ao fluxo de sugestão.
 
 ## Bugs Conhecidos / Impedimentos Atuais
 

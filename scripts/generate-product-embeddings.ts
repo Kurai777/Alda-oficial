@@ -1,9 +1,9 @@
 import { db } from '../server/db'; 
 import { products } from '../shared/schema'; 
 import { eq, isNull, sql } from 'drizzle-orm'; // Adicionado sql para possível delete futuro
-import { getClipEmbeddingFromImageUrl } from '../server/clip-service'; // Importar novo serviço
+import { getClipEmbeddingFromImageUrl, initializeClipModel } from '../server/clip-service'; // Importar novo serviço
 
-console.log("[SCRIPT START] Iniciando generate-product-embeddings.ts (VERSÃO CLIP - TESTE DE SCHEMA)...");
+console.log("[SCRIPT START] Iniciando generate-product-embeddings.ts (VERSÃO PIPELINE/LOCAL MODEL)...");
 
 // DEBUG: Verificar DATABASE_URL
 console.log(`[DEBUG] DATABASE_URL usada pelo script: ${process.env.DATABASE_URL ? 'Definida (verifique Secrets)' : 'NÃO DEFINIDA'}`);
@@ -16,16 +16,8 @@ if(process.env.DATABASE_URL) {
     }
 }
 
-const HUGGINGFACE_API_TOKEN = process.env.HUGGINGFACE_API_TOKEN;
-
 async function generateClipEmbeddingsForProducts() {
-  console.log("===> [generateClipEmbeddings] Função iniciada.");
-  if (!HUGGINGFACE_API_TOKEN) {
-    console.error('!!! Token da API Hugging Face (HUGGINGFACE_API_TOKEN) não configurado. Abortando. !!!');
-    process.exit(1);
-    return;
-  }
-  console.log("===> [generateClipEmbeddings] Token Hugging Face verificado (OK).");
+  console.log("===> [generateClipEmbeddings] Função iniciada para modelo local.");
 
   // DEBUG: Verificar colunas do schema products que o script está vendo
   console.log("[DEBUG] Colunas conhecidas para 'products' pelo Drizzle (do shared/schema.ts):");
@@ -81,13 +73,13 @@ async function generateClipEmbeddingsForProducts() {
     
     const productsNeedingClipEmbedding = productsToProcess.filter(p => {
       // @ts-ignore
-      return !(Array.isArray(p.embedding) && p.embedding.length === 768);
+      return !(Array.isArray(p.embedding) && p.embedding.length === 512);
     });
     
-    console.log(`===> [generateClipEmbeddings] Destes, ${productsNeedingClipEmbedding.length} produtos precisam de embedding CLIP (não são NULL ou não têm 768 dimensões).`);
+    console.log(`===> [generateClipEmbeddings] Destes, ${productsNeedingClipEmbedding.length} produtos precisam de embedding CLIP (não são NULL ou não têm 512 dimensões).`);
 
     if (productsNeedingClipEmbedding.length === 0) {
-      console.log('===> [generateClipEmbeddings] Todos os produtos com imagem já parecem ter embedding CLIP (768 dims) ou nenhum produto com imagem foi encontrado. Saindo.');
+      console.log('===> [generateClipEmbeddings] Todos os produtos com imagem já parecem ter embedding CLIP (512 dims) ou nenhum produto com imagem foi encontrado. Saindo.');
       return;
     }
 
@@ -107,12 +99,12 @@ async function generateClipEmbeddingsForProducts() {
       }
 
       try {
-        console.log(`     Chamando CLIP Service para imagem: ${product.imageUrl.substring(0, 70)}...`);
+        console.log(`     Chamando CLIP Service (local) para imagem: ${product.imageUrl.substring(0, 70)}...`);
         
-        const clipEmbeddingVector = await getClipEmbeddingFromImageUrl(product.imageUrl, HUGGINGFACE_API_TOKEN);
+        const clipEmbeddingVector = await getClipEmbeddingFromImageUrl(product.imageUrl);
         
-        if (!clipEmbeddingVector || clipEmbeddingVector.length !== 768) { 
-          console.error(`     !!! Falha ao gerar/validar embedding CLIP para produto ID: ${product.id}. Vetor inválido ou dimensão incorreta. Esperado 768, recebido: ${clipEmbeddingVector?.length}`);
+        if (!clipEmbeddingVector || clipEmbeddingVector.length !== 512) { 
+          console.error(`     !!! Falha ao gerar/validar embedding CLIP para produto ID: ${product.id}. Vetor inválido ou dimensão incorreta. Esperado 512, recebido: ${clipEmbeddingVector?.length}`);
           continue; 
         }
         console.log(`     Embedding CLIP recebido para ID: ${product.id}. Dimensões: ${clipEmbeddingVector.length}.`);
@@ -137,20 +129,31 @@ async function generateClipEmbeddingsForProducts() {
     }
     console.log(`===> [generateClipEmbeddings] Loop de processamento concluído. ${successCount} de ${processedCount} produtos tiveram embeddings CLIP gerados e salvos nesta execução.`);
 
-
   } catch (dbError) {
     console.error('!!! Erro durante a lógica principal de generateClipEmbeddings (provavelmente DB): !!!', dbError);
     process.exit(1);
-    return;
+    // return; // Comentado para evitar erro de unreachable code se process.exit(1) estiver ativo
   }
 }
 
-console.log("[SCRIPT FLOW] Chamando generateClipEmbeddingsForProducts()...");
-generateClipEmbeddingsForProducts().then(() => {
-  console.log("[SCRIPT FLOW] generateClipEmbeddingsForProducts() PROMISE resolvida.");
-  console.log("===> SUCESSO: Script de geração de embeddings CLIP chegou ao final do .then() sem erros fatais.");
+async function main() {
+    console.log("[SCRIPT FLOW] Chamando initializeClipModel() do script...");
+    try {
+        await initializeClipModel(); // Garante que o modelo/pipeline seja carregado no clip-service
+        console.log("[SCRIPT FLOW] Modelo CLIP local inicializado pelo script.");
+        await generateClipEmbeddingsForProducts();
+    } catch (error) {
+        console.error("!!! [SCRIPT FLOW] Erro INESPERADO durante a execução do script main:", error);
+        process.exit(1);
+    }
+}
+
+console.log("[SCRIPT FLOW] Iniciando execução da função main() do script...");
+main().then(() => {
+  console.log("[SCRIPT FLOW] Função main() PROMISE resolvida.");
+  console.log("===> SUCESSO: Script de geração de embeddings CLIP (local) chegou ao final do .then() sem erros fatais.");
   process.exit(0); 
 }).catch(err => {
-  console.error("!!! [SCRIPT FLOW] Erro INESPERADO pego pelo .catch() final ao rodar generateClipEmbeddingsForProducts: !!!", err);
+  console.error("!!! [SCRIPT FLOW] Erro INESPERADO pego pelo .catch() final ao rodar main():", err);
   process.exit(1);
 }); 

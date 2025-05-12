@@ -6,11 +6,14 @@
  */
 
 import OpenAI from "openai";
+// @ts-ignore 
 import Anthropic from "@anthropic-ai/sdk";
 import * as fs from 'fs';
 import * as path from 'path';
 import { storage } from './storage';
-import { type Product, type DesignProject, type NewDesignProjectItem, type DesignProjectItem } from '@shared/schema';
+import { type Product, type DesignProject, type NewDesignProjectItem, type DesignProjectItem, type AiDesignChatMessage } from '@shared/schema';
+import { getClipEmbeddingFromImageUrl } from './clip-service';
+import { broadcastToProject } from './index';
 
 // Inicializar clientes de IA
 // Use o mais recente modelo do OpenAI: gpt-4o que foi lançado em 13 de maio de 2024
@@ -556,29 +559,57 @@ export async function processDesignProjectImage(projectId: number, imageUrlToPro
       throw new Error("Falha ao parsear resposta da IA.");
     }
 
-    // --- NOVA BUSCA VISUAL GLOBAL ---
+    // --- NOVA BUSCA VISUAL GLOBAL (EMBEDDING DE IMAGEM REAL) ---
+    let similarProductsVisual: (Product & { distance?: number })[] = [];
+    let visualImageEmbeddingVector: number[] | null = null;
+    // const hfToken = process.env.HUGGINGFACE_TOKEN || process.env.HF_TOKEN; // Removido - não precisamos mais checar token para modelo local
+    // if (hfToken) { // Removida condição do token
+    try {
+        console.log('[AI Design Processor] Gerando embedding visual real da imagem via CLIP Service local...');
+        visualImageEmbeddingVector = await getClipEmbeddingFromImageUrl(imageUrlToProcess, undefined); // Passar undefined para hfToken
+        if (visualImageEmbeddingVector && visualImageEmbeddingVector.length > 0) {
+          if (project && project.userId) {
+            similarProductsVisual = await storage.findProductsByEmbedding(project.userId, visualImageEmbeddingVector, 10); 
+            console.log(`[AI Design Processor] [Visual Embedding Search] Encontrados ${similarProductsVisual.length} produtos por similaridade visual real.`);
+            if (similarProductsVisual.length > 0) {
+              console.log("     Produtos Visuais Encontrados (com distância):");
+              similarProductsVisual.forEach(p => {
+                console.log(`       - ID: ${p.id}, Nome: ${p.name}, Código: ${p.code || 'N/A'}, Distância: ${p.distance?.toFixed(4) || 'N/A'}`);
+              });
+            }
+          } else {
+            console.error('[AI Design Processor] project.userId não encontrado para a busca por embedding visual.');
+          }
+        } else {
+          console.warn('[AI Design Processor] Não foi possível gerar embedding visual real da imagem (vetor nulo ou vazio).');
+        }
+    } catch (err) {
+        console.error('[AI Design Processor] Erro ao gerar/buscar embedding visual real:', err);
+    }
+    // } else { // Removida condição do token
+    //   console.log('[AI Design Processor] Token HuggingFace não configurado (LÓGICA ANTIGA, REMOVER). Pulando busca visual real.');
+    // }
+    // --- FIM DA NOVA BUSCA VISUAL GLOBAL ---
+
+    // --- ANTIGA BUSCA VISUAL GLOBAL (baseada na descrição textual) - COMENTADA POR ENQUANTO PARA EVITAR ERRO DE DIMENSÃO ---
+    /*
     let similarProductsGlobal: (Product & { distance?: number })[] = [];
     if (overallImageDescription) {
-        console.log("[DEBUG] Entrou no IF para gerar embedding global.");
+        console.log("[DEBUG] Entrou no IF para gerar embedding global (descrição textual).");
         try {
           console.log(`   Gerando embedding para a DESCRIÇÃO GLOBAL da imagem: "${overallImageDescription.substring(0,50)}..."`);
           const globalImageEmbeddingResponse = await openai.embeddings.create({
-            model: EMBEDDING_MODEL,
+            model: EMBEDDING_MODEL, // text-embedding-3-small (1536 dims)
             input: overallImageDescription,
           });
           const globalImageEmbeddingVector = globalImageEmbeddingResponse.data[0]?.embedding;
 
           if (globalImageEmbeddingVector) {
-            console.log(`   Embedding da descrição global obtido. Chamando findProductsByEmbedding...`);
-            similarProductsGlobal = await storage.findProductsByEmbedding(project.userId, globalImageEmbeddingVector, 10); 
-            console.log(`   [Global Embedding Search] Encontrados ${similarProductsGlobal.length} produtos.`);
-            // Logar produtos com suas distâncias
-            if (similarProductsGlobal.length > 0) {
-              console.log("     Produtos Globais (com distância):");
-              similarProductsGlobal.forEach(p => {
-                console.log(`       - Nome: ${p.name}, Código: ${p.code || 'N/A'}, Distância: ${p.distance?.toFixed(4) || 'N/A'}`);
-              });
-            }
+            console.log(`   Embedding da descrição global obtido. Chamando findProductsByEmbedding... (ESPERANDO 1536 DIMS)`);
+            // ESTA CHAMADA CAUSARIA ERRO DE DIMENSÃO, POIS O BANCO ESPERA 512 AGORA
+            // similarProductsGlobal = await storage.findProductsByEmbedding(project.userId, globalImageEmbeddingVector, 10); 
+            // console.log(`   [Global Textual Embedding Search] Encontrados ${similarProductsGlobal.length} produtos.`);
+             console.warn("   BUSCA POR EMBEDDING TEXTUAL GLOBAL TEMPORARIAMENTE DESABILITADA DEVIDO A DIFERENÇA DE DIMENSÃO (1536 vs 512)");
           } else {
             console.warn(`   Não foi possível gerar embedding para a descrição global da imagem.`);
           }
@@ -588,9 +619,9 @@ export async function processDesignProjectImage(projectId: number, imageUrlToPro
     } else {
         console.log("[DEBUG] NÃO entrou no IF para gerar embedding global (overallImageDescription estava nula/vazia).");
     }
-    console.log(`[DEBUG] similarProductsGlobal (APÓS busca e ANTES de filtrar por threshold): ${similarProductsGlobal.length} itens.`);
-    if(similarProductsGlobal.length > 0) console.log("[DEBUG] similarProductsGlobal[0]:", JSON.stringify(similarProductsGlobal[0], null, 2));
-    // --- FIM DA NOVA BUSCA VISUAL GLOBAL ---
+    console.log(`[DEBUG] similarProductsGlobal (descrição textual - DESABILITADA): ${similarProductsGlobal.length} itens.`);
+    */
+    // --- FIM DA ANTIGA BUSCA VISUAL GLOBAL ---
 
     createdItemsWithSuggestions = []; 
     focusedItemsOutputFromTextSearch = [];
@@ -639,7 +670,7 @@ export async function processDesignProjectImage(projectId: number, imageUrlToPro
         }
       }
       console.log("[DEBUG] Processamento de itens de design (busca textual) concluído.");
-    } else if (similarProductsGlobal.length === 0) { // Apenas envia esta mensagem se NENHUM móvel foi identificado E a busca global também não retornou nada.
+    } else if (similarProductsVisual.length === 0) { // Apenas envia esta mensagem se NENHUM móvel foi identificado E a busca global também não retornou nada.
       console.log("[DEBUG] Nenhum móvel identificado pela IA e nenhuma sugestão global encontrada.");
       await storage.createAiDesignChatMessage({ projectId, role: "assistant", content: "Não consegui identificar móveis específicos nem encontrar sugestões gerais para esta imagem. Você pode tentar outra imagem ou descrever o que procura?" });
     }
@@ -647,104 +678,121 @@ export async function processDesignProjectImage(projectId: number, imageUrlToPro
     console.log(`[DEBUG] focusedItemsOutputFromTextSearch (APÓS busca textual): ${focusedItemsOutputFromTextSearch.length} itens.`);
     if(focusedItemsOutputFromTextSearch.length > 0) console.log("[DEBUG] focusedItemsOutputFromTextSearch[0]:", JSON.stringify(focusedItemsOutputFromTextSearch[0], null, 2));
 
-    // Montar a mensagem de chat
+    // Montar a mensagem de chat (REFINADA)
     let chatMessageContent = "";
     let hasContent = false;
-    const MAX_DISTANCE_THRESHOLD = 1.1; 
+    const MAX_DISTANCE_THRESHOLD = 1.4; 
 
-    let introMessage = "";
-    let productsWithinThreshold: (Product & { distance: number })[] = []; // Garantir que distance não é opcional aqui
-
-    if (similarProductsGlobal.length > 0) {
-        productsWithinThreshold = similarProductsGlobal
+    let productsWithinThreshold: (Product & { distance: number; source?: string })[] = [];
+    if (similarProductsVisual.length > 0) {
+        productsWithinThreshold = similarProductsVisual
             .filter(p => p.distance !== undefined && p.distance !== null && p.distance <= MAX_DISTANCE_THRESHOLD)
-            .map(p => ({ ...p, distance: p.distance! })) // Afirmar que distance não é null/undefined aqui
+            .map(p => ({ ...p, distance: p.distance!, source: 'visual' }))
             .sort((a, b) => a.distance - b.distance);
-        console.log(`[DEBUG] productsWithinThreshold (APÓS filtro e sort): ${productsWithinThreshold.length} itens.`);
-        if(productsWithinThreshold.length > 0) console.log("[DEBUG] productsWithinThreshold[0]:", JSON.stringify(productsWithinThreshold[0], null, 2));
     }
     
-    let finalGlobalSuggestionsToShow = productsWithinThreshold.slice(0, 3); 
-    console.log(`[DEBUG] finalGlobalSuggestionsToShow (inicial): ${finalGlobalSuggestionsToShow.length} itens.`);
+    let finalSuggestionsToShow = productsWithinThreshold.slice(0, 3);
+    let introMessage = "";
+    let foundFocusedItemVisually = false;
 
     if (userRequestedSpecificItem && mainKeyword && productsWithinThreshold.length > 0) {
-        console.log(`[DEBUG] Tentando focar sugestões globais para: ${mainKeyword}`);
         const normalizedQueryKeyword = normalizeText(mainKeyword);
-        const focusedSuggestionsFromThresholded = productsWithinThreshold.filter(p => 
-            p.category && normalizeText(p.category).includes(normalizedQueryKeyword)
+        const focusedSuggestionsFromVisual = productsWithinThreshold.filter(p => 
+            (p.category && normalizeText(p.category).includes(normalizedQueryKeyword)) ||
+            (p.name && normalizeText(p.name).includes(normalizedQueryKeyword))
         );
-        console.log(`[DEBUG] focusedSuggestionsFromThresholded: ${focusedSuggestionsFromThresholded.length} itens.`);
         
-        if (focusedSuggestionsFromThresholded.length > 0) {
-            introMessage = `Para '${mainKeyword}', as sugestões com menor distância (mais similares visualmente) à imagem são:\n`;
-            finalGlobalSuggestionsToShow = focusedSuggestionsFromThresholded.slice(0, 3);
+        if (focusedSuggestionsFromVisual.length > 0) {
+            // Se encontrou o item focado visualmente, essa será a introdução (ou podemos omiti-la)
+            // introMessage = `Sugestões para '${mainKeyword}' com base na imagem:\n`;
+            finalSuggestionsToShow = focusedSuggestionsFromVisual.slice(0, 3);
+            foundFocusedItemVisually = true;
         } else {
-            introMessage = `Não encontrei '${mainKeyword}' com alta similaridade visual (distância <= ${MAX_DISTANCE_THRESHOLD}), mas pela análise geral da imagem, os itens mais parecidos são:\n`;
+            // Não encontrou o item focado visualmente, mas há sugestões visuais gerais
+            // introMessage = `Não encontrei '${mainKeyword}' com alta similaridade visual, mas estas são algumas sugestões gerais da imagem:\n`;
         }
     } else if (productsWithinThreshold.length > 0) {
-        introMessage = `Pela análise geral da imagem, as sugestões com menor distância (mais similares visualmente) são:\n`;
-    }
-    console.log(`[DEBUG] introMessage: "${introMessage}"`);
-    console.log(`[DEBUG] finalGlobalSuggestionsToShow (APÓS lógica de foco): ${finalGlobalSuggestionsToShow.length} itens.`);
+        // introMessage = `Sugestões com base na imagem:\n`;
+    } // Se não houver introMessage, as sugestões serão listadas diretamente.
 
-    if (finalGlobalSuggestionsToShow.length > 0) {
-        chatMessageContent += introMessage;
-        finalGlobalSuggestionsToShow.forEach((product, index) => {
-            chatMessageContent += `\n${index + 1}. **${product.name}** (Ref: ${product.code || 'N/A'}, Distância: ${product.distance?.toFixed(4) || 'N/A'})\n`; // Mostrar distância
+    if (finalSuggestionsToShow.length > 0) {
+        if (introMessage) chatMessageContent += introMessage;
+        finalSuggestionsToShow.forEach((product, index) => {
+            chatMessageContent += `\n**${product.name}** (Ref: ${product.code || 'N/A'}`;
+            if (product.source === 'visual') {
+                 chatMessageContent += `, Distância Visual: ${product.distance?.toFixed(4) || 'N/A'}`;
+            }
+            chatMessageContent += `)\n`;
             if (product.imageUrl) {
                 chatMessageContent += `  ![${product.name}](${product.imageUrl})\n`;
             }
             if (product.description) {
-                chatMessageContent += `  *${product.description.substring(0, 100)}${product.description.length > 100 ? '...' : ''}*\n`;
+                 // Descrição mais curta e objetiva
+                const shortDesc = product.description.split(/[\.\r\n]+/)[0]; // Pega a primeira frase ou linha
+                chatMessageContent += `  *${shortDesc}${shortDesc.length < product.description.length ? '...' : ''}*\n`;
             }
         });
-        if (productsWithinThreshold.length > finalGlobalSuggestionsToShow.length) {
-             chatMessageContent += `\n  (... e mais ${productsWithinThreshold.length - finalGlobalSuggestionsToShow.length} sugestões encontradas com boa similaridade visual)\n`;
-        }
+        // Opcional: Adicionar mensagem sobre mais sugestões se houver mais do que 3
+        // if (productsWithinThreshold.length > finalSuggestionsToShow.length) {
+        //      chatMessageContent += `\n  (... e mais ${productsWithinThreshold.length - finalSuggestionsToShow.length} sugestões encontradas com boa similaridade visual)\n`;
+        // }
         chatMessageContent += "\n---\n";
         hasContent = true;
     }
 
-    // Lógica para sugestões textuais (revisada)
-    console.log(`[DEBUG] Verificando sugestões textuais: userRequestedSpecificItem: ${userRequestedSpecificItem}, mainKeyword: ${mainKeyword}, focusedItemsOutputFromTextSearch.length: ${focusedItemsOutputFromTextSearch.length}`);
-    if (userRequestedSpecificItem && mainKeyword && focusedItemsOutputFromTextSearch.length > 0) {
-        const didGlobalSearchFindFocused = finalGlobalSuggestionsToShow.some(p => p.category && normalizeText(p.category).includes(normalizeText(mainKeyword!)));
-        console.log(`[DEBUG] didGlobalSearchFindFocused: ${didGlobalSearchFindFocused}`);
-        
-        if (!didGlobalSearchFindFocused || finalGlobalSuggestionsToShow.length < 2) { 
-            console.log("[DEBUG] Adicionando sugestão textual complementar.");
-            chatMessageContent += `\nBuscando por '${mainKeyword}' na descrição (similaridade textual, pode ser menos precisa):\n`;
-            const textualSuggestion = focusedItemsOutputFromTextSearch[0]; // Mostrar apenas o melhor da textual
-            if (textualSuggestion && textualSuggestion.suggestedProduct && textualSuggestion.suggestedProduct.name) {
-                chatMessageContent += `  - **${textualSuggestion.suggestedProduct.name}** (Ref: ${textualSuggestion.suggestedProduct.code || 'N/A'})\n`;
-                if (textualSuggestion.suggestedProduct.imageUrl) {
-                    chatMessageContent += `    ![${textualSuggestion.suggestedProduct.name}](${textualSuggestion.suggestedProduct.imageUrl})\n`;
-                }
-            } else {
-                chatMessageContent += `  (Não encontrei sugestões por busca textual para '${textualSuggestion?.detectedName || mainKeyword}').\n`;
+    // Lógica para sugestões textuais (REFINADA)
+    // Só adiciona textual se o item focado NÃO foi encontrado visualmente E há sugestões textuais para ele.
+    if (userRequestedSpecificItem && mainKeyword && !foundFocusedItemVisually && focusedItemsOutputFromTextSearch.length > 0) {
+        const textualSuggestion = focusedItemsOutputFromTextSearch.find(item => 
+            (item.detectedName && normalizeText(item.detectedName).includes(normalizeText(mainKeyword))) ||
+            (item.suggestedProduct?.category && normalizeText(item.suggestedProduct.category).includes(normalizeText(mainKeyword))) ||
+            (item.suggestedProduct?.name && normalizeText(item.suggestedProduct.name).includes(normalizeText(mainKeyword)))
+        );
+
+        if (textualSuggestion && textualSuggestion.suggestedProduct) {
+            chatMessageContent += `\nNão encontrei '${mainKeyword}' com alta similaridade visual, mas achei este aqui por texto:\n`;
+            chatMessageContent += `  **${textualSuggestion.suggestedProduct.name}** (Ref: ${textualSuggestion.suggestedProduct.code || 'N/A'})\n`;
+            if (textualSuggestion.suggestedProduct.imageUrl) {
+                chatMessageContent += `    ![${textualSuggestion.suggestedProduct.name}](${textualSuggestion.suggestedProduct.imageUrl})\n`;
+            }
+            const shortDesc = textualSuggestion.suggestedProduct.description?.split(/[\.\r\n]+/)[0];
+            if (shortDesc) {
+                 chatMessageContent += `  *${shortDesc}${shortDesc.length < (textualSuggestion.suggestedProduct.description?.length || 0) ? '...' : ''}*\n`;
             }
             hasContent = true; 
         }
     }
     
-    // Mensagens de Fallback
+    // Mensagens de Fallback (se não houve nenhuma sugestão visual ou textual focada)
     if (!hasContent) {
       if (userRequestedSpecificItem && mainKeyword) {
-        chatMessageContent = `Desculpe, não encontrei nenhuma sugestão visualmente similar para '${mainKeyword}' com base na imagem, nem por busca textual.`;
-      } else if (overallImageDescription) { // Teve descrição global mas nenhum produto acima do threshold
-        chatMessageContent = "Analisei a imagem, mas não encontrei produtos no catálogo com alta similaridade visual no momento.";
-      } else if (identifiedFurniture.length > 0) {
-        chatMessageContent = "Identifiquei alguns objetos na imagem, mas não consegui encontrar sugestões correspondentes no catálogo.";
+        chatMessageContent = `Desculpe, não encontrei nenhuma sugestão para '${mainKeyword}' com base na imagem ou por busca textual.`;
+      } else if (identifiedFurniture.length > 0 && similarProductsVisual.length === 0) { 
+        chatMessageContent = "Analisei a imagem e identifiquei alguns móveis, mas não encontrei produtos visualmente similares no catálogo.";
+      } else if (identifiedFurniture.length === 0 && similarProductsVisual.length === 0) {
+        chatMessageContent = "Não consegui identificar móveis específicos nem encontrar sugestões visuais para esta imagem. Você pode tentar outra imagem ou descrever o que procura?";
       } else {
-        chatMessageContent = "Não consegui processar a imagem ou encontrar informações úteis nela. Você pode tentar outra imagem ou descrever o que procura?";
+        chatMessageContent = "Não consegui encontrar sugestões para esta imagem. Você pode tentar outra ou descrever melhor o que procura?";
       }
-      hasContent = true; // Para garantir que a mensagem de fallback seja enviada
+      hasContent = true; 
     }
 
     console.log(`[DEBUG] FINAL chatMessageContent antes de enviar: "${chatMessageContent.substring(0, 200)}..."`);
 
     if (chatMessageContent.trim() !== "" && hasContent) { 
-        await storage.createAiDesignChatMessage({ projectId, role: "assistant", content: chatMessageContent });
+        const newAiMessage = await storage.createAiDesignChatMessage({ 
+            projectId,
+            role: "assistant", 
+            content: chatMessageContent 
+        });
+        // ADICIONADO: Enviar a nova mensagem via WebSocket
+        if (newAiMessage) {
+            console.log(`[AI Design Processor] Enviando nova mensagem AI via WebSocket para projeto ${projectId}`);
+            broadcastToProject(projectId.toString(), { 
+                type: 'NEW_AI_MESSAGE', 
+                payload: newAiMessage 
+            });
+        }
     }
 
     if (imageUrlToProcess === project.clientRenderImageUrl) {
@@ -753,7 +801,7 @@ export async function processDesignProjectImage(projectId: number, imageUrlToPro
             projectStatusAfterProcessing = 'processed_no_items';
         } else if (focusedItemsOutputFromTextSearch.length > 0) {
             projectStatusAfterProcessing = 'awaiting_selection';
-        } else if (userRequestedSpecificItem && finalGlobalSuggestionsToShow.length === 0) {
+        } else if (userRequestedSpecificItem && finalSuggestionsToShow.length === 0) {
             projectStatusAfterProcessing = 'processed_no_match_for_focus';
         }
         await storage.updateDesignProject(projectId, { status: projectStatusAfterProcessing, updatedAt: new Date() });
@@ -777,6 +825,11 @@ export async function processDesignProjectImage(projectId: number, imageUrlToPro
     } catch (nestedError) {
       console.error(`[AI Design Processor] Erro CRÍTICO ao tentar lidar com erro anterior ou atualizar status para falha (Projeto ${projectId}):`, nestedError);
     }
+    // Considerar enviar uma mensagem de erro via WebSocket também, se apropriado
+    broadcastToProject(projectId.toString(), { 
+        type: 'PROCESSING_ERROR', 
+        payload: { message: error instanceof Error ? error.message : String(error) } 
+    });
   }
 }
 

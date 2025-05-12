@@ -29,6 +29,9 @@ export default function AiDesignChatPage({ params }: { params: { id: string } })
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const chatContainerRef = useRef<HTMLDivElement>(null);
 
+  // Estado para a instância do WebSocket
+  const [websocket, setWebsocket] = useState<WebSocket | null>(null);
+
   // Buscar projeto
   const { data: project, isLoading: isProjectLoading } = useQuery<AiDesignProject>({
     queryKey: [`/api/ai-design-projects/${projectId}`],
@@ -49,8 +52,71 @@ export default function AiDesignChatPage({ params }: { params: { id: string } })
       return res.json();
     },
     enabled: !!projectId && !isNaN(projectId),
-    refetchInterval: project?.status === "processing" ? 5000 : false,
   });
+
+  // useEffect para WebSockets
+  useEffect(() => {
+    if (!projectId || isNaN(projectId)) return;
+
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${wsProtocol}//${window.location.host}/ws?projectId=${projectId}`;
+    
+    console.log(`[WebSocket Frontend] Tentando conectar a: ${wsUrl}`);
+    const newWs = new WebSocket(wsUrl);
+
+    newWs.onopen = () => {
+      console.log(`[WebSocket Frontend] Conexão estabelecida para projeto ${projectId}. URL: ${wsUrl}`);
+      setWebsocket(newWs);
+    };
+
+    newWs.onmessage = (event) => {
+      console.log("[WebSocket] Mensagem recebida do servidor:", event.data);
+      try {
+        const serverMessage = JSON.parse(event.data as string);
+        console.log("[WebSocket] Mensagem parseada:", serverMessage);
+
+        if (serverMessage.type === 'NEW_AI_MESSAGE' && serverMessage.payload) {
+          queryClient.setQueryData<AiDesignChatMessage[]>(
+            [`/api/ai-design-projects/${projectId}/messages`],
+            (oldMessages = []) => [...oldMessages, serverMessage.payload]
+          );
+        } else if (serverMessage.type === 'PROCESSING_ERROR' && serverMessage.payload) {
+          toast({
+            title: "Erro no Processamento da IA",
+            description: serverMessage.payload.message || "Ocorreu um erro no servidor.",
+            variant: "destructive",
+          });
+        }
+
+      } catch (error) {
+        console.error("[WebSocket] Erro ao parsear mensagem do servidor:", error);
+      }
+    };
+
+    newWs.onerror = (errorEvent) => {
+      console.error(`[WebSocket Frontend] Erro na conexão do projeto ${projectId}:`, errorEvent);
+      toast({ 
+        title: "Erro de WebSocket", 
+        description: "A conexão com o chat em tempo real falhou.", 
+        variant: "destructive" 
+      });
+    };
+
+    newWs.onclose = (event) => {
+      console.log(`[WebSocket Frontend] Desconectado do projeto ${projectId}. Código: ${event.code}, Razão: "${event.reason}"`);
+      toast({ 
+        title: "Chat Desconectado", 
+        description: `Conexão em tempo real perdida: ${event.reason || event.code}`,
+        variant: "warning" 
+      });
+      setWebsocket(null);
+    };
+
+    return () => {
+      console.log("[WebSocket Frontend] Fechando conexão WebSocket ao desmontar componente...");
+      newWs.close();
+    };
+  }, [projectId, toast]);
 
   // Enviar mensagem
   const sendMessageMutation = useMutation({
@@ -68,7 +134,6 @@ export default function AiDesignChatPage({ params }: { params: { id: string } })
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: [`/api/ai-design-projects/${projectId}/messages`] });
       setMessage("");
       setFile(null);
     },
