@@ -26,6 +26,7 @@ export default function Navigation() {
     { name: "Orçamentos", path: "/quotes" },
     { name: "Moodboards", path: "/moodboards" },
     { name: "Design com IA", path: "/ai-design" },
+    { name: "Teste WebSocket", path: "/websocket-test" },
   ];
 
   return (

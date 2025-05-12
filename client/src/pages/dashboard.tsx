@@ -1,8 +1,9 @@
-import { useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState, useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
 import { Product } from "@shared/schema";
+import { useRealtimeProducts } from "@/hooks/use-realtime-products";
 
 import FilterSidebar from "@/components/filters/filter-sidebar";
 import SearchSort from "@/components/catalog/search-sort";
@@ -32,28 +33,17 @@ export default function Dashboard() {
   const [sortOption, setSortOption] = useState("relevance");
   const [view, setView] = useState<"grid" | "list">("grid");
 
-  // BUSCAR APENAS OS PRODUTOS
+  // BUSCAR PRODUTOS COM ATUALIZAÇÕES EM TEMPO REAL
   const { 
     data: products, 
     isLoading: isLoadingProducts,
     error: errorProducts
-  } = useQuery<Product[]>({ 
-    queryKey: ["/backend/products", user?.id],
-    queryFn: async () => {
-      console.log(`[Dashboard] Buscando TODOS os produtos do usuário ${user?.id}`);
-      const response = await fetch(`/backend/products`);       
-      if (!response.ok) {
-        const errorText = await response.text(); 
-        console.error(`[Dashboard] Erro HTTP buscando produtos: ${response.status}`, errorText);
-        throw new Error(`Erro HTTP buscando produtos: ${response.status}`);
-      }
-      const data = await response.json();
-      console.log(`[Dashboard] Produtos recebidos para o usuário ${user?.id}:`, data);
-      return data;
-    },
-    enabled: !!user, 
-    refetchOnWindowFocus: true,
-  });
+  } = useRealtimeProducts(user?.id);
+  
+  // Adicionar notificação quando novos dados são recebidos via WebSocket
+  useEffect(() => {
+    console.log(`[Dashboard] Produtos atualizados via WebSocket para o usuário ${user?.id}`, products);
+  }, [products, user?.id]);
 
   // Adicionar log para verificar os produtos brutos recebidos
   // console.log("[Dashboard] Raw products received from query:", products);
