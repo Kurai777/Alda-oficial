@@ -5,10 +5,7 @@
  * mensagens em tempo real aos clientes conectados.
  */
 
-import { WebSocket, WebSocketServer } from 'ws';
-
-// Constantes para estados de WebSocket para evitar usar WebSocket como namespace
-const WS_OPEN = 1; // WebSocket.OPEN
+import * as ws from 'ws';
 
 // Tipos de eventos que podem ser enviados para os clientes
 export type WebSocketEventType = 
@@ -33,21 +30,21 @@ export interface WebSocketMessage {
 
 // Interface para uma conexão de cliente
 interface ClientConnection {
-  socket: WebSocket;
+  socket: ws.WebSocket;
   userId?: number; // ID do usuário associado à conexão
   projectId?: string; // ID do projeto específico (se aplicável)
   lastActivity: number; // Timestamp da última atividade
 }
 
 class WebSocketManager {
-  private wss: WebSocketServer | null = null;
-  private clients: Map<WebSocket, ClientConnection> = new Map();
-  private projectClients: Map<string, Set<WebSocket>> = new Map();
-  private userClients: Map<number, Set<WebSocket>> = new Map();
+  private wss: ws.WebSocketServer | null = null;
+  private clients: Map<ws.WebSocket, ClientConnection> = new Map();
+  private projectClients: Map<string, Set<ws.WebSocket>> = new Map();
+  private userClients: Map<number, Set<ws.WebSocket>> = new Map();
   private pingInterval: NodeJS.Timeout | null = null;
 
   // Inicializa o WebSocketServer
-  initialize(wss: WebSocketServer) {
+  initialize(wss: ws.WebSocketServer) {
     if (this.wss) {
       console.warn('[WebSocketManager] WebSocketServer já inicializado.');
       return;
@@ -58,7 +55,7 @@ class WebSocketManager {
 
     // Configurar event handlers
     this.wss.on('connection', this.handleConnection.bind(this));
-    this.wss.on('error', (error) => {
+    this.wss.on('error', (error: any) => {
       console.error('[WebSocketManager] Erro no servidor WebSocket:', error);
     });
 
@@ -69,7 +66,7 @@ class WebSocketManager {
   }
 
   // Trata nova conexão de cliente
-  private handleConnection(socket: WebSocket, request: any) {
+  private handleConnection(socket: ws.WebSocket, request: any) {
     // Extrair dados da URL de conexão (ex: projectId, userId, etc.)
     const url = new URL(request.url, `http://${request.headers.host}`);
     const projectId = url.searchParams.get('projectId');
@@ -101,20 +98,20 @@ class WebSocketManager {
       this.handleDisconnect(socket);
     });
 
-    socket.on('error', (error) => {
+    socket.on('error', (error: any) => {
       console.error('[WebSocketManager] Erro no socket de cliente:', error);
       // O evento 'close' será chamado automaticamente após um erro
     });
 
     // Enviar mensagem de boas-vindas (opcional)
-    this.sendToClient(socket, 'CONNECTION_ESTABLISHED', { 
+    this.sendToClient(socket, 'CHAT_MESSAGE', { 
       message: 'Conexão estabelecida com o servidor',
       timestamp: Date.now()
     });
   }
 
   // Trata mensagens recebidas dos clientes
-  private handleMessage(socket: WebSocket, data: WebSocket.Data) {
+  private handleMessage(socket: ws.WebSocket, data: any) {
     const client = this.clients.get(socket);
     if (!client) return;
 
@@ -137,7 +134,7 @@ class WebSocketManager {
   }
 
   // Associa um ID de usuário ao socket
-  private associateUserId(socket: WebSocket, userId: number) {
+  private associateUserId(socket: ws.WebSocket, userId: number) {
     const client = this.clients.get(socket);
     if (!client) return;
 
@@ -153,7 +150,7 @@ class WebSocketManager {
   }
 
   // Trata desconexão de cliente
-  private handleDisconnect(socket: WebSocket) {
+  private handleDisconnect(socket: ws.WebSocket) {
     const client = this.clients.get(socket);
     if (!client) return;
 
@@ -208,8 +205,8 @@ class WebSocketManager {
   }
 
   // Envia mensagem para um cliente específico
-  sendToClient(client: WebSocket, type: WebSocketEventType | string, payload: any) {
-    if (client.readyState !== WebSocket.OPEN) {
+  sendToClient(client: ws.WebSocket, type: WebSocketEventType | string, payload: any) {
+    if (client.readyState !== 1) { // WebSocket.OPEN é 1
       return false;
     }
 
@@ -239,7 +236,7 @@ class WebSocketManager {
     let sentCount = 0;
     
     this.clients.forEach((client, socket) => {
-      if (socket.readyState === WebSocket.OPEN) {
+      if (socket.readyState === 1) { // WebSocket.OPEN é 1
         socket.send(message);
         sentCount++;
       }
@@ -268,7 +265,7 @@ class WebSocketManager {
     let sentCount = 0;
     
     userSockets.forEach(socket => {
-      if (socket.readyState === WebSocket.OPEN) {
+      if (socket.readyState === 1) { // WebSocket.OPEN é 1
         socket.send(message);
         sentCount++;
       }
@@ -301,7 +298,7 @@ class WebSocketManager {
     let sentCount = 0;
     
     projectSockets.forEach(socket => {
-      if (socket.readyState === WebSocket.OPEN) {
+      if (socket.readyState === 1) { // WebSocket.OPEN é 1
         try {
           socket.send(message);
           sentCount++;

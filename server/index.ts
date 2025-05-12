@@ -36,6 +36,44 @@ export const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
 // Inicializar o gerenciador WebSocket com o servidor WebSocket
 webSocketManager.initialize(wss);
 
+// Conectar eventos do WebSocket para gerenciar conexões
+wss.on('connection', (socket, request) => {
+    console.log('[WebSocket] Nova conexão recebida');
+    
+    // Processar a URL da solicitação para obter o ID do projeto
+    const url = new URL(request.url || '/', `http://${request.headers.host}`);
+    const projectId = url.searchParams.get('projectId');
+    
+    if (projectId) {
+        // Adicionar a conexão ao mapa de conexões ativas para compatibilidade com código legado
+        if (!activeConnections.has(projectId)) {
+            activeConnections.set(projectId, new Set());
+        }
+        activeConnections.get(projectId)?.add(socket);
+        console.log(`[WebSocket] Cliente conectado ao projeto ${projectId}`);
+    }
+    
+    // Definir handlers para eventos de socket
+    socket.on('close', () => {
+        console.log('[WebSocket] Conexão fechada');
+        
+        // Remover do mapa de conexões ativas (para compatibilidade)
+        if (projectId) {
+            const connections = activeConnections.get(projectId);
+            if (connections) {
+                connections.delete(socket);
+                if (connections.size === 0) {
+                    activeConnections.delete(projectId);
+                }
+            }
+        }
+    });
+    
+    socket.on('error', (error) => {
+        console.error('[WebSocket] Erro na conexão:', error);
+    });
+});
+
 // Manter o activeConnections e a função broadcastToProject para compatibilidade
 const activeConnections = new Map<string, Set<WebSocket>>();
 
@@ -45,7 +83,7 @@ export function broadcastToProject(projectId: string, message: object) {
     // Log para rastreamento
     console.log(`[WebSocket Backend] Tentando broadcast para projeto ID: '${projectId}' (tipo: ${typeof projectId})`);
     
-    // Usar o novo gerenciador WebSocket
+    // Usar o novo gerenciador WebSocket com o tipo correto importado
     const sentCount = webSocketManager.broadcastToProject(projectId, 'PROJECT_UPDATE', message);
     console.log(`[WebSocket Backend] Mensagem enviada para ${sentCount} clientes`);
     
