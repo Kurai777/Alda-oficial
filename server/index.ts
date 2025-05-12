@@ -30,6 +30,9 @@ import { pdfRouterSimple } from './pdf-routes-simple';
 const app = express();
 const httpServer = createServer(app); // Criar httpServer no escopo superior
 
+// Manter o activeConnections para compatibilidade
+const activeConnections = new Map<string, Set<WebSocket>>();
+
 // Exportar wss para que outros módulos possam usá-lo para enviar mensagens
 export const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
 
@@ -73,9 +76,6 @@ wss.on('connection', (socket, request) => {
         console.error('[WebSocket] Erro na conexão:', error);
     });
 });
-
-// Manter o activeConnections e a função broadcastToProject para compatibilidade
-const activeConnections = new Map<string, Set<WebSocket>>();
 
 // Função para enviar mensagens para todos os clientes de um projeto específico
 // Agora usando o gerenciador WebSocket aprimorado, mas mantendo a API antiga

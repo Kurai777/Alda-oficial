@@ -14,6 +14,7 @@ import Moodboards from "@/pages/moodboards";
 import Profile from "@/pages/profile";
 import AiDesign from "@/pages/ai-design";
 import AiDesignChat from "@/pages/ai-design-chat";
+import WebSocketTest from "@/pages/websocket-test";
 import Layout from "@/components/layout/layout";
 import { AuthProvider } from "@/lib/auth";
 import DesignAiPage from "@/pages/design-ai";
@@ -103,6 +104,12 @@ function Router() {
           </ProtectedRoute>
         )}
       </Route>
+      
+      <ProtectedRoute path="/websocket-test">
+        <Layout>
+          <WebSocketTest />
+        </Layout>
+      </ProtectedRoute>
       
       <Route component={NotFound} />
     </Switch>

@@ -74,6 +74,11 @@ class WebSocketService {
     }
   }
 
+  // Verifica se o WebSocket está conectado
+  isConnected(): boolean {
+    return this.socket !== null && this.socket.readyState === WebSocket.OPEN;
+  }
+  
   // Desconecta o WebSocket
   disconnect() {
     if (this.reconnectTimeout) {
