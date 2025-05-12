@@ -116,8 +116,8 @@ export default function Dashboard() {
         .filter((product: Product) => {
           // Filter by color
           if (filters.colors.length > 0) {
-            return filters.colors.some((color: string) => 
-              product.colors?.includes(color)
+            return product.colors && product.colors.some((color: string) => 
+              filters.colors.includes(color)
             );
           }
           return true;

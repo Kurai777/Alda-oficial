@@ -14,6 +14,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import WebSocketConnectionStatus from "@/components/websocket/connection-status";
 
 export default function Navigation() {
   const { user, logout } = useAuth();
@@ -56,6 +57,10 @@ export default function Navigation() {
             </div>
           </div>
           <div className="hidden sm:ml-6 sm:flex sm:items-center">
+            <div className="mr-4">
+              <WebSocketConnectionStatus />
+            </div>
+            
             <Button variant="ghost" size="icon" className="mr-2">
               <Bell className="h-5 w-5" />
             </Button>
@@ -63,10 +68,10 @@ export default function Navigation() {
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" className="flex items-center gap-2">
-                  {user?.photoURL ? (
+                  {false ? (
                     <img 
-                      src={user.photoURL} 
-                      alt={user.companyName || 'Usuário'} 
+                      src="" 
+                      alt={user?.companyName || 'Usuário'} 
                       className="h-8 w-8 rounded-full object-cover"
                     />
                   ) : (
@@ -124,10 +129,10 @@ export default function Navigation() {
           <div className="pt-4 pb-3 border-t border-gray-200">
             <div className="flex items-center px-4">
               <div className="flex-shrink-0">
-                {user?.photoURL ? (
+                {false ? (
                   <img 
-                    src={user.photoURL} 
-                    alt={user.companyName || 'Usuário'} 
+                    src="" 
+                    alt={user?.companyName || 'Usuário'} 
                     className="h-10 w-10 rounded-full object-cover"
                   />
                 ) : (
