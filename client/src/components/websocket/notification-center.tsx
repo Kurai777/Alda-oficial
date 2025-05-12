@@ -153,12 +153,36 @@ export default function NotificationCenter() {
   };
   
   // Subscrever a todos os tipos de evento de notificação
-  NOTIFICATION_EVENTS.forEach(eventType => {
-    useWebSocket(eventType, (payload) => {
-      console.log(`[WebSocket] Notificação recebida: ${eventType}`, payload);
-      processWebSocketEvent(payload, eventType);
-    }, user?.id);
-  });
+  // Não podemos chamar hooks em loops, então devemos definir manualmente para cada tipo
+  useWebSocket('PRODUCT_CREATED', (payload) => {
+    console.log(`[WebSocket] Notificação recebida: PRODUCT_CREATED`, payload);
+    processWebSocketEvent(payload, 'PRODUCT_CREATED');
+  }, user?.id);
+  
+  useWebSocket('PRODUCT_UPDATED', (payload) => {
+    console.log(`[WebSocket] Notificação recebida: PRODUCT_UPDATED`, payload);
+    processWebSocketEvent(payload, 'PRODUCT_UPDATED');
+  }, user?.id);
+  
+  useWebSocket('CATALOG_CREATED', (payload) => {
+    console.log(`[WebSocket] Notificação recebida: CATALOG_CREATED`, payload);
+    processWebSocketEvent(payload, 'CATALOG_CREATED');
+  }, user?.id);
+  
+  useWebSocket('CATALOG_UPDATED', (payload) => {
+    console.log(`[WebSocket] Notificação recebida: CATALOG_UPDATED`, payload);
+    processWebSocketEvent(payload, 'CATALOG_UPDATED');
+  }, user?.id);
+  
+  useWebSocket('QUOTE_CREATED', (payload) => {
+    console.log(`[WebSocket] Notificação recebida: QUOTE_CREATED`, payload);
+    processWebSocketEvent(payload, 'QUOTE_CREATED');
+  }, user?.id);
+  
+  useWebSocket('QUOTE_UPDATED', (payload) => {
+    console.log(`[WebSocket] Notificação recebida: QUOTE_UPDATED`, payload);
+    processWebSocketEvent(payload, 'QUOTE_UPDATED');
+  }, user?.id);
   
   // Marcar notificações como lidas quando o popover é aberto
   useEffect(() => {

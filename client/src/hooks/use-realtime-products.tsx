@@ -65,17 +65,17 @@ export function useRealtimeProducts(userId?: number, catalogId?: number) {
   };
   
   // Inscrever-se para CRIAÇÃO de produto
-  useWebSocket(['PRODUCT_CREATED'], (payload) => {
+  useWebSocket('PRODUCT_CREATED', (payload) => {
     processWebSocketEvent(payload, 'PRODUCT_CREATED');
   }, userId);
   
   // Inscrever-se para ATUALIZAÇÃO de produto
-  useWebSocket(['PRODUCT_UPDATED'], (payload) => {
+  useWebSocket('PRODUCT_UPDATED', (payload) => {
     processWebSocketEvent(payload, 'PRODUCT_UPDATED');
   }, userId);
   
   // Inscrever-se para EXCLUSÃO de produto
-  useWebSocket(['PRODUCT_DELETED'], (payload) => {
+  useWebSocket('PRODUCT_DELETED', (payload) => {
     processWebSocketEvent(payload, 'PRODUCT_DELETED');
   }, userId);
   

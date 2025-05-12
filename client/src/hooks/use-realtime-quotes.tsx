@@ -33,9 +33,19 @@ export function useRealtimeQuotes(userId?: number) {
   });
   
   // Inscrever-se para atualizações em tempo real via WebSocket
-  useWebSocket(['QUOTE_CREATED', 'QUOTE_UPDATED'], (payload) => {
-    console.log('[WebSocket] Recebida atualização de orçamento:', payload);
-    
+  // Separamos para cada tipo de evento para evitar o erro de hooks
+  useWebSocket('QUOTE_CREATED', (payload) => {
+    console.log('[WebSocket] Recebida atualização de orçamento (criado):', payload);
+    handleQuoteUpdate(payload, 'QUOTE_CREATED');
+  }, userId);
+  
+  useWebSocket('QUOTE_UPDATED', (payload) => {
+    console.log('[WebSocket] Recebida atualização de orçamento (atualizado):', payload);
+    handleQuoteUpdate(payload, 'QUOTE_UPDATED');
+  }, userId);
+  
+  // Função auxiliar para processar atualizações de orçamento
+  function handleQuoteUpdate(payload: any, eventType: string) {
     // Extrair o orçamento dos dados de payload
     const quote = payload.quote;
     
@@ -49,11 +59,11 @@ export function useRealtimeQuotes(userId?: number) {
     
     // Mostrar notificação toast
     toast({
-      title: getToastTitle(payload.type),
+      title: getToastTitle(eventType),
       description: `Cliente: ${quote.clientName || 'Sem nome'}, Valor: ${formatCurrency(quote.totalAmount || 0)}`,
       variant: 'default',
     });
-  });
+  }
   
   // Retornar os mesmos valores que useQuery
   return query;

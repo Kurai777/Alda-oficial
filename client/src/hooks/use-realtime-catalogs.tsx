@@ -33,9 +33,24 @@ export function useRealtimeCatalogs(userId?: number) {
   });
   
   // Inscrever-se para atualizações em tempo real via WebSocket
-  useWebSocket(['CATALOG_CREATED', 'CATALOG_UPDATED', 'CATALOG_DELETED'], (payload) => {
-    console.log('[WebSocket] Recebida atualização de catálogo:', payload);
-    
+  // Separamos para cada tipo de evento para evitar o erro de hooks
+  useWebSocket('CATALOG_CREATED', (payload) => {
+    console.log('[WebSocket] Recebida atualização de catálogo (criado):', payload);
+    handleCatalogUpdate(payload, 'CATALOG_CREATED');
+  }, userId);
+  
+  useWebSocket('CATALOG_UPDATED', (payload) => {
+    console.log('[WebSocket] Recebida atualização de catálogo (atualizado):', payload);
+    handleCatalogUpdate(payload, 'CATALOG_UPDATED');
+  }, userId);
+  
+  useWebSocket('CATALOG_DELETED', (payload) => {
+    console.log('[WebSocket] Recebida atualização de catálogo (excluído):', payload);
+    handleCatalogUpdate(payload, 'CATALOG_DELETED');
+  }, userId);
+  
+  // Função auxiliar para processar atualizações de catálogo
+  function handleCatalogUpdate(payload: any, eventType: string) {
     // Extrair o catálogo dos dados de payload
     const catalog = payload.catalog;
     
@@ -49,11 +64,11 @@ export function useRealtimeCatalogs(userId?: number) {
     
     // Mostrar notificação toast
     toast({
-      title: getToastTitle(payload.type),
+      title: getToastTitle(eventType),
       description: `${catalog.name}`,
       variant: 'default',
     });
-  });
+  }
   
   // Retornar os mesmos valores que useQuery
   return query;
