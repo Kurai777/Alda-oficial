@@ -36,7 +36,7 @@ class WebSocketService {
   private maxReconnectAttempts = 5;
   private reconnectTimeout: NodeJS.Timeout | null = null;
   private isConnecting = false;
-  private projectId: string | null = null;
+  private projectId?: string;
 
   // Inicializa a conexão WebSocket
   connect(projectId?: string | number) {
@@ -46,7 +46,7 @@ class WebSocketService {
     }
 
     this.isConnecting = true;
-    this.projectId = projectId?.toString() || null;
+    this.projectId = projectId ? projectId.toString() : undefined;
 
     try {
       // Determinar o protocolo correto (ws/wss)

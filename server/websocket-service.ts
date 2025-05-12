@@ -7,6 +7,9 @@
 
 import { WebSocket, WebSocketServer } from 'ws';
 
+// Constantes para estados de WebSocket para evitar usar WebSocket como namespace
+const WS_OPEN = 1; // WebSocket.OPEN
+
 // Tipos de eventos que podem ser enviados para os clientes
 export type WebSocketEventType = 
   | 'PRODUCT_CREATED' 
@@ -18,7 +21,8 @@ export type WebSocketEventType =
   | 'QUOTE_CREATED'
   | 'QUOTE_UPDATED'
   | 'DESIGN_PROJECT_UPDATED'
-  | 'CHAT_MESSAGE';
+  | 'CHAT_MESSAGE'
+  | 'PROJECT_UPDATE';
 
 // Estrutura de uma mensagem WebSocket
 export interface WebSocketMessage {
@@ -196,7 +200,7 @@ class WebSocketManager {
         }
         
         // Enviar ping se a conexão estiver aberta
-        if (socket.readyState === WebSocket.OPEN) {
+        if (socket.readyState === 1) { // WebSocket.OPEN é 1
           socket.ping();
         }
       });

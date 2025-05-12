@@ -21,6 +21,9 @@ import { migrate } from "./db";
 import { storage } from "./storage";
 import { initializeClipModel } from './clip-service';
 
+// Importar serviço WebSocket aprimorado
+import { webSocketManager } from './websocket-service';
+
 // Importe para rotas de PDF simples (corrigindo o erro de require)
 import { pdfRouterSimple } from './pdf-routes-simple';
 
@@ -30,12 +33,23 @@ const httpServer = createServer(app); // Criar httpServer no escopo superior
 // Exportar wss para que outros módulos possam usá-lo para enviar mensagens
 export const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
 
+// Inicializar o gerenciador WebSocket com o servidor WebSocket
+webSocketManager.initialize(wss);
+
+// Manter o activeConnections e a função broadcastToProject para compatibilidade
 const activeConnections = new Map<string, Set<WebSocket>>();
 
 // Função para enviar mensagens para todos os clientes de um projeto específico
+// Agora usando o gerenciador WebSocket aprimorado, mas mantendo a API antiga
 export function broadcastToProject(projectId: string, message: object) {
-    // ADICIONAR LOGS DE DEBUG AQUI
+    // Log para rastreamento
     console.log(`[WebSocket Backend] Tentando broadcast para projeto ID: '${projectId}' (tipo: ${typeof projectId})`);
+    
+    // Usar o novo gerenciador WebSocket
+    const sentCount = webSocketManager.broadcastToProject(projectId, 'PROJECT_UPDATE', message);
+    console.log(`[WebSocket Backend] Mensagem enviada para ${sentCount} clientes`);
+    
+    // Também usar o mecanismo antigo para compatibilidade
     console.log('[WebSocket Backend] Conexões ativas no Map (chaves dos projetos):', Array.from(activeConnections.keys()));
 
     const connections = activeConnections.get(projectId);
