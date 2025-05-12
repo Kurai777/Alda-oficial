@@ -13,6 +13,8 @@ import { nanoid } from "nanoid";
 import { createServer } from "http";
 import { WebSocketServer } from "ws";
 import { addS3ImageRoutes } from "./s3-image-routes";
+// Importar middleware CORS
+import cors from "cors";
 
 // Importar módulos de banco de dados e storage
 import { migrate } from "./db";
@@ -22,6 +24,33 @@ import { storage } from "./storage";
 import { pdfRouterSimple } from './pdf-routes-simple';
 
 const app = express();
+
+// Configurar CORS para permitir requisições do domínio de deploy
+const corsOptions = {
+  origin: function(origin, callback) {
+    // Em desenvolvimento, permita qualquer origem
+    if (!origin || process.env.NODE_ENV !== 'production') {
+      callback(null, true);
+      return;
+    }
+    
+    // Em produção, permita apenas domínios específicos
+    const allowedOrigins = [
+      'https://alda-automation-brunoeted.replit.app',
+      'https://ald-a.com.br',
+      'https://www.ald-a.com.br'
+    ];
+    
+    if (allowedOrigins.indexOf(origin) !== -1 || origin.endsWith('.replit.app')) {
+      callback(null, true);
+    } else {
+      callback(new Error('Bloqueado pelo CORS'));
+    }
+  },
+  credentials: true // Importante: permite enviar cookies com a requisição
+};
+
+app.use(cors(corsOptions));
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ extended: false, limit: '100mb' }));
 
@@ -33,9 +62,10 @@ app.use(session({
   resave: false,
   saveUninitialized: false,
   cookie: { 
-    secure: process.env.NODE_ENV === 'production',
+    secure: process.env.NODE_ENV === 'production' ? 'auto' : false, // 'auto' permite que o Express detecte HTTPS
     maxAge: 1000 * 60 * 60 * 24 * 7, // 1 semana
-    httpOnly: true
+    httpOnly: true,
+    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax' // Permitir cookies cross-site em produção
   }
 }));
 
