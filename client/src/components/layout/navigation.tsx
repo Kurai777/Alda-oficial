@@ -4,7 +4,6 @@ import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import {
   ChevronDown,
-  Bell,
   Menu,
   User
 } from "lucide-react";
@@ -15,6 +14,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import WebSocketConnectionStatus from "@/components/websocket/connection-status";
+import NotificationCenter from "@/components/websocket/notification-center";
 
 export default function Navigation() {
   const { user, logout } = useAuth();
@@ -61,9 +61,9 @@ export default function Navigation() {
               <WebSocketConnectionStatus />
             </div>
             
-            <Button variant="ghost" size="icon" className="mr-2">
-              <Bell className="h-5 w-5" />
-            </Button>
+            <div className="mr-2">
+              <NotificationCenter />
+            </div>
             
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -145,9 +145,9 @@ export default function Navigation() {
                 <div className="text-base font-medium text-gray-800">{user?.companyName}</div>
                 <div className="text-sm font-medium text-gray-500">{user?.email}</div>
               </div>
-              <Button variant="ghost" size="icon" className="ml-auto">
-                <Bell className="h-6 w-6" />
-              </Button>
+              <div className="ml-auto">
+                <NotificationCenter />
+              </div>
             </div>
             <div className="mt-3 space-y-1">
               <Link href="/profile" className="block px-4 py-2 text-base font-medium text-gray-500 hover:text-gray-800 hover:bg-gray-100">

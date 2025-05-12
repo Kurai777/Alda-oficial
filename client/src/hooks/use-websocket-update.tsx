@@ -1,118 +1,65 @@
-import { useCallback } from 'react';
-import { webSocketService, WebSocketEventType } from '@/lib/websocketService';
-import { useQueryClient } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
+import { useWebSocket } from '@/lib/websocketService';
 import { useToast } from '@/hooks/use-toast';
+import { WebSocketEventType } from '@/lib/websocketService';
 
 /**
- * Hook para facilitar o envio de notificações de atualização via WebSocket
- * e invalidar automaticamente queries do TanStack Query.
+ * Hook genérico para atualizações em tempo real via WebSocket
  * 
- * @param options Opções de configuração do hook
- * @returns Funções para enviar notificações de atualização
+ * Este hook facilita a recepção de atualizações de uma ou mais fontes via WebSocket,
+ * fornecendo uma forma simplificada de atualizar o estado local quando eventos ocorrem.
  */
-export function useWebSocketUpdate(options: {
-  /** IDs de queries para invalidar após notificações */
-  invalidateQueries?: string[],
-  /** Exibir toast de confirmação ao enviar notificação */
-  showToasts?: boolean
-} = {}) {
-  const queryClient = useQueryClient();
+export function useWebSocketUpdate<T>(
+  eventTypes: WebSocketEventType | WebSocketEventType[],
+  initialData: T,
+  extractData: (payload: any) => T | null,
+  options?: {
+    userId?: number;
+    showToast?: boolean;
+    toastConfig?: {
+      title: string;
+      description?: (data: T) => string;
+    };
+  }
+) {
+  const [data, setData] = useState<T>(initialData);
+  const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const { toast } = useToast();
-  const { invalidateQueries = [], showToasts = false } = options;
-
-  /**
-   * Envia uma notificação de atualização para clientes conectados ao mesmo projeto
-   */
-  const sendUpdateNotification = useCallback((
-    type: WebSocketEventType, 
-    payload: any, 
-    projectId?: string | number
-  ) => {
-    // Enviar notificação via WebSocket
-    const success = webSocketService.send(type, { ...payload, projectId });
-
-    if (success) {
-      // Log para depuração
-      console.log(`[WebSocket] Enviada notificação de atualização: ${type}`, payload);
+  
+  // Normalizar eventTypes para um array
+  const eventTypesArray = Array.isArray(eventTypes) ? eventTypes : [eventTypes];
+  
+  // Processar atualização recebida
+  const handleUpdate = (payload: any) => {
+    console.log(`[WebSocket] Recebida atualização para ${eventTypesArray.join(', ')}:`, payload);
+    
+    const extractedData = extractData(payload);
+    if (extractedData !== null) {
+      setData(extractedData);
+      setLastUpdate(new Date());
       
-      // Invalidar queries locais
-      if (invalidateQueries.length > 0) {
-        invalidateQueries.forEach(queryKey => {
-          console.log(`[WebSocket] Invalidando query: ${queryKey}`);
-          queryClient.invalidateQueries({ queryKey: [queryKey] });
-        });
-      }
-
-      // Exibir toast de confirmação se configurado
-      if (showToasts) {
-        const messages: Record<string, string> = {
-          'PRODUCT_CREATED': 'Produto criado com sucesso',
-          'PRODUCT_UPDATED': 'Produto atualizado com sucesso',
-          'PRODUCT_DELETED': 'Produto excluído com sucesso',
-          'CATALOG_CREATED': 'Catálogo criado com sucesso',
-          'CATALOG_UPDATED': 'Catálogo atualizado com sucesso',
-          'CATALOG_DELETED': 'Catálogo excluído com sucesso',
-          'QUOTE_CREATED': 'Orçamento criado com sucesso',
-          'QUOTE_UPDATED': 'Orçamento atualizado com sucesso',
-          'DESIGN_PROJECT_UPDATED': 'Projeto de design atualizado',
-          'CHAT_MESSAGE': 'Mensagem enviada',
-          'PROJECT_UPDATE': 'Projeto atualizado com sucesso',
-        };
-
+      // Mostrar toast se habilitado
+      if (options?.showToast && options.toastConfig) {
         toast({
-          title: messages[type] || 'Operação realizada com sucesso',
-          description: 'Outros dispositivos conectados serão notificados da alteração'
+          title: options.toastConfig.title,
+          description: options.toastConfig.description ? 
+            options.toastConfig.description(extractedData) : 
+            'Dados atualizados',
+          variant: 'default',
         });
       }
-
-      return true;
-    } else {
-      console.error('[WebSocket] Falha ao enviar notificação de atualização');
-      return false;
     }
-  }, [invalidateQueries, queryClient, showToasts, toast]);
-
-  /**
-   * Notifica sobre a criação de um produto
-   */
-  const notifyProductCreated = useCallback((productData: any, projectId?: string | number) => {
-    return sendUpdateNotification('PRODUCT_CREATED', { product: productData }, projectId);
-  }, [sendUpdateNotification]);
-
-  /**
-   * Notifica sobre a atualização de um produto
-   */
-  const notifyProductUpdated = useCallback((productData: any, projectId?: string | number) => {
-    return sendUpdateNotification('PRODUCT_UPDATED', { product: productData }, projectId);
-  }, [sendUpdateNotification]);
-
-  /**
-   * Notifica sobre a criação de um catálogo
-   */
-  const notifyCatalogCreated = useCallback((catalogData: any, projectId?: string | number) => {
-    return sendUpdateNotification('CATALOG_CREATED', { catalog: catalogData }, projectId);
-  }, [sendUpdateNotification]);
-
-  /**
-   * Notifica sobre a atualização de um catálogo
-   */
-  const notifyCatalogUpdated = useCallback((catalogData: any, projectId?: string | number) => {
-    return sendUpdateNotification('CATALOG_UPDATED', { catalog: catalogData }, projectId);
-  }, [sendUpdateNotification]);
-
-  /**
-   * Notifica sobre a criação ou atualização de um orçamento
-   */
-  const notifyQuoteUpdated = useCallback((quoteData: any, projectId?: string | number) => {
-    return sendUpdateNotification('QUOTE_UPDATED', { quote: quoteData }, projectId);
-  }, [sendUpdateNotification]);
-
+  };
+  
+  // Inscrever-se em cada tipo de evento
+  eventTypesArray.forEach(eventType => {
+    useWebSocket(eventType, handleUpdate, options?.userId);
+  });
+  
   return {
-    sendUpdateNotification,
-    notifyProductCreated,
-    notifyProductUpdated,
-    notifyCatalogCreated,
-    notifyCatalogUpdated,
-    notifyQuoteUpdated
+    data,
+    lastUpdate,
+    setData, // Permitir atualizações manuais
+    isUpdated: lastUpdate !== null
   };
 }
