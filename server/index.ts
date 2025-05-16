@@ -1,4 +1,4 @@
-import express, { type Request, Response, NextFunction } from "express";
+import express, { type Request, Response, NextFunction, Router as ExpressRouter } from "express";
 import { registerRoutes } from "./routes";
 import { serveStatic, log } from "./vite";
 import { createServer as createViteServer } from 'vite';
@@ -15,6 +15,9 @@ import { WebSocketServer, WebSocket } from "ws";
 import { addS3ImageRoutes } from "./s3-image-routes";
 // Importar middleware CORS
 import cors, { CorsOptions } from "cors";
+import multer from "multer";
+// @ts-ignore
+import { getS3UploadMiddleware, checkS3Configuration } from "./s3-service.js";
 
 // Importar módulos de banco de dados e storage
 import { migrate } from "./db";
@@ -164,6 +167,22 @@ if (process.env.NODE_ENV === 'development') {
   });
 }
 
+// Inicializa com localStorage como fallback, será sobrescrito se S3 estiver OK
+let upload = multer({ 
+  storage: multer.diskStorage({
+    destination: function (req, file, cb) {
+      const uploadPath = path.resolve(import.meta.dirname, '../uploads'); // Ajustar path se necessário
+      if (!fs.existsSync(uploadPath)) {
+        fs.mkdirSync(uploadPath, { recursive: true });
+      }
+      cb(null, uploadPath);
+    },
+    filename: function (req, file, cb) {
+      cb(null, Date.now() + '-' + file.originalname);
+    }
+  })
+});
+
 (async () => {
   // Executar migração
   try {
@@ -185,28 +204,55 @@ if (process.env.NODE_ENV === 'development') {
     process.exit(1); // Sair se o modelo essencial não puder ser carregado
   }
 
-  // ===== ADICIONAR CONFIGURAÇÃO S3 E ROTAS DE IMAGEM =====
-  // === COMENTAR TEMPORARIAMENTE ADD S3 IMAGE ROUTES ===
-  /*
+  // Configuração S3 e definição do middleware de Upload GLOBAL
+  console.log("Configurando middleware de upload...");
   try {
-      const { addS3ImageRoutes } = await import('./s3-image-routes');
-      await addS3ImageRoutes(app); // <<< Adicionar rotas de imagem ao app principal
-      console.log("Rotas de imagem S3 adicionadas ao app.");
-  } catch (error) {
-      console.error('ERRO CRÍTICO ao adicionar rotas de imagem S3:', error);
+    const s3Config = await checkS3Configuration();
+    if (s3Config.status === 'success') {
+      console.log(`✅ Amazon S3 conectado com sucesso - Bucket: ${s3Config.bucket}, Região: ${s3Config.region}`);
+      // @ts-ignore
+      if (typeof getS3UploadMiddleware === 'function') {
+        // A rota de upload de catálogo em server/routes.ts usará esta instância `upload` exportada.
+        // Se outras rotas precisarem de configurações de upload diferentes, elas podem definir seus próprios middlewares multer.
+        upload = getS3UploadMiddleware('catalogs'); 
+        console.log('Upload de arquivos principal configurado para usar Amazon S3 para catálogos.');
+      } else {
+        console.warn('getS3UploadMiddleware não é uma função. Usando localStorage para uploads.');
+      }
+    } else {
+      console.warn(`AVISO: Não foi possível conectar ao S3: ${s3Config.message}. Uploads usarão localStorage.`);
+    }
+  } catch (error: any) {
+    console.warn(`AVISO: Erro durante a configuração do S3: ${error.message}. Uploads usarão localStorage.`);
   }
-  */
-  // ======================================================
+
+  // Adicionar rotas de imagem S3 diretamente ao `app` (se existirem e forem separadas)
+  // Estas rotas provavelmente servem imagens, então devem vir ANTES do manipulador de API genérico se não usarem /api
+  console.log("Configurando rotas de imagem S3...");
+  try {
+    if (typeof addS3ImageRoutes === 'function') {
+      await addS3ImageRoutes(app); 
+      console.log("Rotas de imagem S3 adicionadas diretamente ao app.");
+    } else {
+      console.warn('addS3ImageRoutes não é uma função. Rotas de imagem S3 não serão adicionadas.');
+    }
+  } catch (error) {
+      console.error('ERRO ao adicionar rotas de imagem S3:', error);
+  }
+
+  // CRIAR E REGISTRAR O ROUTER DEDICADO PARA /api
+  console.log("Criando router dedicado para /api...");
+  const apiRouter = ExpressRouter(); 
   
-  // ===== REGISTRAR ROTAS PRINCIPAIS DA API DIRETAMENTE NO APP =====
-  console.log("Registrando rotas principais da API no app...");
-  await registerRoutes(app); 
-  console.log("Rotas principais da API registradas.");
-  // ===============================================================
+  console.log("Registrando rotas da API no apiRouter dedicado...");
+  // Passar a instância `upload` configurada para `registerRoutes`
+  await registerRoutes(apiRouter, upload);
+  
+  app.use('/api', apiRouter); 
+  console.log("Router da API montado em /api.");
   
   let vite: any = null;
 
-  // Configurar e Adicionar Middlewares do Vite (se dev)
   if (app.get("env") === "development") {
     console.log("Configurando Vite para desenvolvimento...");
     vite = await createViteServer({
@@ -216,9 +262,9 @@ if (process.env.NODE_ENV === 'development') {
     });
     console.log("Instância do Vite criada.");
     
-    // Adicionar middlewares do Vite AQUI (depois das rotas API)
+    // Adicionar middlewares do Vite DEPOIS do /api router
     console.log("Adicionando middlewares do Vite...");
-    app.use(vite.middlewares); // <<< Manter DEPOIS do /api router
+    app.use(vite.middlewares);
     console.log("Middlewares do Vite adicionados.");
   }
 

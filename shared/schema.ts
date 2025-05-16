@@ -1,4 +1,4 @@
-import { pgTable, text, serial, integer, boolean, json, timestamp, varchar, uuid, real, vector } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, integer, boolean, json, jsonb, timestamp, varchar, uuid, real, vector } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { relations } from "drizzle-orm";
@@ -44,7 +44,7 @@ export const products = pgTable("products", {
   location: text("location"), // Localização do produto (ex: 2º Piso, Depósito, etc)
   stock: integer("stock"), // Quantidade em estoque
   excelRowNumber: integer("excel_row_number"), // Número da linha original no Excel
-  embedding: vector('embedding', { dimensions: 768 }),
+  embedding: vector('embedding', { dimensions: 512 }),
   createdAt: timestamp("created_at").defaultNow(),
   firestoreId: text("firestore_id"), // ID do produto no Firestore
   firebaseUserId: text("firebase_user_id"), // ID do usuário no Firebase
@@ -135,17 +135,17 @@ export const moodboards = pgTable("moodboards", {
   fileUrl: text("file_url"),
   productIds: json("product_ids").$type<number[]>().notNull(),
   createdAt: timestamp("created_at").defaultNow(),
+  description: text("description"),
+  style: text("style"),
+  colorPalette: json("color_palette").$type<string[]>(),
+  generatedImageUrl: text("generated_image_url"),
+  iaPrompt: text("ia_prompt"),
+  status: text("status"),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
-export const insertMoodboardSchema = createInsertSchema(moodboards).pick({
-  userId: true,
-  quoteId: true,
-  projectName: true,
-  clientName: true,
-  architectName: true,
-  fileUrl: true,
-  productIds: true,
-});
+export const insertMoodboardSchema = createInsertSchema(moodboards, {
+}).omit({ id: true, createdAt: true, updatedAt: true });
 
 export type User = typeof users.$inferSelect;
 export type InsertUser = z.infer<typeof insertUserSchema>;
@@ -223,6 +223,7 @@ export const designProjects = pgTable("design_projects", {
   status: text("status").notNull().default("new"), // Ex: new, processing, awaiting_selection, completed
   clientRenderImageUrl: text("client_render_image_url"),
   clientFloorPlanImageUrl: text("client_floor_plan_image_url"), // Opcional
+  generatedRenderUrl: text("generated_render_url"), // URL do render final gerado pela IA
   createdAt: timestamp("created_at", { withTimezone: true })
     .defaultNow()
     .notNull(),
@@ -240,8 +241,9 @@ export const designProjectItems = pgTable("design_project_items", {
     .notNull()
     .references(() => designProjects.id, { onDelete: "cascade" }),
   
+  detectedObjectName: text("detected_object_name"), // Nome do objeto detectado pela IA
   detectedObjectDescription: text("detected_object_description"), // Descrição da IA sobre o objeto
-  detectedObjectBoundingBox: json("detected_object_bounding_box"), // MODIFICADO de jsonb para json para resolver linter error
+  detectedObjectBoundingBox: jsonb("detected_object_bounding_box"), // Alterado para jsonb conforme recomendação
 
   // Podemos ter uma lista de sugestões ou campos separados. Começando com 3.
   suggestedProductId1: integer("suggested_product_id_1").references(() => products.id, { onDelete: "set null" }), // Assume que a tabela 'products' já existe
@@ -256,6 +258,8 @@ export const designProjectItems = pgTable("design_project_items", {
   selectedProductId: integer("selected_product_id").references(() => products.id, { onDelete: "set null" }), // Produto escolhido pelo usuário
   
   userFeedback: text("user_feedback"), // Ex: "good_match", "bad_match", "notes: ..."
+  generatedInpaintedImageUrl: text("generated_inpainted_image_url"), // URL da imagem gerada com inpainting
+  notes: text("notes"), // Adicionado para anotações do usuário sobre o item
 
   createdAt: timestamp("created_at", { withTimezone: true })
     .defaultNow()
@@ -303,3 +307,53 @@ export const designProjectItemsRelations = relations(designProjectItems, ({ one 
     relationName: "selectedProduct",
   }),
 }));
+
+// Definições para Floor Plans e Floor Plan Areas (Adicionadas para sincronizar com BD)
+export const floorPlans = pgTable("floor_plans", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull().references(() => users.id, { onDelete: "cascade" }), 
+  aiDesignProjectId: integer("ai_design_project_id").references(() => aiDesignProjects.id, { onDelete: "set null" }), 
+  name: text("name").notNull(),
+  originalImageUrl: text("original_image_url").notNull(),
+  processedImageUrl: text("processed_image_url"), 
+  iaPrompt: text("ia_prompt"), 
+  iaStatus: text("ia_status").notNull().default("pending_upload"), 
+  processingErrors: text("processing_errors"), 
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export type FloorPlan = typeof floorPlans.$inferSelect;
+export type InsertFloorPlan = typeof floorPlans.$inferInsert;
+export const insertFloorPlanSchema = createInsertSchema(floorPlans).omit({ id: true, createdAt: true, updatedAt: true });
+
+export const floorPlanAreas = pgTable("floor_plan_areas", {
+  id: serial("id").primaryKey(),
+  floorPlanId: integer("floor_plan_id").notNull().references(() => floorPlans.id, { onDelete: "cascade" }), 
+  userId: integer("user_id").notNull().references(() => users.id, { onDelete: "cascade" }), 
+  areaName: text("area_name").notNull(),
+  coordinates: json("coordinates"), // Definir $type se a estrutura for conhecida, ex: .$type<{x:number, y:number, w:number, h:number}>()
+  desiredProductType: text("desired_product_type"), 
+  suggestedProductId: integer("suggested_product_id").references(() => products.id, { onDelete: "set null" }), 
+  notes: text("notes"), 
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export type FloorPlanArea = typeof floorPlanAreas.$inferSelect;
+export type InsertFloorPlanArea = typeof floorPlanAreas.$inferInsert;
+export const insertFloorPlanAreaSchema = createInsertSchema(floorPlanAreas).omit({ id: true, createdAt: true, updatedAt: true });
+
+// Adicionar relações para floorPlans e floorPlanAreas se necessário
+// Exemplo:
+// export const floorPlansRelations = relations(floorPlans, ({one, many}) => ({
+//   user: one(users, { fields: [floorPlans.userId], references: [users.id] }),
+//   aiDesignProject: one(aiDesignProjects, { fields: [floorPlans.aiDesignProjectId], references: [aiDesignProjects.id]}),
+//   areas: many(floorPlanAreas),
+// }));
+
+// export const floorPlanAreasRelations = relations(floorPlanAreas, ({one}) => ({
+//   floorPlan: one(floorPlans, { fields: [floorPlanAreas.floorPlanId], references: [floorPlans.id]}),
+//   user: one(users, { fields: [floorPlanAreas.userId], references: [users.id] }),
+//   suggestedProduct: one(products, { fields: [floorPlanAreas.suggestedProductId], references: [products.id]}),
+// }));

@@ -1,7 +1,7 @@
 import React, { createContext, useState, useEffect, useContext, ReactNode } from "react";
 import { useLocation } from "wouter";
 import { useToast } from "@/hooks/use-toast";
-import { apiRequest, queryClient } from "./queryClient";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 
 // Interface para o usuário da nossa aplicação (ajustada - sem photoURL por padrão)
 export interface User {
@@ -64,7 +64,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     console.log("Verificando status de autenticação...");
     setLoading(true);
     try {
-      const response = await fetch("/api/user", {
+      const response = await fetch("/api/auth/me", {
         credentials: "include", // Enviar cookies de sessão
       });
       if (response.ok) {
@@ -96,28 +96,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = async (credentials: LoginCredentials) => {
     setLoading(true);
     try {
-      const userData: User = await apiRequest("POST", "/api/login", credentials);
+      const userData: User = await apiRequest("POST", "/api/auth/login", credentials);
       setUser(userData);
 
-      // Limpar queries pode ser necessário dependendo da sua lógica de cache
-      // queryClient.invalidateQueries(); // Invalidar tudo ou queries específicas
-      queryClient.invalidateQueries({ queryKey: ['/backend/catalogs'] });
-      queryClient.invalidateQueries({ queryKey: ['/backend/products'] });
+      // ATUALIZAR queryKeys para /api/
+      queryClient.invalidateQueries({ queryKey: ['/api/catalogs'] }); 
+      queryClient.invalidateQueries({ queryKey: ['/api/products'] });
+      // Se houver outras queries dependentes de dados de usuário, invalidá-las também.
+      // Ex: queryClient.invalidateQueries({ queryKey: ['/api/user'] }); // Para forçar recarregar dados do usuário se necessário
+      // queryClient.invalidateQueries({ queryKey: ['userProjects'] }); // Se houver query para projetos do usuário
+      queryClient.invalidateQueries({ queryKey: ['moodboards'] }); // Invalidar moodboards também
 
       toast({
         title: "Login bem-sucedido",
         description: `Bem-vindo de volta, ${userData.name || userData.email}!`,
       });
-      navigate("/"); // Redirecionar para dashboard
+      navigate("/"); 
     } catch (error: any) {
       console.error("Erro de login (API):", error);
       toast({
         title: "Erro de login",
-        // Usar mensagem de erro da API se disponível, senão genérica
         description: error.message || "Email ou senha inválidos.",
         variant: "destructive",
       });
-      // Não precisa lançar o erro novamente, já tratamos
     } finally {
       setLoading(false);
     }
@@ -127,18 +128,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const register = async (credentials: RegisterCredentials) => {
     setLoading(true);
     try {
-      const userData: User = await apiRequest("POST", "/api/register", credentials);
+      // Supondo que a rota de registro também foi movida para /api/register
+      const userData: User = await apiRequest("POST", "/api/auth/register", credentials);
       setUser(userData);
-
-      // Limpar queries
-      queryClient.invalidateQueries({ queryKey: ['/backend/catalogs'] });
-      queryClient.invalidateQueries({ queryKey: ['/backend/products'] });
-
       toast({
         title: "Registro bem-sucedido",
-        description: `Bem-vindo, ${userData.name || userData.email}!`,
+        description: "Sua conta foi criada com sucesso!",
       });
-      navigate("/"); // Redirecionar para dashboard
+      navigate("/"); // Redirecionar para dashboard após registro
     } catch (error: any) {
       console.error("Erro de registro (API):", error);
       toast({
@@ -155,20 +152,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = async () => {
     setLoading(true);
     try {
-      await apiRequest("POST", "/api/logout");
+      // Supondo que a rota de logout também foi movida para /api/logout ou /api/auth/logout
+      await apiRequest("POST", "/api/auth/logout", {}); 
       setUser(null);
-      queryClient.clear(); // Limpar todo o cache ao sair
-
+      // Limpar todas as queries ao fazer logout para evitar dados antigos
+      queryClient.clear(); 
+      navigate("/login");
       toast({
-        title: "Logout bem-sucedido",
-        description: "Você saiu da sua conta.",
+        title: "Logout realizado",
+        description: "Você foi desconectado com sucesso.",
       });
-      navigate("/login"); // Redirecionar para login
     } catch (error: any) {
       console.error("Erro de logout (API):", error);
       toast({
-        title: "Erro ao sair",
-        description: error.message || "Não foi possível encerrar a sessão.",
+        title: "Erro de logout",
+        description: error.message || "Não foi possível realizar o logout.",
         variant: "destructive",
       });
     } finally {

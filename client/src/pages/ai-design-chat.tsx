@@ -2,13 +2,13 @@ import { useState, useRef, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAuth } from "@/lib/auth";
 import { queryClient } from "@/lib/queryClient";
-import { AiDesignProject, AiDesignChatMessage, User } from "@/lib/types";
+import { AiDesignProject, AiDesignChatMessage, User, FloorPlan } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, Send, ArrowLeft, Image, FileUp, Trash2 } from "lucide-react";
+import { Loader2, Send, ArrowLeft, Image, FileUp, Trash2, UploadCloud, ImageIcon, ListTree, PlusCircle } from "lucide-react";
 import { useLocation, Link } from "wouter";
 import { Label } from "@/components/ui/label";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -17,6 +17,7 @@ import { Badge } from "@/components/ui/badge";
 import { formatDistanceToNow } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import ReactMarkdown from 'react-markdown';
+import axios from 'axios';
 
 export default function AiDesignChatPage({ params }: { params: { id: string } }) {
   const projectId = parseInt(params.id);
@@ -44,15 +45,39 @@ export default function AiDesignChatPage({ params }: { params: { id: string } })
   });
 
   // Buscar mensagens
-  const { data: messages, isLoading: isMessagesLoading } = useQuery<AiDesignChatMessage[]>({
+  const { data: messages, isLoading: isMessagesLoading, refetch: refetchMessages } = useQuery<AiDesignChatMessage[]>({
     queryKey: [`/api/ai-design-projects/${projectId}/messages`],
     queryFn: async () => {
+      if (isNaN(projectId)) return [];
       const res = await fetch(`/api/ai-design-projects/${projectId}/messages`);
       if (!res.ok) throw new Error('Falha ao carregar mensagens');
       return res.json();
     },
     enabled: !!projectId && !isNaN(projectId),
   });
+
+  // NOVA Query para buscar plantas baixas
+  const fetchFloorPlans = async (projectId: number | undefined): Promise<FloorPlan[]> => {
+    if (!projectId || isNaN(projectId)) {
+      console.warn("[fetchFloorPlans] projectId inválido ou não fornecido, retornando array vazio.");
+      return [];
+    }
+    console.log(`[fetchFloorPlans] Buscando plantas para projeto ID: ${projectId}`);
+    const { data } = await axios.get<FloorPlan[]>(`/api/floorplans?aiDesignProjectId=${projectId}`);
+    return data;
+  };
+
+  // CORRIGIDO: Query para buscar plantas baixas usando sintaxe de objeto
+  const { data: floorPlans, isLoading: isLoadingFloorPlans, error: floorPlansError, refetch: refetchFloorPlans } = useQuery<FloorPlan[], Error>({
+    queryKey: ['floorPlans', projectId], 
+    queryFn: () => fetchFloorPlans(projectId),
+    enabled: !!projectId && !isNaN(projectId), // Só executa se projectId estiver definido e for um número
+  });
+
+  // Estados para o formulário de upload de planta baixa
+  const [selectedFloorPlanFile, setSelectedFloorPlanFile] = useState<File | null>(null);
+  const [floorPlanName, setFloorPlanName] = useState('');
+  const [isUploadingFloorPlan, setIsUploadingFloorPlan] = useState(false);
 
   // useEffect para WebSockets
   useEffect(() => {
@@ -107,7 +132,7 @@ export default function AiDesignChatPage({ params }: { params: { id: string } })
       toast({ 
         title: "Chat Desconectado", 
         description: `Conexão em tempo real perdida: ${event.reason || event.code}`,
-        variant: "warning" 
+        variant: "default"
       });
       setWebsocket(null);
     };
@@ -282,6 +307,60 @@ export default function AiDesignChatPage({ params }: { params: { id: string } })
     }
   }, [messages]);
 
+  // Função para lidar com a seleção do arquivo de planta baixa
+  const handleFloorPlanFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (event.target.files && event.target.files[0]) {
+      setSelectedFloorPlanFile(event.target.files[0]);
+      // Opcional: usar o nome do arquivo como nome padrão da planta
+      if (!floorPlanName) {
+        setFloorPlanName(event.target.files[0].name.replace(/\.[^/.]+$/, "")); // Remove extensão
+      }
+    }
+  };
+
+  // NOVA MUTATION/FUNÇÃO para fazer upload da planta baixa
+  const handleFloorPlanUpload = async () => {
+    if (!selectedFloorPlanFile || !projectId) {
+      toast({
+        title: "Erro no Upload",
+        description: "Por favor, selecione um arquivo de planta baixa e certifique-se de que o projeto é válido.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsUploadingFloorPlan(true);
+    const formData = new FormData();
+    formData.append('file', selectedFloorPlanFile);
+    if (floorPlanName) {
+      formData.append('name', floorPlanName);
+    }
+
+    try {
+      await axios.post(`/api/floorplans/upload/${projectId}`, formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      });
+      toast({
+        title: "Sucesso!",
+        description: "Planta baixa enviada e está sendo processada.",
+      });
+      setSelectedFloorPlanFile(null);
+      setFloorPlanName('');
+      refetchFloorPlans(); // Rebuscar a lista de plantas baixas
+    } catch (uploadError: any) {
+      console.error("Erro ao fazer upload da planta baixa:", uploadError);
+      toast({
+        title: "Falha no Upload",
+        description: uploadError.response?.data?.message || "Não foi possível enviar a planta baixa.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsUploadingFloorPlan(false);
+    }
+  };
+
   // Renderizar página de carregamento
   if (isProjectLoading || isMessagesLoading) {
     return (
@@ -335,7 +414,7 @@ export default function AiDesignChatPage({ params }: { params: { id: string } })
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         {/* Painel lateral com informações e imagens */}
-        <div className="md:col-span-1">
+        <div className="md:col-span-1 space-y-6">
           <Card className="p-4">
             <h2 className="text-lg font-medium mb-4">Imagens do Projeto</h2>
             <div className="space-y-4">
@@ -350,11 +429,11 @@ export default function AiDesignChatPage({ params }: { params: { id: string } })
                 <>
                   {project.floorPlanImageUrl && (
                     <div>
-                      <Label className="mb-2 block">Planta Baixa Original</Label>
+                      <Label className="mb-2 block">Planta Baixa Cliente (do Projeto)</Label>
                       <div className="rounded-md overflow-hidden">
                         <img
                           src={project.floorPlanImageUrl}
-                          alt="Planta Baixa"
+                          alt="Planta Baixa Cliente"
                           className="w-full object-cover"
                         />
                       </div>
@@ -400,6 +479,64 @@ export default function AiDesignChatPage({ params }: { params: { id: string } })
               )}
             </div>
           </Card>
+
+          {/* NOVA SEÇÃO DE PLANTAS BAIXAS DO PROJETO (UPLOAD E LISTAGEM) */}
+          <Card className="p-4 sm:p-6 shadow rounded-lg">
+            <h2 className="text-xl font-semibold text-gray-700 mb-4 flex items-center">
+              <ListTree size={24} className="mr-2 text-blue-500" />
+              Plantas Baixas Detalhadas
+            </h2>
+
+            {/* Formulário de Upload */}
+            <div className="space-y-3 mb-6 pb-6 border-b border-gray-200">
+              <Label htmlFor="floorPlanFile" className="text-sm font-medium text-gray-600">Adicionar Nova Planta Baixa Detalhada</Label>
+              <Input 
+                id="floorPlanFile" 
+                type="file" 
+                onChange={handleFloorPlanFileChange} 
+                className="text-sm" 
+                accept="image/png, image/jpeg, image/webp"
+              />
+              <Input 
+                type="text" 
+                placeholder="Nome da planta (opcional)" 
+                value={floorPlanName} 
+                onChange={(e) => setFloorPlanName(e.target.value)} 
+                className="text-sm mt-2"
+              />
+              <Button onClick={handleFloorPlanUpload} disabled={isUploadingFloorPlan || !selectedFloorPlanFile} className="w-full text-sm">
+                {isUploadingFloorPlan ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <UploadCloud size={16} className="mr-2" />}
+                Enviar Planta
+              </Button>
+            </div>
+
+            {/* Lista de Plantas Baixas */}
+            {isLoadingFloorPlans && <p className="text-sm text-gray-500">Carregando plantas baixas...</p>}
+            {floorPlansError && <p className="text-sm text-red-500">Erro ao carregar plantas: {floorPlansError.message}</p>}
+            {!isLoadingFloorPlans && !floorPlansError && (
+              <ul className="space-y-3">
+                {floorPlans && floorPlans.length > 0 ? (
+                  floorPlans.map((plan) => (
+                    <li key={plan.id} className="p-3 bg-gray-50 rounded-md hover:bg-gray-100 transition-colors text-sm">
+                      <Link href={`/floorplans/${plan.id}/editor`} className="flex items-center justify-between group">
+                        <div className="flex items-center">
+                          <ImageIcon size={18} className="mr-3 text-gray-400 group-hover:text-blue-500" />
+                          <span className="text-gray-700 group-hover:text-blue-600 font-medium truncate" title={plan.name}>{plan.name}</span>
+                        </div>
+                        <span className="text-xs text-gray-400 group-hover:text-blue-500 ml-2 whitespace-nowrap">Ver/Editar</span>
+                      </Link>
+                      {plan.originalImageUrl && (
+                        <a href={plan.originalImageUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-500 hover:underline mt-1 block truncate" title={plan.originalImageUrl}>Ver original</a>
+                      )}
+                      <p className="text-xs text-gray-500 mt-1">Status IA: <span className="font-medium">{plan.iaStatus || 'N/A'}</span></p>
+                    </li>
+                  ))
+                ) : (
+                  <p className="text-sm text-gray-500">Nenhuma planta baixa detalhada adicionada a este projeto ainda.</p>
+                )}
+              </ul>
+            )}
+          </Card>
         </div>
 
         {/* Chat */}
@@ -411,46 +548,76 @@ export default function AiDesignChatPage({ params }: { params: { id: string } })
             >
               {messages && messages.length > 0 ? (
                 <div className="space-y-6">
-                  {messages.map((msg) => (
-                    <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                      <div className={`flex ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'} gap-3 max-w-[80%]`}>
-                        <Avatar className={`${msg.role === 'user' ? 'mt-1' : 'mt-1'} h-8 w-8`}>
-                          <AvatarFallback className={msg.role === 'user' ? 'bg-primary' : 'bg-secondary'}>
-                            {msg.role === 'user' ? 'U' : 'AI'}
-                          </AvatarFallback>
-                        </Avatar>
-                        <div className={`rounded-lg p-3 break-words ${msg.role === 'user' ? 'bg-primary text-primary-foreground' : msg.role === 'system' ? 'bg-muted text-muted-foreground' : 'bg-secondary text-secondary-foreground'}`}>
-                          {msg.role === 'assistant' ? (
-                            <ReactMarkdown
-                              components={{
-                                // Opcional: customizar como as imagens são renderizadas, se necessário
-                                // img: ({node, ...props}) => <img style={{maxWidth: '100%', maxHeight: '300px', borderRadius: '4px'}} {...props} />
-                              }}
-                            >
-                              {msg.content}
-                            </ReactMarkdown>
-                          ) : (
-                            <div style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</div>
-                          )}
-                          {msg.attachmentUrl && (
-                            <div className="mt-2">
-                              <img
-                                src={msg.attachmentUrl}
-                                alt="Anexo"
-                                className="mt-2 rounded-md max-h-64 max-w-full object-contain"
-                              />
+                  {messages.map((msg: AiDesignChatMessage) => {
+                    // Tratamento seguro da data
+                    let formattedDate = 'Horário indisponível';
+                    if (msg.createdAt) {
+                      try {
+                        const dateObj = new Date(msg.createdAt);
+                        // Verificar se a data é válida após a conversão
+                        if (!isNaN(dateObj.getTime())) {
+                          formattedDate = formatDistanceToNow(dateObj, {
+                            addSuffix: true,
+                            locale: ptBR,
+                          });
+                        } else {
+                          console.warn("ChatMessage: createdAt inválido após new Date():", msg.createdAt);
+                        }
+                      } catch (dateError) {
+                        console.error("ChatMessage: Erro ao processar createdAt:", msg.createdAt, dateError);
+                      }
+                    } else if ((msg as any).timestamp) { // Fallback para mensagens com campo 'timestamp' (ex: conexão ws)
+                       try {
+                        const dateObj = new Date((msg as any).timestamp);
+                        if (!isNaN(dateObj.getTime())) {
+                          formattedDate = formatDistanceToNow(dateObj, {
+                            addSuffix: true,
+                            locale: ptBR,
+                          });
+                        }
+                      } catch (dateError) {
+                        console.error("ChatMessage: Erro ao processar timestamp (fallback):", (msg as any).timestamp, dateError);
+                      }
+                    }
+
+                    return (
+                      <div key={msg.id || `msg-${(msg as any).timestamp || Math.random()}`} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                        <div className={`flex ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'} gap-3 max-w-[80%]`}>
+                          <Avatar className={`${msg.role === 'user' ? 'mt-1' : 'mt-1'} h-8 w-8`}>
+                            <AvatarFallback className={msg.role === 'user' ? 'bg-primary' : 'bg-secondary'}>
+                              {msg.role === 'user' ? 'U' : 'AI'}
+                            </AvatarFallback>
+                          </Avatar>
+                          <div className={`rounded-lg p-3 break-words ${msg.role === 'user' ? 'bg-primary text-primary-foreground' : msg.role === 'system' ? 'bg-muted text-muted-foreground' : 'bg-secondary text-secondary-foreground'}`}>
+                            {msg.role === 'assistant' ? (
+                              <ReactMarkdown
+                                components={{
+                                  // Opcional: customizar como as imagens são renderizadas, se necessário
+                                  // img: ({node, ...props}) => <img style={{maxWidth: '100%', maxHeight: '300px', borderRadius: '4px'}} {...props} />
+                                }}
+                              >
+                                {msg.content}
+                              </ReactMarkdown>
+                            ) : (
+                              <div style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</div>
+                            )}
+                            {msg.attachmentUrl && (
+                              <div className="mt-2">
+                                <img
+                                  src={msg.attachmentUrl}
+                                  alt="Anexo"
+                                  className="mt-2 rounded-md max-h-64 max-w-full object-contain"
+                                />
+                              </div>
+                            )}
+                            <div className={`text-xs mt-1 ${msg.role === 'user' ? 'text-primary-foreground/70' : 'text-secondary-foreground/70'}`}>
+                              {formattedDate}
                             </div>
-                          )}
-                          <div className={`text-xs mt-1 ${msg.role === 'user' ? 'text-primary-foreground/70' : 'text-secondary-foreground/70'}`}>
-                            {formatDistanceToNow(new Date(msg.createdAt), {
-                              addSuffix: true,
-                              locale: ptBR,
-                            })}
                           </div>
                         </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                   <div ref={messagesEndRef} />
                 </div>
               ) : (

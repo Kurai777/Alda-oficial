@@ -62,6 +62,15 @@ export default function UploadCard() {
       return;
     }
 
+    if (!user) {
+      toast({
+        title: "Erro de Autenticação",
+        description: "Você precisa estar logado para fazer upload.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     try {
       setIsUploading(true);
       
@@ -69,41 +78,47 @@ export default function UploadCard() {
       const formData = new FormData();
       formData.append('file', file);
       
-      // Usar Firebase UID se disponível, caso contrário usar ID local
-      // O servidor está configurado para detectar autenticação Firebase automaticamente
-      if (user?.firebaseId) {
-        formData.append('firebaseId', user.firebaseId);
-        console.log('Usando ID do Firebase: ' + user.firebaseId);
-      } else {
-        formData.append('userId', user?.id?.toString() || '1');
-        console.log('Usando ID local: ' + (user?.id || 1));
-      }
+      // Usar o ID do usuário do nosso banco de dados.
+      // O backend já deve pegar o userId da sessão para segurança.
+      // Incluir no formData pode ser útil para logs ou se a sessão não for usada diretamente na lógica de arquivo.
+      formData.append('userId', user.id.toString());
+      console.log('Enviando upload para userId: ' + user.id);
       
-      // Enviar o arquivo para o servidor
-      const response = await fetch('/backend/catalogs/upload', {
+      // Enviar o arquivo para o servidor - URL ATUALIZADA
+      const response = await fetch('/api/catalogs/upload', { // ALTERADO AQUI
         method: 'POST',
         body: formData,
-        // Não configuramos headers quando enviamos FormData
       });
       
       if (!response.ok) {
-        throw new Error(`Upload falhou: ${response.statusText}`);
+        // Tentar ler a resposta como texto para mais detalhes do erro
+        let errorText = `Upload falhou: ${response.statusText}`;
+        try {
+          const errorData = await response.json(); // Tenta parsear como JSON primeiro
+          errorText = errorData.message || errorText; 
+        } catch (e) {
+          try { // Senão, tenta como texto
+            errorText = await response.text();
+          } catch (e2) { /* Mantém o statusText original */ }
+        }
+        console.error("Upload failed with status:", response.status, "Response:", errorText);
+        throw new Error(errorText);
       }
       
       const result = await response.json();
       
-      // Invalidate catalogs query to refresh the list
-      queryClient.invalidateQueries({ queryKey: ["/backend/catalogs"] });
+      // Invalidate catalogs query to refresh the list - CHAVE ATUALIZADA
+      queryClient.invalidateQueries({ queryKey: ["/api/catalogs"] }); // ALTERADO AQUI
       
       toast({
         title: "Catálogo enviado com sucesso",
-        description: "Seu catálogo está sendo processado. Os produtos serão extraídos automaticamente.",
+        description: result.message || "Seu catálogo está sendo processado.", // Usar mensagem da API se disponível
       });
     } catch (error) {
       console.error("Upload failed:", error);
       toast({
         title: "Falha no upload",
-        description: "Ocorreu um erro ao enviar o catálogo.",
+        description: error instanceof Error ? error.message : "Ocorreu um erro ao enviar o catálogo.",
         variant: "destructive",
       });
     } finally {

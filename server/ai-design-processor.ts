@@ -6,7 +6,6 @@
  */
 
 import OpenAI from "openai";
-// @ts-ignore 
 import Anthropic from "@anthropic-ai/sdk";
 import * as fs from 'fs';
 import * as path from 'path';
@@ -14,6 +13,8 @@ import { storage } from './storage';
 import { type Product, type DesignProject, type NewDesignProjectItem, type DesignProjectItem, type AiDesignChatMessage } from '@shared/schema';
 import { getClipEmbeddingFromImageUrl } from './clip-service';
 import { broadcastToProject } from './index';
+import sharp from 'sharp';
+import { runReplicateModel } from './replicate-service';
 
 // Inicializar clientes de IA
 // Use o mais recente modelo do OpenAI: gpt-4o que foi lançado em 13 de maio de 2024
@@ -542,7 +543,9 @@ export async function processDesignProjectImage(projectId: number, imageUrlToPro
       const parsedJson = JSON.parse(messageContent);
       if (parsedJson && parsedJson.overall_image_description) {
         overallImageDescription = parsedJson.overall_image_description;
-        console.log(`[DEBUG] Descrição geral da imagem: "${overallImageDescription.substring(0,100)}..."`);
+        if (overallImageDescription) {
+          console.log(`[DEBUG] Descrição geral da imagem: "${overallImageDescription.substring(0,100)}..."`);
+        }
       }
       if (parsedJson && Array.isArray(parsedJson.identified_furniture)) {
         identifiedFurniture = parsedJson.identified_furniture.map((item: any) => ({
@@ -641,6 +644,7 @@ export async function processDesignProjectImage(projectId: number, imageUrlToPro
 
         const newItemData: NewDesignProjectItem = {
           designProjectId: projectId,
+          detectedObjectName: furniture.name,
           detectedObjectDescription: furniture.description,
           detectedObjectBoundingBox: furniture.bounding_box || null,
           suggestedProductId1: productsToSuggestForItem[0]?.id || null, 
@@ -833,6 +837,273 @@ export async function processDesignProjectImage(projectId: number, imageUrlToPro
   }
 }
 
-// Se houver mais código depois desta função no arquivo, ele deve ser preservado.
-// Se esta for a última função, o arquivo termina aqui.
-// Se esta for a última função, o arquivo termina aqui.
+/**
+ * Dispara o processo de inpainting para um DesignProjectItem específico
+ * se um produto tiver sido selecionado.
+ */
+export async function triggerInpaintingForItem(itemId: number, projectId: number, originalImageUrl: string): Promise<void> {
+  console.log(`[Inpainting Trigger] Iniciando para itemId: ${itemId}, projectId: ${projectId}`);
+  try {
+    const projectItems = await storage.getDesignProjectItems(projectId);
+    const item = projectItems.find(pItem => pItem.id === itemId);
+
+    if (!item) {
+      console.error(`[Inpainting Trigger] DesignProjectItem ${itemId} não encontrado no projeto ${projectId}.`);
+      return;
+    }
+
+    if (item.selectedProductId) {
+      const product = await storage.getProduct(item.selectedProductId);
+      if (!product || !product.imageUrl) {
+        console.error(`[Inpainting Trigger] Produto selecionado ${item.selectedProductId} não encontrado ou não possui imagem (necessária para performSingleInpaintingStep).`);
+        return;
+      }
+      if (!item.detectedObjectBoundingBox) {
+        console.error(`[Inpainting Trigger] Bounding box não definida para o item ${item.id}. Não é possível gerar máscara via performSingleInpaintingStep.`);
+        return;
+      }
+
+      console.log(`[Inpainting Trigger] Produto selecionado para inpainting: ${product.name} (ID: ${product.id})`);
+      console.log(`[Inpainting Trigger] Chamando performSingleInpaintingStep com originalImageUrl: ${originalImageUrl.substring(0,60)}...`);
+
+      // Chamar performSingleInpaintingStep para fazer o trabalho pesado
+      const generatedImageUrl = await performSingleInpaintingStep(originalImageUrl, item, product);
+
+      if (generatedImageUrl) {
+        console.log(`[Inpainting Trigger] Imagem gerada via performSingleInpaintingStep: ${generatedImageUrl.substring(0,70)}...`);
+        await storage.updateDesignProjectItem(item.id, { generatedInpaintedImageUrl: generatedImageUrl });
+        console.log(`[Inpainting Trigger] URL da imagem de inpainting salva para o item ${item.id}`);
+        
+        // Opcional: Notificar o frontend sobre a atualização, se necessário. Exemplo:
+        // broadcastToProject(projectId.toString(), {
+        //   type: 'ITEM_INPAINTING_COMPLETE',
+        //   payload: { itemId: item.id, generatedInpaintedImageUrl: generatedImageUrl, projectId: projectId }
+        // });
+
+      } else {
+        console.error(`[Inpainting Trigger] Falha ao gerar imagem com performSingleInpaintingStep para o item ${item.id}. A função performSingleInpaintingStep retornou null.`);
+        // Aqui você pode adicionar lógica para tratar a falha, como atualizar o status do item ou enviar uma mensagem.
+      }
+    } else {
+      console.log(`[Inpainting Trigger] Nenhum produto selecionado para o item ${item.id}. Inpainting não acionado.`);
+    }
+  } catch (error) {
+    console.error(`[Inpainting Trigger] Erro GERAL ao tentar acionar inpainting para item ${itemId}:`, error);
+    // Adicionar tratamento de erro mais robusto se necessário, como atualizar o status do projeto/item.
+  }
+}
+
+async function performSingleInpaintingStep(baseImageUrl: string, item: DesignProjectItem, product: Product): Promise<string | null> {
+  console.log(`[Inpainting Step] Iniciando para item ID: ${item.id} sobre imagem base: ${baseImageUrl.substring(0, 60)}...`);
+
+  // Declaração de variáveis no escopo mais alto da função
+  let imageWidth: number;
+  let imageHeight: number;
+  let rectX: number;
+  let rectY: number;
+  let rectWidth: number;
+  let rectHeight: number;
+  let maskBuffer: Buffer;
+  let primedImageBase64: string;
+
+  if (!product.imageUrl) {
+    console.error(`[Inpainting Step] Produto ${product.id} não possui imagem.`);
+    return null;
+  }
+  if (!item.detectedObjectBoundingBox) {
+    console.error(`[Inpainting Step] Bounding box não definida para o item ${item.id}.`);
+    return null;
+  }
+
+  // Envolver todo o processo de preparação da imagem em um único try...catch
+  try {
+    // Etapa 1: Calcular dimensões da imagem base e da BBox em pixels
+    const baseImageBufferForMetadata = await fetchImageAsBuffer(baseImageUrl);
+    const metadata = await sharp(baseImageBufferForMetadata).metadata();
+    imageWidth = metadata.width ?? 0; // Atribuição
+    imageHeight = metadata.height ?? 0; // Atribuição
+
+    if (imageWidth === 0 || imageHeight === 0) {
+      throw new Error("Dimensões da imagem base inválidas ou não obtidas.");
+    }
+
+    const bboxInput = item.detectedObjectBoundingBox as any;
+    // Variáveis rectX, rectY, rectWidth, rectHeight são atribuídas aqui dentro
+    if (bboxInput.x_min !== undefined && bboxInput.x_max !== undefined && Math.max(bboxInput.x_min, bboxInput.y_min, bboxInput.x_max, bboxInput.y_max) <= 1.5 && Math.max(bboxInput.x_min, bboxInput.y_min, bboxInput.x_max, bboxInput.y_max) > 0) { 
+        rectX = Math.round(bboxInput.x_min * imageWidth);
+        rectY = Math.round(bboxInput.y_min * imageHeight);
+        rectWidth = Math.round((bboxInput.x_max - bboxInput.x_min) * imageWidth);
+        rectHeight = Math.round((bboxInput.y_max - bboxInput.y_min) * imageHeight);
+    } else if (bboxInput.x_min !== undefined && bboxInput.x_max !== undefined) { 
+        rectX = Math.round(bboxInput.x_min);
+        rectY = Math.round(bboxInput.y_min);
+        rectWidth = Math.round(bboxInput.x_max - bboxInput.x_min);
+        rectHeight = Math.round(bboxInput.y_max - bboxInput.y_min);
+    } else if (bboxInput.x !== undefined && bboxInput.y !== undefined && bboxInput.width !== undefined && bboxInput.height !== undefined) { 
+        rectX = Math.round(bboxInput.x);
+        rectY = Math.round(bboxInput.y);
+        rectWidth = Math.round(bboxInput.width);
+        rectHeight = Math.round(bboxInput.height);
+    } else {
+        console.error("[Inpainting Step] Formato de bounding box não reconhecido:", bboxInput);
+        throw new Error("Formato de bounding box não reconhecido.");
+    }
+    rectX = Math.max(0, rectX);
+    rectY = Math.max(0, rectY);
+    rectWidth = Math.max(1, Math.min(rectWidth, imageWidth - rectX));
+    rectHeight = Math.max(1, Math.min(rectHeight, imageHeight - rectY));
+    if (rectWidth <= 0 || rectHeight <= 0) {
+        throw new Error(`Bounding box resultou em dimensões inválidas: w=${rectWidth}, h=${rectHeight} para imagem ${imageWidth}x${imageHeight}`);
+    }
+    console.log(`[Inpainting Step] BBox calculada para item ${item.id}: ${rectWidth}x${rectHeight} em ${rectX},${rectY} (Imagem Base: ${imageWidth}x${imageHeight})`);
+
+    // Etapa 2: Preparar Máscara
+    const blackBackground = await sharp({ create: { width: imageWidth, height: imageHeight, channels: 3, background: { r: 0, g: 0, b: 0 } } }).png().toBuffer();
+    const whiteRectangle = await sharp({ create: { width: rectWidth, height: rectHeight, channels: 3, background: { r: 255, g: 255, b: 255 } } }).png().toBuffer();
+    maskBuffer = await sharp(blackBackground) // Atribuição
+      .composite([{ input: whiteRectangle, left: rectX, top: rectY }])
+      .grayscale()
+      .png()
+      .toBuffer();
+    console.log(`[Inpainting Step] Máscara preparada para item ${item.id}.`);
+
+    // Etapa 3: Preparar Imagem Primed
+    const baseImageBufferForPriming = await fetchImageAsBuffer(baseImageUrl);
+    const productSelectionImageBuffer = await fetchImageAsBuffer(product.imageUrl!); 
+    
+    const resizedProductImageOutput = await sharp(productSelectionImageBuffer)
+      .resize(rectWidth, rectHeight, {
+        fit: sharp.fit.inside, 
+        withoutEnlargement: true,
+      })
+      .png({ compressionLevel: 1, effort: 1 }) 
+      .toBuffer({ resolveWithObject: true });
+    
+    const { data: resizedProductBuffer, info: resizedInfo } = resizedProductImageOutput;
+    
+    const offsetX = rectX + Math.floor((rectWidth - resizedInfo.width) / 2);
+    const offsetY = rectY + Math.floor((rectHeight - resizedInfo.height) / 2);
+
+    const primedBuffer = await sharp(baseImageBufferForPriming)
+      .composite([{
+        input: resizedProductBuffer, 
+        left: offsetX,
+        top: offsetY
+      }])
+      .png() 
+      .toBuffer();
+    primedImageBase64 = `data:image/png;base64,${primedBuffer.toString('base64')}`; // Atribuição
+    console.log(`[Inpainting Step] Imagem Primed preparada para item ${item.id}. Produto redimensionado para ${resizedInfo.width}x${resizedInfo.height}, posicionado em ${offsetX},${offsetY}.`);
+
+  } catch (imagePrepError) {
+      console.error(`[Inpainting Step] Erro durante preparação de imagem/máscara para item ${item.id}:`, imagePrepError);
+      return null; // Retorna null se a preparação falhar
+  }
+  
+  // Etapa 4: Chamar Replicate (só executa se as etapas anteriores foram bem-sucedidas)
+  try {
+    const inpaintingPrompt = `A photo of a ${product.name}, ${product.description || 'high quality'}.`;
+    const replicateApiKey = process.env.REPLICATE_API_TOKEN;
+    if (!replicateApiKey) {
+      console.error("[Inpainting Step] REPLICATE_API_TOKEN não configurado.");
+      return null;
+    }
+    const inpaintingResult = await runReplicateModel<string[] | string>(
+      "stability-ai/stable-diffusion-inpainting",
+      "95b72231da0fb1aaa79984e148101881792b034290ed3c939369301063c00558",
+      {
+        image: primedImageBase64, 
+        mask: `data:image/png;base64,${maskBuffer.toString('base64')}`,
+        prompt: inpaintingPrompt,
+      },
+      replicateApiKey
+    );
+    let generatedImageUrl: string | null = null;
+    if (inpaintingResult && Array.isArray(inpaintingResult) && inpaintingResult.length > 0 && typeof inpaintingResult[0] === 'string') {
+      generatedImageUrl = inpaintingResult[0];
+    } else if (inpaintingResult && typeof inpaintingResult === 'string') { 
+      generatedImageUrl = inpaintingResult;
+    }
+    if (generatedImageUrl) {
+      console.log(`[Inpainting Step] Imagem de inpainting gerada para item ${item.id}: ${generatedImageUrl.substring(0, 70)}...`);
+      return generatedImageUrl;
+    } else {
+      console.error(`[Inpainting Step] Falha no Replicate para item ${item.id}:`, inpaintingResult);
+      return null;
+    }
+  } catch (replicateError) {
+    console.error(`[Inpainting Step] Erro ao chamar Replicate para item ${item.id}:`, replicateError);
+    return null;
+  }
+}
+
+/**
+ * Gera o render final para um projeto, aplicando inpainting iterativamente
+ * para os itens confirmados.
+ */
+export async function generateFinalRenderForProject(projectId: number): Promise<void> {
+  console.log(`[Render Final] Iniciando para projeto ID: ${projectId}`);
+  try {
+    const project = await storage.getDesignProject(projectId);
+    if (!project || !project.clientRenderImageUrl) {
+      console.error(`[Render Final] Projeto ${projectId} não encontrado ou não possui imagem base (clientRenderImageUrl).`);
+      await storage.updateDesignProject(projectId, { status: 'failed', updatedAt: new Date() });
+      return;
+    }
+
+    await storage.updateDesignProject(projectId, { status: 'rendering_final', updatedAt: new Date() });
+
+    const items = await storage.getDesignProjectItems(projectId);
+    // Ajustar o filtro para userFeedback se necessário, ou apenas selectedProductId
+    const confirmedItems = items.filter(item => item.selectedProductId); 
+
+    if (confirmedItems.length === 0) {
+      console.log(`[Render Final] Nenhum item com produto selecionado encontrado para o projeto ${projectId}.`);
+      await storage.updateDesignProject(projectId, { status: 'completed', updatedAt: new Date() }); 
+      return;
+    }
+
+    console.log(`[Render Final] Encontrados ${confirmedItems.length} itens com produtos selecionados para processar.`);
+    
+    let currentImageUrl = project.clientRenderImageUrl;
+    let iteration = 1;
+
+    for (const item of confirmedItems) {
+      console.log(`[Render Final] Processando item ${iteration}/${confirmedItems.length}: Item ID ${item.id}, Produto ID ${item.selectedProductId}`);
+      
+      const product = await storage.getProduct(item.selectedProductId!); // selectedProductId já foi verificado no filter
+      if (product) {
+        const nextImageUrl = await performSingleInpaintingStep(currentImageUrl, item, product);
+        if (nextImageUrl) {
+          currentImageUrl = nextImageUrl;
+          console.log(`[Render Final] Item ${item.id} processado. Nova imagem base: ${currentImageUrl.substring(0,100)}...`);
+          // Opcional: salvar a imagem intermediária gerada para o item no próprio item.
+          // await storage.updateDesignProjectItem(item.id, { generatedInpaintedImageUrl: currentImageUrl });
+        } else {
+          console.warn(`[Render Final] Falha no inpainting do item ${item.id}. Continuando com a imagem anterior: ${currentImageUrl.substring(0,100)}...`);
+        }
+      } else {
+         console.warn(`[Render Final] Produto ID ${item.selectedProductId} não encontrado para o item ${item.id}. Pulando.`);
+      }
+      iteration++;
+    }
+
+    console.log(`[Render Final] Processamento iterativo concluído. Imagem final: ${currentImageUrl.substring(0,100)}...`);
+    
+    await storage.updateDesignProject(projectId, { 
+      generatedRenderUrl: currentImageUrl, 
+      status: 'completed', 
+      updatedAt: new Date() 
+    });
+
+    console.log(`[Render Final] Render final para projeto ${projectId} concluído e URL salva.`);
+
+  } catch (error) {
+    console.error(`[Render Final] Erro ao gerar render final para projeto ${projectId}:`, error);
+    try {
+      await storage.updateDesignProject(projectId, { status: 'failed', updatedAt: new Date() });
+    } catch (statusError) {
+      console.error(`[Render Final] Erro ao tentar atualizar status do projeto ${projectId} para falha:`, statusError);
+    }
+  }
+} 

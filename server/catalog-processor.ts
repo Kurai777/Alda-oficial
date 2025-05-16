@@ -6,6 +6,7 @@ import path from 'path';
 import XLSX from 'xlsx'; // Importar XLSX para ler o arquivo
 import { spawn } from 'child_process'; // Importar spawn
 import { Product } from '@shared/schema'; // Importar tipo Product
+import { getClipEmbeddingFromImageUrl } from './clip-service'; // Importar a função de embedding
 
 // Interface para dados do Python (linha + base64 + sheet_name)
 interface ExtractedImageData {
@@ -234,12 +235,13 @@ export async function processCatalogInBackground(data: CatalogJobData): Promise<
               location: productData.location || null,
               stock: productData.stock || null,
               excelRowNumber: productData.excelRowNumber,
+              embedding: null,
               firestoreId: productData.firestoreId || null,
               firebaseUserId: productData.firebaseUserId || null,
               isEdited: false
             };
-            const savedProduct = await storage.createProduct(productToSaveLocal);
-            savedLocalProducts.push(savedProduct); // Adiciona o produto salvo (com tipo Product)
+            const savedProduct = await storage.createProduct(productToSaveLocal as unknown as Product);
+            savedLocalProducts.push(savedProduct);
           } catch (dbError) {
             console.error(`[BG Proc ${catalogId}] Erro ao salvar produto (linha ${productData.excelRowNumber}) no PG:`, dbError);
           }
@@ -358,6 +360,23 @@ export async function processCatalogInBackground(data: CatalogJobData): Promise<
                     associatedCount++;
                     const successLog = visionConfirmedMatch ? '[Assoc v5 SUCESSO (IA)]' : '[Assoc v5 SUCESSO (Fallback)]';
                     console.log(`${successLog}: Prod ID ${product.id} -> Imagem da linha ${associatedImage.anchorRow}, URL: ${associatedImage.imageUrl.substring(associatedImage.imageUrl.lastIndexOf('/') + 1)}`);
+
+                    // ***** NOVA LÓGICA PARA GERAR E SALVAR EMBEDDING *****
+                    console.log(`[Embedding] Tentando gerar embedding para Prod ID ${product.id} usando imagem: ${associatedImage.imageUrl}`);
+                    try {
+                      const embeddingVector = await getClipEmbeddingFromImageUrl(associatedImage.imageUrl, undefined);
+                      if (embeddingVector && embeddingVector.length > 0) {
+                        await storage.updateProduct(product.id, { embedding: embeddingVector as any }); // Drizzle pode precisar de `any` para tipo vector
+                        console.log(`[Embedding] Embedding gerado e salvo para Prod ID ${product.id}. Dimensões: ${embeddingVector.length}`);
+                      } else {
+                        console.warn(`[Embedding] Falha ao gerar embedding (vetor nulo ou vazio) para Prod ID ${product.id}`);
+                      }
+                    } catch (embeddingError) {
+                      console.error(`[Embedding] ERRO ao gerar/salvar embedding para Prod ID ${product.id}:`, embeddingError);
+                      // Não interromper o fluxo principal por falha no embedding de um produto
+                    }
+                    // ***** FIM DA NOVA LÓGICA DE EMBEDDING *****
+
                 } catch (updateError) {
                     console.error(`[Assoc v5] ERRO DB ao atualizar Prod ID ${product.id}:`, updateError);
                 }

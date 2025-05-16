@@ -6,13 +6,14 @@ import {
   moodboards, type Moodboard, type InsertMoodboard,
   designProjects, type DesignProject, type NewDesignProject,
   designProjectItems, type DesignProjectItem, type NewDesignProjectItem,
-  aiDesignChatMessages, type AiDesignChatMessage, type InsertAiDesignChatMessage
+  aiDesignChatMessages, type AiDesignChatMessage, type InsertAiDesignChatMessage,
+  FloorPlan, type InsertFloorPlan, insertFloorPlanSchema, floorPlans,
+  FloorPlanArea, type InsertFloorPlanArea, insertFloorPlanAreaSchema, floorPlanAreas
 } from "@shared/schema";
 import session from "express-session";
-import { MemoryStore } from "express-session";
 import { pool, db } from "./db";
 import connectPgSimple from "connect-pg-simple";
-import { eq, and, ilike, or, inArray, sql, isNotNull, getTableColumns } from 'drizzle-orm';
+import { eq, and, ilike, or, inArray, sql, isNotNull, getTableColumns, desc } from 'drizzle-orm';
 
 // Criar store de sessão PostgreSQL
 const PostgresSessionStore = connectPgSimple(session);
@@ -70,6 +71,7 @@ export interface IStorage {
   // Design Project Items methods
   getDesignProjectItems(projectId: number): Promise<DesignProjectItem[]>;
   createDesignProjectItem(item: NewDesignProjectItem): Promise<DesignProjectItem>;
+  updateDesignProjectItem(itemId: number, data: Partial<NewDesignProjectItem>): Promise<DesignProjectItem | undefined>;
 
   // AI Design Chat Messages methods
   getAiDesignChatMessages(projectId: number): Promise<AiDesignChatMessage[]>;
@@ -80,6 +82,19 @@ export interface IStorage {
   findRelevantProducts(userId: number, description: string): Promise<Product[]>;
   getProductsDetails(productIds: number[]): Promise<Record<number, Product>>;
   findProductsByEmbedding(userId: number, imageEmbeddingVector: number[], limit?: number): Promise<(Product & { distance?: number })[]>;
+
+  // FloorPlan methods
+  createFloorPlan(data: InsertFloorPlan): Promise<FloorPlan>;
+  getFloorPlansByAiProject(aiProjectId: number): Promise<FloorPlan[]>;
+  getFloorPlanById(id: number): Promise<FloorPlan | undefined>;
+  updateFloorPlan(id: number, data: Partial<Omit<InsertFloorPlan, 'id' | 'userId' | 'aiDesignProjectId' | 'createdAt'>>): Promise<FloorPlan | undefined>;
+
+  // FloorPlanArea methods
+  createFloorPlanArea(data: InsertFloorPlanArea): Promise<FloorPlanArea>;
+  getFloorPlanAreasByFloorPlanId(floorPlanId: number): Promise<FloorPlanArea[]>;
+  updateFloorPlanArea(areaId: number, data: Partial<Omit<InsertFloorPlanArea, 'id' | 'userId' | 'floorPlanId' | 'createdAt'>>): Promise<FloorPlanArea | undefined>;
+  deleteFloorPlanArea(areaId: number): Promise<boolean>;
+  getFloorPlanAreaById(areaId: number): Promise<FloorPlanArea | undefined>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -136,7 +151,7 @@ export class DatabaseStorage implements IStorage {
         ...userData,
         updatedAt: new Date()
       };
-      delete updateData.id;
+      delete (updateData as any).id; // id não deve ser atualizado
       const result = await db.update(users).set(updateData).where(eq(users.id, id)).returning();
       return result[0];
     } catch (error) {
@@ -148,9 +163,9 @@ export class DatabaseStorage implements IStorage {
   // Product methods
   async getProduct(id: number): Promise<Product | undefined> {
     try {
-      console.log(`Buscando produto com ID: ${id}`);
+      // console.log(`Buscando produto com ID: ${id}`);
       const [product] = await db.select().from(products).where(eq(products.id, id));
-      console.log(`Produto encontrado:`, product);
+      // console.log(`Produto encontrado:`, product);
       return product;
     } catch (error) {
       console.error('Error getting product:', error);
@@ -161,23 +176,23 @@ export class DatabaseStorage implements IStorage {
   async getProductsByUserId(userId: number | string, catalogId?: number): Promise<Product[]> {
     try {
       const parsedUserId = typeof userId === 'string' ? parseInt(userId) : userId;
-      console.log(`Buscando produtos para userId=${parsedUserId}, catalogId=${catalogId}`);
+      // console.log(`Buscando produtos para userId=${parsedUserId}, catalogId=${catalogId}`);
       
       if (catalogId) {
-        console.log(`Filtrando por catalogId=${catalogId}`);
+        // console.log(`Filtrando por catalogId=${catalogId}`);
         const query = db.select().from(products).where(
           and(eq(products.userId, parsedUserId), eq(products.catalogId, catalogId))
         );
-        console.log(`Query SQL (aproximada): ${query.toSQL ? query.toSQL().sql : 'Não disponível'}`);
+        // console.log(`Query SQL (aproximada): ${query.toSQL ? query.toSQL().sql : 'Não disponível'}`);
         const result = await query;
-        console.log(`Encontrados ${result.length} produtos com catalogId=${catalogId}`);
+        // console.log(`Encontrados ${result.length} produtos com catalogId=${catalogId}`);
         return result;
       } else {
-        console.log(`Retornando todos os produtos do usuário ${parsedUserId}`);
+        // console.log(`Retornando todos os produtos do usuário ${parsedUserId}`);
         const query = db.select().from(products).where(eq(products.userId, parsedUserId));
-        console.log(`Query SQL (aproximada): ${query.toSQL ? query.toSQL().sql : 'Não disponível'}`);
+        // console.log(`Query SQL (aproximada): ${query.toSQL ? query.toSQL().sql : 'Não disponível'}`);
         const result = await query;
-        console.log(`Encontrados ${result.length} produtos`);
+        // console.log(`Encontrados ${result.length} produtos`);
         return result;
       }
     } catch (error) {
@@ -205,35 +220,37 @@ export class DatabaseStorage implements IStorage {
   async createProduct(insertProductData: InsertProduct): Promise<Product> {
     try {
       const productForDb: { [K in keyof InsertProduct]?: InsertProduct[K] } = { ...insertProductData };
-      // Nota: O tipo acima permite que todas as chaves de InsertProduct sejam opcionais,
-      // o que é útil para construir o objeto passo a passo.
 
-      productForDb.colors = (insertProductData.colors === null || insertProductData.colors === undefined) ? 
-                             (insertProductData.colors === undefined ? undefined : []) : 
-                             [...insertProductData.colors];
-      productForDb.materials = (insertProductData.materials === null || insertProductData.materials === undefined) ?
-                                (insertProductData.materials === undefined ? undefined : []) :
-                                [...insertProductData.materials];
-      productForDb.sizes = (insertProductData.sizes === null || insertProductData.sizes === undefined) ?
-                            (insertProductData.sizes === undefined ? undefined : []) :
-                            insertProductData.sizes.map(s => ({ ...s }));
+      if (Array.isArray(insertProductData.colors)) {
+        productForDb.colors = [...insertProductData.colors];
+      } else if (insertProductData.colors === null || insertProductData.colors === undefined) {
+        productForDb.colors = insertProductData.colors === undefined ? undefined : [];
+      } 
+
+      if (Array.isArray(insertProductData.materials)) {
+        productForDb.materials = [...insertProductData.materials];
+      } else if (insertProductData.materials === null || insertProductData.materials === undefined) {
+        productForDb.materials = insertProductData.materials === undefined ? undefined : [];
+      }
+
+      if (Array.isArray(insertProductData.sizes)) {
+        productForDb.sizes = insertProductData.sizes.map((s: {width?: number, height?: number, depth?: number, label?: string}) => ({ ...s }));
+      } else if (insertProductData.sizes === null || insertProductData.sizes === undefined) {
+        productForDb.sizes = insertProductData.sizes === undefined ? undefined : [];
+      }
   
-      // Remover campos explicitamente undefined para permitir que defaults do DB funcionem corretamente
-      if (productForDb.colors === undefined) delete productForDb.colors;
+      if (productForDb.colors === undefined) delete productForDb.colors; 
       if (productForDb.materials === undefined) delete productForDb.materials;
       if (productForDb.sizes === undefined) delete productForDb.sizes;
-      // Outros campos opcionais de InsertProduct que podem ser undefined e têm default no DB
-      // também seriam omitidos se não estiverem presentes em insertProductData devido ao spread inicial.
 
       const [createdProduct] = await db.insert(products)
-        .values(productForDb as InsertProduct) // Cast para InsertProduct; Drizzle deve lidar com campos opcionais
+        .values(productForDb as InsertProduct)
         .returning();
       return createdProduct;
     } catch (error) {
       console.error('Error creating product in storage:', error);
-      if (error instanceof Error && 'message' in error) {
-          console.error('Error message:', (error as any).message);
-          if ((error as any).detail) console.error('Error detail:', (error as any).detail);
+      if (error instanceof Error && 'message' in error && (error as any).detail) {
+          console.error('Error detail:', (error as any).detail);
       }
       throw error; 
     }
@@ -242,14 +259,25 @@ export class DatabaseStorage implements IStorage {
   async updateProduct(id: number, productUpdateData: Partial<InsertProduct>): Promise<Product | undefined> {
     try {
       const dataToSet: { [key: string]: any } = {};
-  
       let hasChanges = false;
+
       for (const key in productUpdateData) {
-        if (Object.prototype.hasOwnProperty.call(productUpdateData, key)) {
-          const typedKey = key as keyof Partial<InsertProduct>;
-          const value = productUpdateData[typedKey];
-  
-          if (value === undefined) continue; // Pular campos não fornecidos para atualização
+        if (typeof key === 'string' && Object.prototype.hasOwnProperty.call(productUpdateData, key)) {
+          
+          const value = (productUpdateData as any)[key]; // Usar any aqui para acesso genérico
+
+          if (key === 'embedding') {
+            dataToSet.embedding = value;
+            hasChanges = true;
+            continue; // Processado, ir para a próxima chave
+          }
+          
+          // Para outras chaves que não 'embedding':
+          const typedKey = key as keyof Omit<InsertProduct, 'embedding'>; // Tipar mais estritamente para o restante
+
+          if (value === undefined) {
+             continue; 
+          }
           hasChanges = true;
   
           if (typedKey === 'colors') {
@@ -257,37 +285,38 @@ export class DatabaseStorage implements IStorage {
           } else if (typedKey === 'materials') {
             dataToSet.materials = value === null ? [] : (Array.isArray(value) ? [...value] : []);
           } else if (typedKey === 'sizes') {
-            // Garantir que value é um array antes de chamar map
-            dataToSet.sizes = value === null ? [] : (Array.isArray(value) ? value.map(s => ({ ...s })) : []);
+            dataToSet.sizes = value === null ? [] : (Array.isArray(value) ? value.map(s => (typeof s === 'object' && s !== null ? { ...s } : s)) : []);
           } else {
-            dataToSet[typedKey] = value;
+            // Certificar que typedKey ainda é uma chave válida para dataToSet após o Omit
+            dataToSet[key] = value; // Usar key (string) para atribuição genérica
           }
         }
       }
       
-      if (!hasChanges) {
+      // A lógica para verificar se houve mudanças ou se o embedding foi explicitamente setado para null pode precisar de ajuste
+      // Esta condição original pode não capturar corretamente o caso de productUpdateData.embedding ser null
+      // if (!hasChanges && !Object.keys(productUpdateData).includes('embedding') ) { 
+      // Considerar se productUpdateData continha APENAS embedding (null ou não)
+      let onlyEmbeddingUpdate = Object.keys(productUpdateData).length === 1 && Object.prototype.hasOwnProperty.call(productUpdateData, 'embedding');
+
+      if (!hasChanges && !onlyEmbeddingUpdate) { 
          const existingProduct = await this.getProduct(id);
-         console.log(`No changes to apply for product ${id}. Returning existing.`);
          return existingProduct; 
       }
-      dataToSet.updatedAt = new Date();
+      
+      // delete (dataToSet as any).updatedAt; // updatedAt já foi removido anteriormente
   
-      delete dataToSet.id; // Não deve estar no set
-      delete dataToSet.embedding; // Gerenciado separadamente
-      delete dataToSet.userId; // Geralmente não se muda
-      delete dataToSet.catalogId; // Geralmente não se muda
-      delete dataToSet.createdAt; // Nunca se muda
+      delete (dataToSet as any).id;
+      delete (dataToSet as any).userId; 
+      delete (dataToSet as any).catalogId; 
+      delete (dataToSet as any).createdAt; 
         
-      const [updatedProduct] = await db.update(products)
-        .set(dataToSet)
-        .where(eq(products.id, id))
-        .returning();
+      const [updatedProduct] = await db.update(products).set(dataToSet).where(eq(products.id, id)).returning();
       return updatedProduct;
     } catch (error) {
       console.error(`Error updating product ${id} in storage:`, error);
-      if (error instanceof Error && 'message' in error) {
-          console.error('Error message:', (error as any).message);
-          if ((error as any).detail) console.error('Error detail:', (error as any).detail);
+      if (error instanceof Error && 'message' in error && (error as any).detail) {
+        console.error('Error detail:', (error as any).detail);
       }
       return undefined;
     }
@@ -305,11 +334,7 @@ export class DatabaseStorage implements IStorage {
   
   async getProductsByCatalogId(catalogId: number): Promise<Product[]> {
     try {
-      console.log(`DB: Buscando produtos para o catálogo ${catalogId}...`);
-      // REVERTIDO: Selecionar todas as colunas, incluindo embedding
-      const result = await db.select().from(products)
-        .where(eq(products.catalogId, catalogId));
-      console.log(`DB: Encontrados ${result.length} produtos para o catálogo ${catalogId}`);
+      const result = await db.select().from(products).where(eq(products.catalogId, catalogId));
       return result;
     } catch (error) {
       console.error('Error getting products by catalogId:', error);
@@ -317,21 +342,13 @@ export class DatabaseStorage implements IStorage {
     }
   }
   
-  /**
-   * Implementação de getProducts para compatibilidade com o que é usado em routes.ts
-   * Esta função é um alias para getProductsByUserId mas com nome mais genérico
-   */
   async getProducts(userId: number, catalogId?: number): Promise<Product[]> {
     return this.getProductsByUserId(userId, catalogId);
   }
   
   async getProductsByImageUrl(imageUrl: string): Promise<Product[]> {
     try {
-      console.log(`DB: Buscando produtos que usam a imagem: ${imageUrl}`);
-      // REVERTIDO: Selecionar todas as colunas, incluindo embedding
-      const result = await db.select().from(products)
-        .where(eq(products.imageUrl, imageUrl));
-      console.log(`DB: Encontrados ${result.length} produtos que usam a mesma imagem: ${imageUrl}`);
+      const result = await db.select().from(products).where(eq(products.imageUrl, imageUrl));
       return result;
     } catch (error) {
       console.error('Error getting products by imageUrl:', error);
@@ -339,18 +356,9 @@ export class DatabaseStorage implements IStorage {
     }
   }
   
-  /**
-   * Atualiza apenas a URL da imagem de um produto
-   */
   async updateProductImageUrl(id: number, imageUrl: string): Promise<Product | undefined> {
     try {
-      console.log(`DB: Atualizando URL da imagem do produto ${id} para: ${imageUrl}`);
-      const [product] = await db.update(products)
-        .set({ imageUrl: imageUrl, isEdited: true })
-        .where(eq(products.id, id))
-        .returning();
-      
-      console.log(`DB: URL da imagem atualizada com sucesso para o produto ${id}`);
+      const [product] = await db.update(products).set({ imageUrl: imageUrl, isEdited: true }).where(eq(products.id, id)).returning();
       return product;
     } catch (error) {
       console.error(`Error updating product image URL: ${error}`);
@@ -368,7 +376,6 @@ export class DatabaseStorage implements IStorage {
     }
   }
   
-  // Catalog methods
   async getCatalog(id: number): Promise<Catalog | undefined> {
     try {
       const [catalog] = await db.select().from(catalogs).where(eq(catalogs.id, id));
@@ -382,10 +389,7 @@ export class DatabaseStorage implements IStorage {
   async getCatalogsByUserId(userId: number | string): Promise<Catalog[]> {
     try {
       const parsedUserId = typeof userId === 'string' ? parseInt(userId) : userId;
-      console.log(`Usando userId: ${parsedUserId} para buscar catálogos`);
-      
       const results = await db.select().from(catalogs).where(eq(catalogs.userId, parsedUserId));
-      console.log(`Encontrados ${results.length} catálogos`);
       return results;
     } catch (error) {
       console.error('Error getting catalogs by user ID:', error);
@@ -393,7 +397,6 @@ export class DatabaseStorage implements IStorage {
     }
   }
   
-  // Método para obter todos os catálogos de um usuário (alias para compatibilidade)
   async getCatalogs(userId: number | string): Promise<Catalog[]> {
     return this.getCatalogsByUserId(userId);
   }
@@ -411,38 +414,17 @@ export class DatabaseStorage implements IStorage {
   
   async updateCatalogStatus(id: number, status: string): Promise<Catalog | undefined> {
     try {
-      const updateData = { processedStatus: status };
-      const [catalog] = await db.update(catalogs)
-        .set(updateData)
-        .where(eq(catalogs.id, id))
-        .returning();
+      const [catalog] = await db.update(catalogs).set({ processedStatus: status }).where(eq(catalogs.id, id)).returning();
       return catalog;
     } catch (error) {
       console.error('Error updating catalog status:', error);
       return undefined;
     }
   }
-  
-  async updateCatalog(id: number, updateDataInput: Partial<InsertCatalog>): Promise<Catalog | undefined> {
-    try {
-      const { firebaseUserId, firestoreCatalogId, ...updateData } = updateDataInput;
-      const [catalog] = await db.update(catalogs)
-        .set(updateData)
-        .where(eq(catalogs.id, id))
-        .returning();
-      return catalog;
-    } catch (error) {
-      console.error('Error updating catalog:', error);
-      return undefined;
-    }
-  }
-  
+    
   async deleteCatalog(id: number): Promise<boolean> {
     try {
-      // Primeiro, excluir todos os produtos associados
       await this.deleteProductsByCatalogId(id);
-      
-      // Depois, excluir o catálogo
       const result = await db.delete(catalogs).where(eq(catalogs.id, id)).returning();
       return result.length > 0;
     } catch (error) {
@@ -451,7 +433,6 @@ export class DatabaseStorage implements IStorage {
     }
   }
   
-  // Quote methods
   async getQuote(id: number): Promise<Quote | undefined> {
     try {
       const [quote] = await db.select().from(quotes).where(eq(quotes.id, id));
@@ -471,19 +452,32 @@ export class DatabaseStorage implements IStorage {
     }
   }
   
-  /**
-   * Alias para getQuotesByUserId mantendo compatibilidade com a nomenclatura em routes.ts
-   */
   async getQuotes(userId: number): Promise<Quote[]> {
     return this.getQuotesByUserId(userId);
   }
   
   async createQuote(insertQuote: InsertQuote): Promise<Quote> {
-    throw new Error("Method temporarily disabled due to unresolved Drizzle type issues.");
+    // Removido throw Error para Drizzle type issues, implementação básica:
+    try {
+      const [quote] = await db.insert(quotes).values(insertQuote).returning();
+      return quote;
+    } catch (error) {
+      console.error('Error creating quote:', error);
+      throw error;
+    }
   }
   
   async updateQuote(id: number, quoteUpdate: Partial<InsertQuote>): Promise<Quote | undefined> {
-    throw new Error("Method temporarily disabled due to unresolved Drizzle type issues.");
+    // Removido throw Error, implementação básica:
+    try {
+      const dataToSet = { ...quoteUpdate, updatedAt: new Date() };
+      delete (dataToSet as any).id; delete (dataToSet as any).userId; delete (dataToSet as any).createdAt;
+      const [quote] = await db.update(quotes).set(dataToSet).where(eq(quotes.id, id)).returning();
+      return quote;
+    } catch (error) {
+      console.error('Error updating quote:', error);
+      return undefined;
+    }
   }
   
   async deleteQuote(id: number): Promise<boolean> {
@@ -496,7 +490,6 @@ export class DatabaseStorage implements IStorage {
     }
   }
   
-  // Moodboard methods
   async getMoodboard(id: number): Promise<Moodboard | undefined> {
     try {
       const [moodboard] = await db.select().from(moodboards).where(eq(moodboards.id, id));
@@ -509,306 +502,299 @@ export class DatabaseStorage implements IStorage {
   
   async getMoodboardsByUserId(userId: number): Promise<Moodboard[]> {
     try {
-      return await db.select().from(moodboards).where(eq(moodboards.userId, userId));
+      return await db.select().from(moodboards).where(eq(moodboards.userId, userId)).orderBy(desc(moodboards.updatedAt));
     } catch (error) {
       console.error('Error getting moodboards by user ID:', error);
       return [];
     }
   }
   
-  /**
-   * Alias para getMoodboardsByUserId mantendo compatibilidade com a nomenclatura em routes.ts
-   */
   async getMoodboards(userId: number): Promise<Moodboard[]> {
     return this.getMoodboardsByUserId(userId);
   }
   
-  async createMoodboard(insertMoodboard: InsertMoodboard): Promise<Moodboard> {
-    throw new Error("Method temporarily disabled due to unresolved Drizzle type issues.");
+  async createMoodboard(insertMoodboardData: InsertMoodboard): Promise<Moodboard> {
+    try {
+      const dataToInsert: InsertMoodboard = {
+        userId: insertMoodboardData.userId,
+        projectName: insertMoodboardData.projectName,
+        productIds: Array.isArray(insertMoodboardData.productIds) ? insertMoodboardData.productIds : [],
+        quoteId: insertMoodboardData.quoteId,
+        clientName: insertMoodboardData.clientName,
+        architectName: insertMoodboardData.architectName,
+        fileUrl: insertMoodboardData.fileUrl,
+        description: insertMoodboardData.description,
+        style: insertMoodboardData.style,
+        colorPalette: Array.isArray(insertMoodboardData.colorPalette) ? insertMoodboardData.colorPalette : [],
+        generatedImageUrl: insertMoodboardData.generatedImageUrl,
+        iaPrompt: insertMoodboardData.iaPrompt,
+        status: insertMoodboardData.status || 'pending_generation',
+      };
+      Object.keys(dataToInsert).forEach(keyStr => {
+        const key = keyStr as keyof InsertMoodboard;
+        if (dataToInsert[key] === undefined) delete dataToInsert[key];
+      });
+      const [moodboard] = await db.insert(moodboards).values(dataToInsert).returning();
+      return moodboard;
+    } catch (error) {
+      console.error('Error creating moodboard in storage:', error);
+      throw error;
+    }
   }
   
-  async updateMoodboard(id: number, moodboardUpdate: Partial<InsertMoodboard>): Promise<Moodboard | undefined> {
-    throw new Error("Method temporarily disabled due to unresolved Drizzle type issues.");
+  async updateMoodboard(id: number, moodboardUpdateData: Partial<InsertMoodboard>): Promise<Moodboard | undefined> {
+    try {
+      const dataToSet: Partial<InsertMoodboard> = { ...moodboardUpdateData }; 
+      if (moodboardUpdateData.colorPalette !== undefined) {
+        dataToSet.colorPalette = Array.isArray(moodboardUpdateData.colorPalette) ? moodboardUpdateData.colorPalette : [];
+      }
+      if (moodboardUpdateData.productIds !== undefined) {
+        dataToSet.productIds = Array.isArray(moodboardUpdateData.productIds) ? moodboardUpdateData.productIds : [];
+      }
+      
+      let hasValidUpdateField = false;
+      Object.keys(dataToSet).forEach(keyStr => {
+        const key = keyStr as keyof Partial<InsertMoodboard>;
+        if (dataToSet[key] === undefined) {
+          delete dataToSet[key];
+        } else {
+          hasValidUpdateField = true;
+        }
+      });
+
+      if (!hasValidUpdateField) {
+        return this.getMoodboard(id); 
+      }
+      
+      const finalUpdatePayload = { ...dataToSet, updatedAt: new Date() };
+
+      const [moodboard] = await db.update(moodboards).set(finalUpdatePayload).where(eq(moodboards.id, id)).returning();
+      return moodboard;
+    } catch (error) {
+      console.error(`Error updating moodboard ${id} in storage:`, error);
+      return undefined;
+    }
   }
   
   async deleteMoodboard(id: number): Promise<boolean> {
-    try {
-      const result = await db.delete(moodboards).where(eq(moodboards.id, id)).returning();
-      return result.length > 0;
-    } catch (error) {
-      console.error('Error deleting moodboard:', error);
-      return false;
-    }
+    const result = await db.delete(moodboards).where(eq(moodboards.id, id)).returning();
+    return result.length > 0;
   }
   
-  // Search products
-  async searchProducts(userId: number | string, searchText: string): Promise<Product[]> {
-    try {
-      const parsedUserId = typeof userId === 'string' ? parseInt(userId) : userId;
-      console.log(`DB: Buscando produtos para userId=${parsedUserId} com texto: "${searchText}"`);
-
-      const searchTerms = searchText
-        .toLowerCase()
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, "")
-        .replace(/[^a-z0-9\s]/g, ' ') // Substituir não alfanuméricos por espaço
-        .split(' ')
-        .filter(term => term.length > 2); // Filtrar palavras curtas
-        // TODO: Poderia remover stopwords (de, a, o, com, etc.)
-
-      if (searchTerms.length === 0) {
-        console.log("DB: Nenhum termo de busca válido após processamento.");
-        return [];
-      }
-
-      console.log("DB: Termos de busca processados:", searchTerms);
-
-      // REVERTIDO: Selecionar todas as colunas, incluindo embedding
-      const searchConditions = or(
-        ...searchTerms.map(term => ilike(products.name, `%${term}%`)),
-        ...searchTerms.map(term => ilike(products.description, `%${term}%`))
-      );
-
-      const results = await db.select()
-        .from(products)
-        .where(and(
-            eq(products.userId, parsedUserId),
-            searchConditions 
-        ))
-        .limit(20); 
-
-      console.log(`DB: Encontrados ${results.length} produtos na busca textual.`); // Ajustado log message
-      return results;
-
-    } catch (error) {
-      console.error('Error searching products:', error);
-      return [];
-    }
-  }
-
-  // Nova função para busca mais relevante
-  async findRelevantProducts(userId: number, description: string): Promise<Product[]> {
-    try {
-      const parsedUserId = typeof userId === 'string' ? parseInt(userId) : userId;
-      console.log(`DB: Buscando produtos relevantes para userId=${parsedUserId} com descrição: "${description}"`);
-
-      const searchTerms = description
-        .toLowerCase()
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, "")
-        .replace(/[^a-z0-9\s]/g, ' ')
-        .split(' ')
-        .filter(term => term.length > 1); // Manter termos com 2+ chars
-
-      if (searchTerms.length === 0) {
-        console.log("DB: Nenhum termo de busca válido após processamento para busca relevante.");
-        return [];
-      }
-
-      console.log("DB: Termos de busca relevantes processados:", searchTerms);
-
-      // REVERTIDO: Selecionar todas as colunas, incluindo embedding
-      const searchConditions = or(
-        ...searchTerms.map(term => ilike(products.name, `%${term}%`)),
-        ...searchTerms.map(term => ilike(products.description, `%${term}%`)),
-        ...searchTerms.map(term => ilike(products.category, `%${term}%`))
-      );
-
-      const results = await db.select()
-        .from(products)
-        .where(and(
-            eq(products.userId, parsedUserId),
-            searchConditions
-        ))
-        .limit(10); 
-
-      console.log(`DB: Encontrados ${results.length} produtos relevantes.`);
-      // Aqui poderíamos adicionar lógica de ranking no futuro
-      return results;
-
-    } catch (error) {
-      console.error('Error finding relevant products:', error);
-      return [];
-    }
-  }
-
-  /**
-   * Busca detalhes de múltiplos produtos por seus IDs.
-   * @param productIds Array de IDs dos produtos.
-   * @returns Um objeto onde as chaves são os IDs e os valores são os dados dos produtos.
-   */
-  async getProductsDetails(productIds: number[]): Promise<Record<number, Product>> {
-    if (!productIds || productIds.length === 0) {
-      return {};
-    }
-    try {
-      console.log(`DB: Buscando detalhes para ${productIds.length} produtos... IDs: ${productIds.join(', ')}`);
-      if (productIds.length === 0) return {}; 
-      
-      // REVERTIDO: Selecionar todas as colunas, incluindo embedding
-      const results = await db.select()
-        .from(products)
-        .where(inArray(products.id, productIds)); 
-      
-      const detailsMap: Record<number, Product> = {};
-      for (const product of results) {
-        detailsMap[product.id] = product;
-      }
-      
-      console.log(`DB: Detalhes encontrados para ${Object.keys(detailsMap).length} produtos.`);
-      return detailsMap;
-    } catch (error) {
-      console.error('Error getting products details:', error);
-      return {}; 
-    }
-  }
-
-  // Design Projects methods (RENOMEADOS E ATUALIZADOS CONFORME A INTERFACE)
   async getDesignProject(id: number): Promise<DesignProject | undefined> {
-    try {
-      const [project] = await db.select().from(designProjects).where(eq(designProjects.id, id));
-      return project;
-    } catch (error) {
-      console.error('Error getting Design project:', error);
-      return undefined;
-    }
+    const [project] = await db.select().from(designProjects).where(eq(designProjects.id, id));
+    return project;
   }
   
   async getAllDesignProjects(userId: number | string): Promise<DesignProject[]> {
-    try {
-      const parsedUserId = typeof userId === 'string' ? parseInt(userId) : userId;
-      return await db.select().from(designProjects).where(eq(designProjects.userId, parsedUserId));
-    } catch (error) {
-      console.error('Error getting all Design projects:', error);
-      return [];
-    }
+    const parsedUserId = typeof userId === 'string' ? parseInt(userId) : userId;
+    return await db.select().from(designProjects).where(eq(designProjects.userId, parsedUserId)).orderBy(desc(designProjects.createdAt));
   }
   
   async createDesignProject(insertProject: NewDesignProject): Promise<DesignProject> {
-    try {
-      // O schema designProjects já tem default para status, createdAt, updatedAt.
-      const [project] = await db.insert(designProjects).values(insertProject).returning();
-      return project;
-    } catch (error) {
-      console.error('Error creating Design project:', error);
-      throw error;
-    }
+    const [project] = await db.insert(designProjects).values(insertProject).returning();
+    return project;
   }
   
   async updateDesignProject(id: number, projectUpdate: Partial<NewDesignProject>): Promise<DesignProject | undefined> {
-    try {
-      const updateData = {
-        ...projectUpdate,
-        updatedAt: new Date(), // Garante que updatedAt seja atualizado
-      };
-      // Se 'id' estiver em projectUpdate, ele não deve ser passado para o 'set'
-      if ('id' in updateData) delete (updateData as any).id;
-
-      const [project] = await db.update(designProjects)
-        .set(updateData)
-        .where(eq(designProjects.id, id))
-        .returning();
-      return project;
-    } catch (error) {
-      console.error('Error updating Design project:', error);
-      return undefined;
-    }
+    const updateData = { ...projectUpdate, updatedAt: new Date() };
+    delete (updateData as any).id; 
+    const [project] = await db.update(designProjects).set(updateData).where(eq(designProjects.id, id)).returning();
+    return project;
   }
   
   async deleteDesignProject(id: number): Promise<void> {
-    try {
-      // onDelete: "cascade" no schema para designProjectItems deve cuidar de deletar itens associados.
-      // Para aiDesignChatMessages, se projectId se refere a designProjects.id, eles precisariam ser deletados manualmente se não houver cascade.
-      const messagesToDelete = await db.select({id: aiDesignChatMessages.id}).from(aiDesignChatMessages).where(eq(aiDesignChatMessages.projectId, id));
-      if (messagesToDelete.length > 0) {
-        await db.delete(aiDesignChatMessages).where(inArray(aiDesignChatMessages.id, messagesToDelete.map(m => m.id!)));
-      }
-      await db.delete(designProjects).where(eq(designProjects.id, id));
-    } catch (error) {
-      console.error('Error deleting Design project:', error);
+    const messagesToDelete = await db.select({id: aiDesignChatMessages.id}).from(aiDesignChatMessages).where(eq(aiDesignChatMessages.projectId, id));
+    if (messagesToDelete.length > 0) {
+      await db.delete(aiDesignChatMessages).where(inArray(aiDesignChatMessages.id, messagesToDelete.map(m => m.id!)));
     }
+    await db.delete(designProjectItems).where(eq(designProjectItems.designProjectId, id));
+    await db.delete(designProjects).where(eq(designProjects.id, id));
   }
 
-  // Design Project Items methods
   async getDesignProjectItems(projectId: number): Promise<DesignProjectItem[]> {
-    try {
-      return await db.select().from(designProjectItems).where(eq(designProjectItems.designProjectId, projectId));
-    } catch (error) {
-      console.error('Error getting design project items:', error);
-      return [];
-    }
+    if (!projectId) return [];
+    return await db.select().from(designProjectItems).where(eq(designProjectItems.designProjectId, projectId)).orderBy(desc(designProjectItems.createdAt));
   }
   
-  // AI Design Chat Messages methods
+  async createDesignProjectItem(data: NewDesignProjectItem): Promise<DesignProjectItem> {
+    if (!data.designProjectId) throw new Error("designProjectId is required");
+    const [newItem] = await db.insert(designProjectItems).values(data).returning();
+    if (!newItem) throw new Error("Failed to create design project item.");
+    return newItem;
+  }
+
+  async updateDesignProjectItem(itemId: number, data: Partial<NewDesignProjectItem>): Promise<DesignProjectItem | undefined> {
+    try {
+      const updatePayload = { ...data, updatedAt: new Date() };
+      delete (updatePayload as any).id; delete (updatePayload as any).designProjectId; delete (updatePayload as any).createdAt;
+      if (Object.keys(updatePayload).length === 1 && updatePayload.updatedAt) {
+         const existingItem = await db.select().from(designProjectItems).where(eq(designProjectItems.id, itemId)).limit(1);
+         if (existingItem.length > 0) return existingItem[0];
+         return undefined; // Retorna undefined se o item não for encontrado, em vez de potencialmente erro
+      }
+      const [updatedItem] = await db.update(designProjectItems).set(updatePayload).where(eq(designProjectItems.id, itemId)).returning();
+      if (!updatedItem) return undefined; // Adicionado para consistência se o update não retornar nada
+      return updatedItem;
+    } catch (error) {
+      console.error(`Error updating design project item ${itemId}:`, error);
+      return undefined; // Alterado de throw error;
+    }
+  }
+
   async getAiDesignChatMessages(projectId: number): Promise<AiDesignChatMessage[]> {
-    try {
-      return await db.select().from(aiDesignChatMessages).where(eq(aiDesignChatMessages.projectId, projectId));
-    } catch (error) {
-      console.error('Error getting AI design chat messages:', error);
-      return [];
-    }
+    return await db.select().from(aiDesignChatMessages).where(eq(aiDesignChatMessages.projectId, projectId)).orderBy(aiDesignChatMessages.createdAt);
   }
   
-  async createAiDesignChatMessage(insertMessage: InsertAiDesignChatMessage): Promise<AiDesignChatMessage> {
-    try {
-      const [message] = await db.insert(aiDesignChatMessages).values(insertMessage).returning();
-      return message;
-    } catch (error) {
-      console.error('Error creating AI design chat message:', error);
-      throw error;
-    }
+  async createAiDesignChatMessage(message: InsertAiDesignChatMessage): Promise<AiDesignChatMessage> {
+    const [newMessage] = await db.insert(aiDesignChatMessages).values(message).returning();
+    return newMessage;
   }
 
-  // <<< IMPLEMENTAÇÃO ADICIONADA AQUI >>>
-  async createDesignProjectItem(insertItem: NewDesignProjectItem): Promise<DesignProjectItem> {
+  async searchProducts(userId: number | string, searchText: string): Promise<Product[]> {
+    console.log(`searchProducts chamado com userId: ${userId}, searchText: ${searchText}`);
+    // Implementação básica: Retorna array vazio. TODO: Implementar lógica de busca.
     try {
-      const [item] = await db.insert(designProjectItems).values(insertItem).returning();
-      return item;
-    } catch (error) {
-      console.error('Error creating Design project item:', error);
-      throw error;
-    }
-  }
+      const parsedUserId = typeof userId === 'string' ? parseInt(userId) : userId;
+      if (!searchText || searchText.trim() === '') return [];
 
-  // <<< NOVO MÉTODO ADICIONADO AQUI >>>
-  async findProductsByEmbedding(userId: number, imageEmbeddingVector: number[], limit: number = 5): Promise<(Product & { distance?: number })[]> {
-    if (!imageEmbeddingVector || imageEmbeddingVector.length === 0) {
-      console.warn("[Storage.findProductsByEmbedding] Vetor de embedding da imagem está vazio. Retornando array vazio.");
+      const results = await db.select()
+        .from(products)
+        .where(and(
+          eq(products.userId, parsedUserId),
+          or(
+            ilike(products.name, `%${searchText}%`),
+            ilike(products.description, `%${searchText}%`),
+            ilike(products.category, `%${searchText}%`),
+            ilike(products.code, `%${searchText}%`)
+          )
+        ))
+        .limit(50); // Limitar resultados para performance
+      return results;
+    } catch (error) {
+      console.error('Error in searchProducts:', error);
       return [];
     }
+  }
+
+  async findRelevantProducts(userId: number, description: string): Promise<Product[]> {
+    console.log(`findRelevantProducts chamado com userId: ${userId}, description: ${description}`);
+    // Implementação básica: Reutiliza searchProducts. TODO: Implementar lógica mais específica se necessário.
+    return this.searchProducts(userId, description);
+  }
+
+  async getProductsDetails(productIds: number[]): Promise<Record<number, Product>> {
+    console.log(`getProductsDetails chamado com productIds: ${productIds}`);
+    // Implementação básica: Retorna objeto vazio. TODO: Implementar lógica de busca.
+    if (!productIds || productIds.length === 0) return {};
+    try {
+      const result = await db.select().from(products).where(inArray(products.id, productIds));
+      const productsMap: Record<number, Product> = {};
+      result.forEach(product => {
+        productsMap[product.id] = product;
+      });
+      return productsMap;
+    } catch (error) {
+      console.error('Error in getProductsDetails:', error);
+      return {};
+    }
+  }
+
+  async findProductsByEmbedding(userId: number, imageEmbeddingVector: number[], limit: number = 5): Promise<(Product & { distance?: number })[]> {
+    if (!imageEmbeddingVector || imageEmbeddingVector.length === 0) return [];
     const embeddingStringInput = `[${imageEmbeddingVector.join(',')}]`;
-
-    console.log(`[Storage.findProductsByEmbedding] Buscando produtos para userId: ${userId} com similaridade de embedding. Limite: ${limit}.`);
-
     try {
       const results = await db.select({
-        // Selecionar todas as colunas da tabela products, aninhadas sob a chave 'product'
         product: getTableColumns(products),
-        // Selecionar a distância calculada pelo pgvector
         distance: sql<number>`${products.embedding} <-> ${embeddingStringInput}`.as('distance')
       })
       .from(products)
-      .where(and(
-        eq(products.userId, userId),
-        isNotNull(products.embedding) 
-      ))
-      .orderBy(sql`${products.embedding} <-> ${embeddingStringInput}`) 
+      .where(and(eq(products.userId, userId), isNotNull(products.embedding)))
+      .orderBy(sql`${products.embedding} <-> ${embeddingStringInput}`)
       .limit(limit);
-
-      // Mapear os resultados para o formato esperado: (Product & { distance: number })[]
-      const similarProductsWithDistance = results.map(res => ({
-        ...res.product,
-        distance: res.distance
-      }));
-
-      console.log(`[Storage.findProductsByEmbedding] Encontrados ${similarProductsWithDistance.length} produtos por similaridade de embedding.`);
-      return similarProductsWithDistance;
+      return results.map(res => ({ ...res.product, distance: res.distance }));
     } catch (error) {
-      console.error(`[Storage.findProductsByEmbedding] Erro ao buscar produtos por embedding para userId ${userId}:`, error);
+      console.error(`Error finding products by embedding for userId ${userId}:`, error);
       return [];
     }
   }
+
+  async createFloorPlan(data: InsertFloorPlan): Promise<FloorPlan> {
+    const validatedData: InsertFloorPlan = insertFloorPlanSchema.parse(data);
+    const valuesToInsert: typeof floorPlans.$inferInsert = {
+      userId: validatedData.userId,
+      aiDesignProjectId: validatedData.aiDesignProjectId,
+      name: validatedData.name!,
+      originalImageUrl: validatedData.originalImageUrl!,
+      processedImageUrl: validatedData.processedImageUrl,
+      iaPrompt: validatedData.iaPrompt,
+      iaStatus: validatedData.iaStatus || 'pending_upload',
+      processingErrors: validatedData.processingErrors,
+    };
+    const [newFloorPlan] = await db.insert(floorPlans).values(valuesToInsert).returning();
+    if (!newFloorPlan) throw new Error("Failed to create floor plan.");
+    return newFloorPlan;
+  }
+
+  async getFloorPlansByAiProject(aiProjectId: number): Promise<FloorPlan[]> {
+    return await db.select().from(floorPlans).where(eq(floorPlans.aiDesignProjectId, aiProjectId)).orderBy(desc(floorPlans.createdAt));
+  }
+
+  async getFloorPlanById(id: number): Promise<FloorPlan | undefined> {
+    const [floorPlan] = await db.select().from(floorPlans).where(eq(floorPlans.id, id));
+    return floorPlan;
+  }
+
+  async updateFloorPlan(id: number, data: Partial<Omit<InsertFloorPlan, 'id' | 'userId' | 'aiDesignProjectId' | 'createdAt'>>): Promise<FloorPlan | undefined> {
+    const updatePayload: { [key: string]: any } = {};
+    for (const key in data) {
+      if (Object.prototype.hasOwnProperty.call(data, key)) {
+        updatePayload[key] = (data as any)[key];
+      }
+    }
+    if (Object.keys(updatePayload).length > 0) {
+        updatePayload.updatedAt = new Date();
+    } else {
+        return this.getFloorPlanById(id);
+    }
+
+    const [updatedFloorPlan] = await db.update(floorPlans).set(updatePayload).where(eq(floorPlans.id, id)).returning();
+    return updatedFloorPlan;
+  }
+
+  async createFloorPlanArea(data: InsertFloorPlanArea): Promise<FloorPlanArea> {
+    const validatedData = insertFloorPlanAreaSchema.parse(data);
+    const [newArea] = await db.insert(floorPlanAreas).values(validatedData).returning();
+    if (!newArea) throw new Error("Failed to create floor plan area.");
+    return newArea;
+  }
+
+  async getFloorPlanAreasByFloorPlanId(floorPlanId: number): Promise<FloorPlanArea[]> {
+    return await db.select().from(floorPlanAreas).where(eq(floorPlanAreas.floorPlanId, floorPlanId)).orderBy(desc(floorPlanAreas.createdAt));
+  }
+
+  async updateFloorPlanArea(areaId: number, data: Partial<Omit<InsertFloorPlanArea, 'id' | 'userId' | 'floorPlanId' | 'createdAt'>>): Promise<FloorPlanArea | undefined> {
+    const updatePayload: { [key: string]: any } = {};
+    for (const key in data) {
+      if (Object.prototype.hasOwnProperty.call(data, key) && (data as any)[key] !== undefined) {
+        updatePayload[key] = (data as any)[key];
+      }
+    }
+    if (Object.keys(updatePayload).length === 0) return this.getFloorPlanAreaById(areaId);
+    updatePayload.updatedAt = new Date();
+    const [updatedArea] = await db.update(floorPlanAreas).set(updatePayload).where(eq(floorPlanAreas.id, areaId)).returning();
+    return updatedArea;
+  }
+
+  async getFloorPlanAreaById(areaId: number): Promise<FloorPlanArea | undefined> {
+    const [area] = await db.select().from(floorPlanAreas).where(eq(floorPlanAreas.id, areaId));
+    return area;
+  }
+
+  async deleteFloorPlanArea(areaId: number): Promise<boolean> {
+    const result = await db.delete(floorPlanAreas).where(eq(floorPlanAreas.id, areaId)).returning({ id: floorPlanAreas.id });
+    return result.length > 0;
+  }
 }
 
-// Usar APENAS DatabaseStorage
-export const storage = new DatabaseStorage();
+export const storage = new DatabaseStorage(); 

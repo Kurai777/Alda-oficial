@@ -6,14 +6,16 @@ import { Progress } from "@/components/ui/progress";
 import { Upload, Image as ImageIcon, CheckCircle, XCircle, Clock, Eye, Sofa, Table, Plus, Loader2 } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useToast } from "@/hooks/use-toast";
+import { callGenerateFinalRenderApi, getDesignProjectDetailsApi, updateDesignProjectItemApi, uploadProjectImageApi } from "../lib/apiClient";
 
 // --- Mock Data --- 
 // (Simula os tipos que viriam do backend - @shared/schema)
 type MockDesignProject = {
   id: number;
   name: string;
-  status: 'new' | 'processing' | 'awaiting_selection' | 'processed_no_items' | 'completed' | 'failed';
+  status: 'new' | 'processing' | 'awaiting_selection' | 'processed_no_items' | 'completed' | 'failed' | 'rendering_final';
   clientRenderImageUrl: string | null;
+  generatedRenderUrl?: string | null;
   items?: MockDesignProjectItem[]; // Adicionado para conter os itens
 };
 
@@ -27,6 +29,7 @@ type MockProductSummary = {
 type MockDesignProjectItem = {
   id: number;
   designProjectId: number;
+  detectedObjectName?: string | null;
   detectedObjectDescription: string;
   detectedObjectBoundingBox: any | null;
   suggestedProductId1: number | null;
@@ -40,6 +43,10 @@ type MockDesignProjectItem = {
   matchScore3: number | null;
   selectedProductId: number | null;
   userFeedback: string | null;
+  generatedInpaintedImageUrl?: string | null;
+  notes?: string | null;
+  createdAt?: string | Date;
+  updatedAt?: string | Date;
 };
 
 // Dados mock dos produtos (para referência)
@@ -57,15 +64,16 @@ const getMockProjectData = (projectId: number): MockDesignProject | null => {
     return {
       id: 1,
       name: "Sala de Estar - Cliente Joana",
-      status: 'awaiting_selection', // Simular que a IA já processou
-      clientRenderImageUrl: "/placeholder-render.jpg", // Usar uma imagem placeholder
+      status: 'awaiting_selection',
+      clientRenderImageUrl: "/placeholder-render.jpg",
       items: [
         {
           id: 101,
           designProjectId: 1,
+          detectedObjectName: "Sofá de 3 lugares",
           detectedObjectDescription: "Sofá de 3 lugares cinza, estilo moderno",
-          detectedObjectBoundingBox: { x: 10, y: 30, w: 50, h: 40 }, // Exemplo
-          suggestedProductId1: 15, // ID de um produto real (se existir)
+          detectedObjectBoundingBox: { x: 10, y: 30, w: 50, h: 40 },
+          suggestedProductId1: 15,
           suggestedProduct1Details: mockProductsDb[15] || null,
           matchScore1: 0.92,
           suggestedProductId2: 23,
@@ -76,23 +84,28 @@ const getMockProjectData = (projectId: number): MockDesignProject | null => {
           matchScore3: 0.71,
           selectedProductId: null,
           userFeedback: null,
+          generatedInpaintedImageUrl: null,
+          notes: null
         },
         {
           id: 102,
           designProjectId: 1,
+          detectedObjectName: "Mesa de centro",
           detectedObjectDescription: "Mesa de centro retangular de madeira escura",
-          detectedObjectBoundingBox: { x: 30, y: 60, w: 30, h: 20 }, // Exemplo
+          detectedObjectBoundingBox: { x: 30, y: 60, w: 30, h: 20 },
           suggestedProductId1: 42,
           suggestedProduct1Details: mockProductsDb[42] || null,
           matchScore1: 0.88,
           suggestedProductId2: 5,
           suggestedProduct2Details: mockProductsDb[5] || null,
           matchScore2: 0.81,
-          suggestedProductId3: null, // Apenas 2 sugestões
+          suggestedProductId3: null,
           suggestedProduct3Details: null,
           matchScore3: null,
           selectedProductId: null,
           userFeedback: null,
+          generatedInpaintedImageUrl: null,
+          notes: null
         },
       ]
     };
@@ -109,16 +122,8 @@ const getMockProjectData = (projectId: number): MockDesignProject | null => {
   return null; // Projeto não encontrado
 };
 
-// Função mock para buscar dados de UM projeto
-const fetchDesignProject = async (projectId: number): Promise<MockDesignProject | null> => {
-  console.log(`[Mock API] Fetching design project ID: ${projectId}...`);
-  await new Promise(resolve => setTimeout(resolve, 500)); 
-  // Simular not found
-  // if (projectId > 2) throw new Error("Projeto não encontrado (404)");
-  return getMockProjectData(projectId); // Usa a lógica mock existente
-};
-
-// Função mock para simular o upload da imagem
+// Função mock para simular o upload da imagem (PODE SER REMOVIDA/COMENTADA)
+/*
 const uploadRenderImage = async ({ projectId, file }: { projectId: number, file: File }): Promise<{ imageUrl: string }> => {
   console.log(`[Mock API] Uploading image ${file.name} for project ${projectId}...`);
   await new Promise(resolve => setTimeout(resolve, 1500)); // Simular delay de upload
@@ -136,8 +141,10 @@ const uploadRenderImage = async ({ projectId, file }: { projectId: number, file:
   }
   return { imageUrl: mockImageUrl }; 
 };
+*/
 
-// Função mock para simular a seleção de um produto
+// Função mock para simular a seleção de um produto (PODE SER REMOVIDA/COMENTADA)
+/*
 const selectProductForItem = async ({ projectId, itemId, selectedProductId }: { projectId: number, itemId: number, selectedProductId: number | null }): Promise<MockDesignProjectItem> => {
   console.log(`[Mock API] Selecting product ${selectedProductId} for item ${itemId} in project ${projectId}...`);
   await new Promise(resolve => setTimeout(resolve, 500)); // Simular delay da API
@@ -156,6 +163,21 @@ const selectProductForItem = async ({ projectId, itemId, selectedProductId }: { 
     throw new Error("Item não encontrado nos dados mock");
   }
 };
+*/
+
+// Função mock para simular a geração do render final
+const triggerFinalRender = async (projectId: number): Promise<{ message: string }> => {
+  console.log(`[Mock API] Triggering final render for project ${projectId}...`);
+  await new Promise(resolve => setTimeout(resolve, 2500)); // Aumentar delay para simular processamento
+  
+  const projectData = getMockProjectData(projectId);
+  if (projectData) {
+    projectData.status = 'completed'; // Simular que o render foi concluído
+    projectData.generatedRenderUrl = "/placeholder-render-final.jpg"; // <<< Adicionar URL mockada para o render final
+    console.log(`[Mock API] Project ${projectId} status updated to completed. Final render URL: ${projectData.generatedRenderUrl}`);
+  }
+  return { message: "Render final gerado com sucesso!" }; // Mensagem de sucesso para o toast
+};
 
 // --- Fim Mock Data & API ---
 
@@ -165,24 +187,21 @@ const DesignAiProjectPage: React.FC = () => {
   const { toast } = useToast();
   const queryClient = useQueryClient(); // Para invalidar queries
 
-  // SUBSTITUIR useEffect por useQuery
   const { data: project, isLoading, isError, error } = useQuery<MockDesignProject | null, Error>({
-    queryKey: ['designProject', projectId], // Chave inclui ID
-    queryFn: () => fetchDesignProject(projectId),
-    enabled: !!projectId, // Só rodar query se projectId for válido
+    queryKey: ['designProject', projectId],
+    queryFn: () => getDesignProjectDetailsApi(projectId), // <<< USAR A FUNÇÃO DE API REAL
+    enabled: !!projectId, 
   });
 
   // Definir a Mutação para upload
-  const uploadMutation = useMutation<{
-      imageUrl: string 
-    }, 
+  const uploadMutation = useMutation<
+    MockDesignProject, // <<< TIPO DE RETORNO ATUALIZADO para MockDesignProject
     Error, 
-    { projectId: number, file: File }
+    { projectId: number, file: File, userMessageText?: string } // Adicionado userMessageText opcional
   >({
-    mutationFn: uploadRenderImage, // Função que faz o "upload"
-    onSuccess: (data) => {
-      toast({ title: "Upload Concluído", description: "Imagem enviada com sucesso. Iniciando processamento." });
-      // Invalidar a query do projeto para buscar dados atualizados (imagem/status)
+    mutationFn: (variables) => uploadProjectImageApi(variables.projectId, variables.file, variables.userMessageText), // <<< USAR A FUNÇÃO DE API REAL
+    onSuccess: (updatedProject) => { // Recebe o projeto atualizado
+      toast({ title: "Upload Concluído", description: `Imagem ${updatedProject.clientRenderImageUrl ? 'enviada' : 'não processada'}. Análise iniciada.` });
       queryClient.invalidateQueries({ queryKey: ['designProject', projectId] });
     },
     onError: (error) => {
@@ -190,14 +209,13 @@ const DesignAiProjectPage: React.FC = () => {
     },
   });
 
-  // Atualizar handleImageUpload para usar a mutação
   const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file && projectId) {
       console.log("Arquivo selecionado:", file.name);
-      uploadMutation.mutate({ projectId, file }); // Chamar a mutação
+      // Poderíamos adicionar um input para userMessageText se necessário, por agora não passaremos
+      uploadMutation.mutate({ projectId, file }); 
     }
-    // Limpar o input para permitir upload do mesmo arquivo novamente
     event.target.value = ''; 
   };
 
@@ -209,6 +227,7 @@ const DesignAiProjectPage: React.FC = () => {
       case 'processed_no_items': return { text: 'Processado (Nenhum item detectado)', icon: CheckCircle, color: 'text-green-500', progress: 100 };
       case 'completed': return { text: 'Concluído', icon: CheckCircle, color: 'text-green-500', progress: 100 };
       case 'failed': return { text: 'Falha no Processamento', icon: XCircle, color: 'text-red-500', progress: 0 };
+      case 'rendering_final': return { text: 'Gerando Render Final', icon: Loader2, color: 'text-purple-500', progress: 90 };
       default: return { text: 'Desconhecido', icon: Clock, color: 'text-gray-500', progress: 0 };
     }
   };
@@ -230,20 +249,50 @@ const DesignAiProjectPage: React.FC = () => {
 
   // <<< NOVA MUTAÇÃO para selecionar produto >>>
   const selectProductMutation = useMutation< 
-    MockDesignProjectItem, // Tipo do retorno da API (item atualizado)
+    MockDesignProjectItem, 
     Error,
-    { itemId: number, selectedProductId: number | null } // Input da mutação
+    { itemId: number, selectedProductId: number | null } 
   >({
-    mutationFn: (variables) => selectProductForItem({ projectId, ...variables }), // Chama a função mock
-    onSuccess: (updatedItem) => {
-      toast({ title: "Seleção Salva", description: `Produto ID ${updatedItem.selectedProductId} selecionado para o item.` });
-      // Atualizar estado local imediatamente para feedback rápido
-      setLocalSelections(prev => ({ ...prev, [updatedItem.id]: updatedItem.selectedProductId }));
-      // Invalidar query do projeto pode ser feito também, mas pode ser mais lento
-      // queryClient.invalidateQueries({ queryKey: ['designProject', projectId] });
+    mutationFn: (variables) => updateDesignProjectItemApi(projectId, variables.itemId, { selectedProductId: variables.selectedProductId }), // <<< USAR A FUNÇÃO DE API REAL
+    onSuccess: (updatedItem, variables) => { 
+      toast({ title: "Seleção Salva", description: `Produto ID ${variables.selectedProductId} selecionado para o item ${variables.itemId}.` });
+      setLocalSelections(prev => ({ ...prev, [variables.itemId]: variables.selectedProductId }));
+      queryClient.invalidateQueries({ queryKey: ['designProject', projectId] }); 
+      if (variables.selectedProductId) { 
+          toast({ title: "Gerando Prévia...", description: "A imagem de prévia para este item está sendo gerada e aparecerá em breve.", duration: 7000 });
+      }
     },
     onError: (error) => {
-      toast({ variant: "destructive", title: "Erro ao Salvar", description: error.message || "Não foi possível salvar a seleção." });
+      toast({ variant: "destructive", title: "Erro ao Salvar Seleção", description: error.message || "Não foi possível salvar a seleção." });
+    },
+  });
+
+  // <<< NOVA MUTAÇÃO para gerar render final >>>
+  const generateRenderMutation = useMutation<
+    { message: string }, 
+    Error, 
+    { projectId: number } 
+  >({
+    mutationFn: (variables) => callGenerateFinalRenderApi(variables.projectId), // <<< USAR A FUNÇÃO DE API REAL
+    onMutate: () => {
+      toast({ 
+        title: "Iniciando Geração do Render", 
+        description: "Seu ambiente personalizado está sendo preparado...",
+      });
+    },
+    onSuccess: (data) => {
+      toast({ 
+        title: "Render em Processamento!", 
+        description: data.message || "O render final foi solicitado. Você será notificado quando estiver pronto."
+      });
+      queryClient.invalidateQueries({ queryKey: ['designProject', projectId] });
+    },
+    onError: (error) => {
+      toast({ 
+        variant: "destructive", 
+        title: "Erro ao Gerar Render", 
+        description: error.message || "Não foi possível iniciar a geração do render."
+      });
     },
   });
 
@@ -261,6 +310,7 @@ const DesignAiProjectPage: React.FC = () => {
 
   const statusInfo = getStatusInfo(project.status);
   const isUploading = uploadMutation.isPending; // Usar estado da mutação
+  const isGeneratingRender = generateRenderMutation.isPending;
 
   return (
     <div className="container mx-auto py-8">
@@ -272,16 +322,29 @@ const DesignAiProjectPage: React.FC = () => {
       {project.status === 'processing' && (
          <Progress value={statusInfo.progress} className="w-full h-2 mb-6" />
       )}
+      {project.status === 'rendering_final' && (
+         <Progress value={90} className="w-full h-2 mb-6" /> // Progresso para rendering_final
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* Coluna da Imagem e Upload (ATUALIZADA) */}
-        <div className="lg:col-span-1">
+        <div className="lg:col-span-1 space-y-4">
           <Card>
             <CardHeader>
-              <CardTitle>Imagem do Cliente (Render)</CardTitle>
+              <CardTitle>
+                {project.status === 'completed' && project.generatedRenderUrl 
+                  ? "Render Final do Ambiente"
+                  : "Imagem do Cliente (Render)"}
+              </CardTitle>
             </CardHeader>
             <CardContent>
-              {project.clientRenderImageUrl ? (
+              {/* <<< LÓGICA DE EXIBIÇÃO ATUALIZADA >>> */}
+              {project.status === 'completed' && project.generatedRenderUrl ? (
+                <div>
+                  <img src={project.generatedRenderUrl} alt="Render Final do Ambiente" className="rounded-md object-cover w-full h-auto" />
+                  <p className="text-xs text-muted-foreground mt-2 text-center">Este é o render final gerado com suas seleções.</p>
+                </div>
+              ) : project.clientRenderImageUrl ? (
                 <img src={project.clientRenderImageUrl} alt="Render do Cliente" className="rounded-md object-cover w-full h-auto" />
               ) : (
                 <div className="aspect-video bg-muted rounded-md flex items-center justify-center text-muted-foreground">
@@ -290,28 +353,31 @@ const DesignAiProjectPage: React.FC = () => {
               )}
             </CardContent>
             <CardFooter>
-              <label htmlFor="render-upload" className="w-full">
-                <Button 
-                  variant="outline" 
-                  className="w-full" 
-                  disabled={project.status === 'processing' || isUploading} // Desabilitar se processando ou fazendo upload
-                >
-                  {isUploading ? (
-                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  ) : (
-                     <Upload className="mr-2 h-4 w-4" /> 
-                  )}
-                  {isUploading ? 'Enviando...' : (project.clientRenderImageUrl ? 'Trocar Imagem' : 'Carregar Imagem')}
-                </Button>
-                <input 
-                  id="render-upload" 
-                  type="file" 
-                  accept="image/*" 
-                  className="hidden" 
-                  onChange={handleImageUpload} 
-                  disabled={project.status === 'processing' || isUploading}
-                />
-              </label>
+              {/* Manter o botão de upload se o render final não foi gerado ou se o usuário quiser trocar a imagem base */}
+              {!(project.status === 'completed' && project.generatedRenderUrl) && (
+                <label htmlFor="render-upload" className="w-full">
+                  <Button 
+                    variant="outline" 
+                    className="w-full" 
+                    disabled={project.status === 'processing' || isUploading || isGeneratingRender}
+                  >
+                    {isUploading ? (
+                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                       <Upload className="mr-2 h-4 w-4" /> 
+                    )}
+                    {isUploading ? 'Enviando...' : (project.clientRenderImageUrl ? 'Trocar Imagem Base' : 'Carregar Imagem Base')}
+                  </Button>
+                  <input 
+                    id="render-upload" 
+                    type="file" 
+                    accept="image/*" 
+                    className="hidden" 
+                    onChange={handleImageUpload} 
+                    disabled={project.status === 'processing' || isUploading || isGeneratingRender}
+                  />
+                </label>
+              )}
             </CardFooter>
           </Card>
         </div>
@@ -339,70 +405,90 @@ const DesignAiProjectPage: React.FC = () => {
               const isSelecting = selectProductMutation.isPending && selectProductMutation.variables?.itemId === item.id;
 
               return (
-                <Card key={item.id} className={currentSelection ? 'border-primary' : ''}> {/* Destaca card se item selecionado */}
+                <Card key={item.id} className={currentSelection ? 'border-primary' : ''}>
                   <CardHeader>
-                    <CardTitle>Item Detectado:</CardTitle>
+                    <CardTitle>Item Detectado: {item.detectedObjectName || 'Móvel'}</CardTitle>
                     <CardDescription>{item.detectedObjectDescription}</CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-4">
-                    <h4 className="font-semibold">Sugestões do Catálogo:</h4>
-                    
-                    {[ 
-                      { details: item.suggestedProduct1Details, score: item.matchScore1 },
-                      { details: item.suggestedProduct2Details, score: item.matchScore2 },
-                      { details: item.suggestedProduct3Details, score: item.matchScore3 },
-                    ].map((suggestion, index) => {
-                      if (!suggestion.details) return null; // Pular se não houver detalhes
-                      
-                      const productId = suggestion.details.id;
-                      const isSelected = currentSelection === productId;
-                      const isThisOneLoading = isSelecting && selectProductMutation.variables?.selectedProductId === productId;
-
-                      return (
-                        <div key={index} className={`flex items-center gap-4 p-3 border rounded-md ${isSelected ? 'bg-primary/10 border-primary/50' : 'bg-secondary/30'}`}>
-                          {/* Imagem do Produto Sugerido */} 
-                          <div className="w-16 h-16 bg-muted rounded flex items-center justify-center overflow-hidden shrink-0">
-                            {suggestion.details.imageUrl ? (
-                              <img src={suggestion.details.imageUrl} alt={suggestion.details.name} className="w-full h-full object-cover" />
-                            ) : (
-                              // Usar ícone baseado na descrição ou categoria?
-                              item.detectedObjectDescription.toLowerCase().includes('sofá') || item.detectedObjectDescription.toLowerCase().includes('poltrona') ? 
-                              <Sofa className="w-8 h-8 text-muted-foreground" /> : 
-                              <Table className="w-8 h-8 text-muted-foreground" />
-                            )}
-                          </div>
-                          {/* Nome e Score */}
-                          <div className="flex-grow">
-                            <p className="font-medium">{suggestion.details.name}</p>
-                            <p className="text-sm text-muted-foreground">Similaridade: {suggestion.score ? `${(suggestion.score * 100).toFixed(0)}%` : 'N/A'}</p>
-                          </div>
-                          {/* Botões */}
-                          <div className="flex flex-col sm:flex-row gap-2 shrink-0">
-                              <Button 
-                                size="sm" 
-                                variant={isSelected ? "default" : "secondary"} // Mudar variante se selecionado
-                                disabled={isSelecting} // Desabilitar todos botões do item durante a mutação
-                                onClick={() => {
-                                  // Se já selecionado, clicar de novo desmarca (ou outra lógica)
-                                  const newSelectedId = isSelected ? null : productId;
-                                  selectProductMutation.mutate({ itemId: item.id, selectedProductId: newSelectedId });
-                                }}
-                              >
-                                {isThisOneLoading ? (
-                                  <Loader2 className="mr-1 h-4 w-4 animate-spin" />
-                                ) : (
-                                  isSelected ? <CheckCircle className="mr-1 h-4 w-4 text-primary-foreground" /> : <CheckCircle className="mr-1 h-4 w-4" />
-                                )}
-                                {isThisOneLoading ? 'Salvando...' : (isSelected ? 'Selecionado' : 'Selecionar')}
-                              </Button>
-                          </div>
+                    {item.generatedInpaintedImageUrl ? (
+                      <div>
+                        <h4 className="font-semibold mb-2">Prévia com Produto Selecionado:</h4>
+                        <div className="aspect-video bg-muted rounded-md flex items-center justify-center overflow-hidden border">
+                          <img 
+                            src={item.generatedInpaintedImageUrl} 
+                            alt={`Prévia do ambiente com ${item.detectedObjectName || 'produto selecionado'}`} 
+                            className="w-full h-full object-contain" 
+                          />
                         </div>
-                      );
-                    })}
-                    
-                    {/* Mensagem se nenhuma sugestão foi encontrada */}
-                    {!item.suggestedProductId1 && !item.suggestedProductId2 && !item.suggestedProductId3 && (
-                       <p className="text-sm text-muted-foreground italic">Nenhuma sugestão encontrada para este item.</p>
+                        <Button 
+                          variant="outline"
+                          size="sm"
+                          className="mt-2"
+                          onClick={() => {
+                            selectProductMutation.mutate({ itemId: item.id, selectedProductId: null });
+                          }}
+                          disabled={selectProductMutation.isPending && selectProductMutation.variables?.itemId === item.id}
+                        >
+                          { (selectProductMutation.isPending && selectProductMutation.variables?.itemId === item.id && selectProductMutation.variables?.selectedProductId === null) ? 
+                            <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : null }
+                          Alterar Seleção / Ver Sugestões
+                        </Button>
+                      </div>
+                    ) : (
+                      <> 
+                        <h4 className="font-semibold">Sugestões do Catálogo:</h4>
+                        {[ 
+                          { details: item.suggestedProduct1Details, score: item.matchScore1 },
+                          { details: item.suggestedProduct2Details, score: item.matchScore2 },
+                          { details: item.suggestedProduct3Details, score: item.matchScore3 },
+                        ].map((suggestion, index) => {
+                          if (!suggestion.details) return null;
+                          const productId = suggestion.details.id;
+                          const isSelected = currentSelection === productId;
+                          const isThisOneLoading = selectProductMutation.isPending && selectProductMutation.variables?.itemId === item.id && selectProductMutation.variables?.selectedProductId === productId;
+
+                          return (
+                            <div key={index} className={`flex items-center gap-4 p-3 border rounded-md ${isSelected ? 'bg-primary/10 border-primary/50' : 'bg-secondary/30'}`}>
+                              <div className="w-16 h-16 bg-muted rounded flex items-center justify-center overflow-hidden shrink-0">
+                                {suggestion.details.imageUrl ? (
+                                  <img src={suggestion.details.imageUrl} alt={suggestion.details.name} className="w-full h-full object-cover" />
+                                ) : (
+                                  item.detectedObjectDescription.toLowerCase().includes('sofá') || item.detectedObjectDescription.toLowerCase().includes('poltrona') ? 
+                                  <Sofa className="w-8 h-8 text-muted-foreground" /> : 
+                                  <Table className="w-8 h-8 text-muted-foreground" />
+                                )}
+                              </div>
+                              <div className="flex-grow">
+                                <p className="font-medium">{suggestion.details.name}</p>
+                                <p className="text-sm text-muted-foreground">Similaridade: {suggestion.score ? `${(suggestion.score * 100).toFixed(0)}%` : 'N/A'}</p>
+                              </div>
+                              <div className="flex flex-col sm:flex-row gap-2 shrink-0">
+                                  <Button 
+                                    size="sm" 
+                                    variant={isSelected ? "default" : "secondary"}
+                                    disabled={selectProductMutation.isPending && selectProductMutation.variables?.itemId === item.id}
+                                    onClick={() => {
+                                      const newSelectedId = isSelected ? null : productId;
+                                      selectProductMutation.mutate({ itemId: item.id, selectedProductId: newSelectedId });
+                                    }}
+                                  >
+                                    {isThisOneLoading ? (
+                                      <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                                    ) : (
+                                      isSelected ? <CheckCircle className="mr-1 h-4 w-4 text-primary-foreground" /> : <CheckCircle className="mr-1 h-4 w-4" />
+                                    )}
+                                    {isThisOneLoading ? 'Salvando...' : (isSelected ? 'Selecionado' : 'Limpar')}
+                                  </Button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                        
+                        {!item.suggestedProductId1 && !item.suggestedProductId2 && !item.suggestedProductId3 && (
+                           <p className="text-sm text-muted-foreground italic">Nenhuma sugestão encontrada para este item.</p>
+                        )}
+                      </>
                     )}
                   </CardContent>
                    <CardFooter className="flex justify-end">
@@ -411,6 +497,37 @@ const DesignAiProjectPage: React.FC = () => {
                 </Card>
               );
             })
+          )}
+
+          {/* <<< NOVO BOTÃO E CARD PARA GERAR RENDER FINAL >>> */}
+          {(project.status === 'awaiting_selection' || project.status === 'completed') && (project.items && project.items.some(item => item.selectedProductId !== null)) && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Render Final do Ambiente</CardTitle>
+                <CardDescription>
+                  Gere uma nova imagem do seu ambiente com todos os produtos selecionados aplicados.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <p className="text-sm text-muted-foreground mb-4">
+                  Este processo pode levar alguns minutos. Você será notificado aqui quando estiver pronto.
+                </p>
+              </CardContent>
+              <CardFooter>
+                <Button 
+                  className="w-full" 
+                  onClick={() => generateRenderMutation.mutate({ projectId })}
+                  disabled={isGeneratingRender}
+                >
+                  {isGeneratingRender ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <ImageIcon className="mr-2 h-4 w-4" /> // Usar um ícone apropriado
+                  )}
+                  {isGeneratingRender ? 'Gerando Render...' : 'Gerar Render Final com Selecionados'}
+                </Button>
+              </CardFooter>
+            </Card>
           )}
         </div>
       </div>

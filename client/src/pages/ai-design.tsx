@@ -1,381 +1,199 @@
-import { useQuery, useMutation } from "@tanstack/react-query";
-import { useAuth } from "@/lib/auth";
-import { queryClient } from "@/lib/queryClient";
-import { AiDesignProject, User } from "@/lib/types";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { useToast } from "@/hooks/use-toast";
-import { useState } from "react";
-import { Loader2, Plus, Edit, Trash2, MessageSquare, Image } from "lucide-react";
-import { Link, useLocation } from "wouter";
-import { Badge } from "@/components/ui/badge";
-import { formatDistanceToNow } from 'date-fns';
-import { ptBR } from 'date-fns/locale';
+import React, { useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'; // Adicionado useMutation, useQueryClient
+import { Link, useLocation } from 'wouter'; // Adicionado useLocation
+import { Button } from '@/components/ui/button';
+import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
+import { Plus, Loader2, AlertTriangle, X } from 'lucide-react'; // Adicionado X
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogClose } from "@/components/ui/dialog"; // Componentes de Dialog
+import { Input } from "@/components/ui/input"; // Input para nome do projeto
+import { Label } from "@/components/ui/label"; // Label para o input
+import { createDesignProjectApi } from '../lib/apiClient'; // Importar a nova função da API
+import { useToast } from "@/hooks/use-toast"; // Importar useToast
 
-export default function AiDesignPage() {
-  const { user } = useAuth();
-  const { toast } = useToast();
-  const [location, setLocation] = useLocation();
+// --- Mock Data & API --- 
+type MockDesignProjectSummary = {
+  id: number;
+  name: string;
+  status: string; // Simplificado para a lista
+  // Adicionar talvez uma data ou thumbnail se útil
+};
 
-  const [newProjectTitle, setNewProjectTitle] = useState("");
-  const [isNewProjectDialogOpen, setIsNewProjectDialogOpen] = useState(false);
-  const [projectToDelete, setProjectToDelete] = useState<AiDesignProject | null>(null);
-  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+// Simula a chamada API para buscar projetos
+const fetchDesignProjects = async (): Promise<MockDesignProjectSummary[]> => {
+  console.log("[Mock API] Fetching design projects...");
+  // Simular delay da rede
+  await new Promise(resolve => setTimeout(resolve, 700)); 
+  // Retornar dados mock
+  return [
+    { id: 1, name: "Sala de Estar - Cliente Joana", status: 'Aguardando Seleção' },
+    { id: 2, name: "Quarto Casal - Pedro", status: 'Processando' },
+    { id: 3, name: "Cozinha Gourmet", status: 'Novo' },
+  ];
+  // Para simular erro: throw new Error("Falha ao buscar projetos");
+  // Para simular lista vazia: return [];
+};
+// --- Fim Mock Data & API ---
 
-  // Buscar o ID numérico do usuário no backend
-  const { data: userBackendId } = useQuery<{ id: number }>({
-    queryKey: ["/api/auth/firebase-sync", user?.uid],
-    queryFn: async () => {
-      const res = await fetch("/api/auth/firebase-sync", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          uid: user?.uid,
-          email: user?.email,
-          companyName: user?.companyName,
-        }),
-      });
-      if (!res.ok) throw new Error('Falha ao sincronizar usuário');
-      return res.json();
-    },
-    enabled: !!user?.uid,
+
+const DesignAiPage: React.FC = () => {
+  const { toast } = useToast(); // Hook para toasts
+  const queryClient = useQueryClient();
+  const [, navigate] = useLocation(); // Para navegação
+
+  // Estado para controlar a visibilidade do modal e o nome do novo projeto
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [newProjectName, setNewProjectName] = useState("");
+
+  const { data: projects, isLoading, isError, error } = useQuery<MockDesignProjectSummary[], Error>({
+     queryKey: ['designProjects'],
+     queryFn: fetchDesignProjects, 
   });
 
-  // Buscar projetos com o ID numérico
-  const { data: projects, isLoading, error } = useQuery<AiDesignProject[]>({
-    queryKey: ["/api/ai-design-projects", userBackendId?.id],
-    queryFn: async () => {
-      const res = await fetch(`/api/ai-design-projects?userId=${userBackendId?.id}`);
-      if (!res.ok) throw new Error('Falha ao carregar projetos');
-      return res.json();
-    },
-    enabled: !!userBackendId?.id,
-  });
-
-  // Criar novo projeto
+  // Mutação para criar um novo projeto
   const createProjectMutation = useMutation({
-    mutationFn: async (title: string) => {
-      const res = await fetch("/api/ai-design-projects", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title, userId: userBackendId?.id }),
-      });
-      if (!res.ok) throw new Error('Falha ao criar projeto');
-      return res.json();
-    },
+    mutationFn: createDesignProjectApi,
     onSuccess: (newProject) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/ai-design-projects"] });
-      setNewProjectTitle("");
-      setIsNewProjectDialogOpen(false);
       toast({
-        title: "Projeto criado",
-        description: "Seu novo projeto de design com IA foi criado com sucesso!",
+        title: "Projeto Criado!",
+        description: `O projeto "${newProject.name}" foi criado com sucesso.`,
       });
-      // Redirecionar para a página do projeto
-      setLocation(`/ai-design/${newProject.id}`);
+      queryClient.invalidateQueries({ queryKey: ['designProjects'] });
+      setIsModalOpen(false); // Fechar o modal
+      setNewProjectName(""); // Limpar o nome
+      navigate(`/design-ai/${newProject.id}`); // Navegar para a página do novo projeto
     },
-    onError: (error) => {
+    onError: (error: Error) => {
       toast({
+        variant: "destructive",
         title: "Erro ao criar projeto",
-        description: error instanceof Error ? error.message : "Ocorreu um erro inesperado",
-        variant: "destructive",
+        description: error.message || "Não foi possível criar o projeto.",
       });
     },
   });
 
-  // Excluir projeto
-  const deleteProjectMutation = useMutation({
-    mutationFn: async (projectId: number) => {
-      const res = await fetch(`/api/ai-design-projects/${projectId}`, {
-        method: "DELETE",
-      });
-      if (!res.ok) throw new Error('Falha ao excluir projeto');
-      return projectId;
-    },
-    onSuccess: (projectId) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/ai-design-projects"] });
-      setProjectToDelete(null);
-      setIsDeleteDialogOpen(false);
-      toast({
-        title: "Projeto excluído",
-        description: "O projeto foi excluído com sucesso!",
-      });
-    },
-    onError: (error) => {
-      toast({
-        title: "Erro ao excluir projeto",
-        description: error instanceof Error ? error.message : "Ocorreu um erro inesperado",
-        variant: "destructive",
-      });
-    },
-  });
+  const handleOpenModal = () => {
+    setNewProjectName(""); // Limpar nome ao abrir
+    setIsModalOpen(true);
+  };
 
-  // Manipulador para criar novo projeto
-  const handleCreateProject = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newProjectTitle.trim()) {
+  const handleCreateProject = () => {
+    if (!newProjectName.trim()) {
       toast({
-        title: "Erro",
-        description: "Por favor, insira um título para o projeto",
         variant: "destructive",
+        title: "Nome Inválido",
+        description: "Por favor, insira um nome para o projeto.",
       });
       return;
     }
-    createProjectMutation.mutate(newProjectTitle);
+    // Construir e logar o payload explicitamente aqui
+    const projectPayload = { name: newProjectName.trim() };
+    console.log("[DesignAiPage] Payload enviado para mutação:", projectPayload); // LOG ADICIONADO
+    createProjectMutation.mutate(projectPayload);
   };
-
-  // Manipulador para excluir projeto
-  const handleDeleteProject = () => {
-    if (projectToDelete) {
-      deleteProjectMutation.mutate(projectToDelete.id);
-    }
-  };
-
-  // Função para obter a classe de cor do status
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case "pending":
-        return "bg-yellow-500";
-      case "processing":
-        return "bg-blue-500";
-      case "completed":
-        return "bg-green-500";
-      case "error":
-        return "bg-red-500";
-      default:
-        return "bg-gray-500";
-    }
-  };
-
-  // Função para obter o texto do status
-  const getStatusText = (status: string) => {
-    switch (status) {
-      case "pending":
-        return "Pendente";
-      case "processing":
-        return "Processando";
-      case "completed":
-        return "Concluído";
-      case "error":
-        return "Erro";
-      default:
-        return status;
-    }
-  };
-
-  // Renderizar página de carregamento
-  if (isLoading) {
-    return (
-      <div className="container mx-auto py-10 flex items-center justify-center min-h-screen">
-        <Loader2 className="w-8 h-8 animate-spin text-primary" />
-      </div>
-    );
-  }
-
-  // Renderizar página de erro
-  if (error) {
-    return (
-      <div className="container mx-auto py-10">
-        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative" role="alert">
-          <strong className="font-bold">Erro!</strong>
-          <span className="block sm:inline"> {error instanceof Error ? error.message : "Erro desconhecido"}</span>
-        </div>
-      </div>
-    );
-  }
 
   return (
-    <div className="container mx-auto py-10">
-      <div className="flex justify-between items-center mb-8">
-        <div>
-          <h1 className="text-3xl font-bold">Design de Ambientes com IA</h1>
-          <p className="text-muted-foreground mt-2">
-            Substitua móveis fictícios por produtos reais do seu catálogo em plantas baixas e renders
-          </p>
-        </div>
-        <Button onClick={() => setIsNewProjectDialogOpen(true)}>
+    <div className="container mx-auto py-8">
+      <div className="flex justify-between items-center mb-6">
+        <h1 className="text-3xl font-bold">Design de Ambientes com IA</h1>
+        <Button onClick={handleOpenModal}>
           <Plus className="mr-2 h-4 w-4" /> Novo Projeto
         </Button>
       </div>
 
-      {/* Grid de projetos */}
-      {projects && projects.length > 0 ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {projects.map((project) => (
-            <Card key={project.id} className="overflow-hidden">
-              <CardHeader className="pb-3">
-                <div className="flex justify-between items-start">
-                  <CardTitle className="text-xl">{project.title}</CardTitle>
-                  <Badge className={getStatusColor(project.status) + " text-white"}>
-                    {getStatusText(project.status)}
-                  </Badge>
-                </div>
-                <CardDescription>
-                  Criado {formatDistanceToNow(new Date(project.createdAt), { addSuffix: true, locale: ptBR })}
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="pb-0">
-                <div className="flex flex-wrap gap-2 mb-4">
-                  {project.floorPlanImageUrl && (
-                    <div className="relative h-24 w-32 rounded overflow-hidden">
-                      <img
-                        src={project.floorPlanImageUrl}
-                        alt="Planta baixa"
-                        className="object-cover h-full w-full"
-                      />
-                      <div className="absolute bottom-0 left-0 bg-black bg-opacity-70 text-white text-xs p-1 w-full">
-                        Planta Baixa
-                      </div>
-                    </div>
-                  )}
-                  {project.renderImageUrl && (
-                    <div className="relative h-24 w-32 rounded overflow-hidden">
-                      <img
-                        src={project.renderImageUrl}
-                        alt="Render"
-                        className="object-cover h-full w-full"
-                      />
-                      <div className="absolute bottom-0 left-0 bg-black bg-opacity-70 text-white text-xs p-1 w-full">
-                        Render
-                      </div>
-                    </div>
-                  )}
-                  {!project.floorPlanImageUrl && !project.renderImageUrl && (
-                    <div className="flex items-center justify-center h-24 w-full bg-muted rounded">
-                      <Image className="h-8 w-8 text-muted-foreground" />
-                      <span className="ml-2 text-muted-foreground">Sem imagens</span>
-                    </div>
-                  )}
-                </div>
-              </CardContent>
-              <CardFooter className="flex justify-between pt-3">
-                <div className="flex space-x-2">
-                  <Button
-                    variant="destructive"
-                    size="sm"
-                    onClick={() => {
-                      setProjectToDelete(project);
-                      setIsDeleteDialogOpen(true);
-                    }}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </div>
-                <Button
-                  variant="default"
-                  size="sm"
-                  asChild
-                >
-                  <Link to={`/ai-design/${project.id}`}>
-                    <MessageSquare className="mr-2 h-4 w-4" />
-                    Abrir Chat
-                  </Link>
-                </Button>
-              </CardFooter>
-            </Card>
-          ))}
-        </div>
-      ) : (
-        <div className="bg-muted rounded-lg p-12 text-center">
-          <Image className="h-16 w-16 mx-auto mb-4 text-muted-foreground" />
-          <h3 className="text-xl font-medium mb-2">Nenhum projeto encontrado</h3>
-          <p className="text-muted-foreground mb-6">
-            Crie um novo projeto para começar a substituir móveis fictícios por produtos reais.
-          </p>
-          <Button onClick={() => setIsNewProjectDialogOpen(true)}>
-            <Plus className="mr-2 h-4 w-4" /> Criar Projeto
-          </Button>
-        </div>
-      )}
-
-      {/* Diálogo para criar novo projeto */}
-      <Dialog open={isNewProjectDialogOpen} onOpenChange={setIsNewProjectDialogOpen}>
-        <DialogContent>
+      {/* Modal para Novo Projeto */}
+      <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
+        <DialogContent className="sm:max-w-[425px]">
           <DialogHeader>
             <DialogTitle>Novo Projeto de Design</DialogTitle>
             <DialogDescription>
               Crie um novo projeto para substituir móveis fictícios por produtos reais do seu catálogo.
             </DialogDescription>
           </DialogHeader>
-          <form onSubmit={handleCreateProject}>
-            <div className="space-y-4 py-4">
-              <div className="space-y-2">
-                <Label htmlFor="title">Título do Projeto</Label>
-                <Input
-                  id="title"
-                  value={newProjectTitle}
-                  onChange={(e) => setNewProjectTitle(e.target.value)}
-                  placeholder="Ex: Reforma Sala de Estar Cliente João"
-                  disabled={createProjectMutation.isPending}
-                />
-              </div>
+          <div className="grid gap-4 py-4">
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="projectName" className="text-right">
+                Título do Projeto
+              </Label>
+              <Input
+                id="projectName"
+                value={newProjectName}
+                onChange={(e) => setNewProjectName(e.target.value)}
+                className="col-span-3"
+                placeholder="Ex: Sala de Estar Cliente X"
+              />
             </div>
-            <DialogFooter>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setIsNewProjectDialogOpen(false)}
-                disabled={createProjectMutation.isPending}
-              >
-                Cancelar
-              </Button>
-              <Button
-                type="submit"
-                disabled={createProjectMutation.isPending}
-              >
-                {createProjectMutation.isPending ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Criando...
-                  </>
-                ) : (
-                  "Criar Projeto"
-                )}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
-
-      {/* Diálogo para confirmar exclusão */}
-      <Dialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Confirmar Exclusão</DialogTitle>
-            <DialogDescription>
-              Tem certeza que deseja excluir o projeto "{projectToDelete?.title}"? Esta ação não pode ser desfeita.
-            </DialogDescription>
-          </DialogHeader>
+          </div>
           <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => setIsDeleteDialogOpen(false)}
-              disabled={deleteProjectMutation.isPending}
+            <DialogClose asChild>
+              <Button variant="outline">Cancelar</Button>
+            </DialogClose>
+            <Button 
+              onClick={handleCreateProject} 
+              disabled={createProjectMutation.isPending}
             >
-              Cancelar
-            </Button>
-            <Button
-              type="button"
-              variant="destructive"
-              onClick={handleDeleteProject}
-              disabled={deleteProjectMutation.isPending}
-            >
-              {deleteProjectMutation.isPending ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Excluindo...
-                </>
-              ) : (
-                "Excluir"
-              )}
+              {createProjectMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Criar Projeto
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {isLoading && (
+        <div className="flex justify-center items-center py-10">
+          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+          <span className="ml-2 text-muted-foreground">Carregando projetos...</span>
+        </div>
+      )}
+
+      {isError && (
+        <Card className="text-center py-12 border-destructive bg-destructive/10">
+          <CardHeader>
+            <div className="mx-auto bg-destructive rounded-full p-2 w-fit">
+               <AlertTriangle className="h-6 w-6 text-destructive-foreground" />
+            </div>
+            <CardTitle className="text-destructive">Erro ao Carregar Projetos</CardTitle>
+            <CardDescription className="text-destructive/80">{error?.message || 'Não foi possível buscar os projetos de design.'}</CardDescription>
+          </CardHeader>
+        </Card>
+      )}
+
+      {!isLoading && !isError && projects && projects.length === 0 && (
+        <Card className="text-center py-12">
+          <CardHeader>
+            <CardTitle className="text-xl text-muted-foreground">Nenhum projeto encontrado</CardTitle>
+            <CardDescription>Crie um novo projeto para começar.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button size="lg" onClick={handleOpenModal}>
+              <Plus className="mr-2 h-5 w-5" /> Criar Projeto
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {!isLoading && !isError && projects && projects.length > 0 && (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {projects.map((project) => (
+            <Link key={project.id} href={`/design-ai/${project.id}`}>
+              <Card className="hover:shadow-md transition-shadow cursor-pointer">
+                <CardHeader>
+                  <CardTitle>{project.name}</CardTitle>
+                  <CardDescription>Status: {project.status}</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {/* Placeholder para imagem thumb do projeto? */}
+                  <div className="h-32 bg-muted rounded-md flex items-center justify-center text-muted-foreground/50">
+                     (Thumb)
+                  </div>
+                </CardContent>
+                {/* O Card inteiro é um link agora, não precisa de botão "Abrir" */}
+              </Card>
+            </Link>
+          ))}
+        </div>
+      )}
     </div>
   );
-}
+};
+
+export default DesignAiPage; 

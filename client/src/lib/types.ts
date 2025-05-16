@@ -2,102 +2,55 @@
  * Tipos utilizados na aplicação
  */
 
-export interface User {
-  id: number;
-  email: string;
-  companyName: string;
-  createdAt: Date | string;
-  firebaseId?: string;
-}
+// Reexportar todos os tipos de dados principais do schema compartilhado.
+// Isso evita duplicação e garante que o frontend use os tipos corretos.
+export type { 
+    User, 
+    Product, 
+    Catalog, 
+    Quote, 
+    Moodboard, 
+    AiDesignProject, 
+    AiDesignChatMessage, 
+    DesignProject, 
+    DesignProjectItem,
+    FloorPlan,
+    // Adicionar outros tipos do @shared/schema que o frontend possa precisar
+    InsertUser, 
+    InsertProduct,
+    InsertCatalog,
+    InsertQuote,
+    InsertMoodboard,
+    InsertAiDesignProject,
+    InsertAiDesignChatMessage,
+    InsertFloorPlan
+} from '@shared/schema';
 
-export interface Product {
-  id: number;
-  userId: number;
-  catalogId: number | null;
-  name: string;
-  code: string;
-  description: string | null;
-  price: number;
-  category: string | null;
-  imageUrl: string | null;
-  colors: string[];
-  materials: string[];
-  sizes: Size[];
-  createdAt: Date | string;
-}
+// Você pode adicionar tipos específicos do frontend aqui também, se necessário
+// export interface CustomFrontendType {
+//   id: string;
+//   details: string;
+// }
 
-interface Size {
-  width?: number;
-  height?: number;
-  depth?: number;
-  label?: string;
-}
-
-export interface Catalog {
-  id: number;
-  userId: number;
-  fileName: string;
-  fileUrl: string;
-  processedStatus: string;
-  firestoreCatalogId?: string;
-  productCount?: number;
-  createdAt: Date | string;
-}
-
+// Manter QuoteItem se for um tipo específico do frontend para estruturar os itens de um orçamento na UI,
+// e não existir diretamente em @shared/schema ou se o de lá for diferente.
+// Se @shared/schema > quotes.items já tem a estrutura correta, esta definição manual pode não ser necessária.
 export interface QuoteItem {
+  id: string; // uuid para o item no frontend antes de salvar
   productId: number;
   productName: string;
   productCode: string;
-  color: string;
-  size: string;
-  price: number;
+  quantity: number;
+  price: number; // Preço unitário em centavos
+  color?: string;
+  size?: string;
 }
 
-export interface Quote {
-  id: number;
-  userId: number;
-  clientName: string;
-  clientEmail: string | null;
-  clientPhone: string | null;
-  architectName: string | null;
-  notes: string | null;
-  items: QuoteItem[];
-  totalPrice: number;
-  fileUrl: string | null;
-  createdAt: Date | string;
-}
+// As definições manuais de User, Product, Catalog, Quote, Moodboard, AiDesignProject, AiDesignChatMessage
+// foram removidas para usar as reexportadas de @shared/schema.
 
-export interface Moodboard {
-  id: number;
-  userId: number;
-  projectName: string;
-  clientName: string | null;
-  architectName: string | null;
-  quoteId: number | null;
-  fileUrl: string | null;
-  productIds: number[];
-  createdAt: Date | string;
-}
-
-export interface AiDesignProject {
-  id: number;
-  userId: number;
-  title: string;
-  status: "pending" | "processing" | "completed" | "error";
-  floorPlanImageUrl: string | null;
-  renderImageUrl: string | null;
-  generatedFloorPlanUrl: string | null;
-  generatedRenderUrl: string | null;
-  quoteId: number | null;
-  moodboardId: number | null;
-  createdAt: Date | string;
-}
-
-export interface AiDesignChatMessage {
-  id: number;
-  projectId: number;
-  role: "user" | "assistant" | "system";
-  content: string;
-  attachmentUrl: string | null;
-  createdAt: Date | string;
-}
+// Quaisquer outros tipos específicos APENAS para o frontend podem ser definidos abaixo.
+// Exemplo:
+// export interface FrontendSpecificUIState {
+//   isSidebarOpen: boolean;
+// }

@@ -1,18 +1,11 @@
-import type { Express, Request, Response, NextFunction } from "express";
-import { Router } from "express";
-import { createServer, type Server } from "http";
+import type { Express, Request, Response, NextFunction, Router as ExpressRouter } from "express";
 import { storage } from "./storage";
-import { type InsertUser, type Catalog, type InsertCatalog, type DesignProject, type NewDesignProject, type DesignProjectItem, User, Catalog as SharedCatalog, type AiDesignChatMessage, type InsertAiDesignChatMessage } from '@shared/schema';
+import { type InsertUser } from '@shared/schema';
 import multer from "multer";
 import * as fs from "fs";
 import path from "path";
-import { Readable } from "stream";
-import { finished } from "stream/promises";
 import mime from "mime-types";
-import { createCanvas } from "canvas";
-// @ts-ignore
 import { deleteDataFromFirestore } from "./test-upload.js";
-// @ts-ignore
 import { getS3UploadMiddleware, checkS3Configuration, uploadBufferToS3 } from "./s3-service.js";
 import { 
   uploadCatalogFileToS3, 
@@ -24,63 +17,15 @@ import {
   catalogFileExistsInS3,
   getCatalogFileUrl
 } from "./catalog-s3-manager.js";
-// @ts-ignore
 import { processExcelWithAI } from './ai-excel-processor.js';
 import { fixProductImages } from './excel-fixed-image-mapper';
 import { extractAndUploadImagesSequentially, type ExtractedImageInfo } from './excel-image-extractor';
-import { spawn } from 'child_process';
-import { runPythonColumnExtractor } from './excel-image-extractor';
 import { processCatalogInBackground } from './catalog-processor';
 import bcrypt from 'bcrypt';
-import { generateQuotePdf, generateQuotePdfWithPuppeteer } from './pdf-generator';
+import { generateQuotePdf } from './pdf-generator';
+import { User } from '@shared/schema';
 import OpenAI from 'openai';
-import { processDesignProjectImage } from './ai-design-processor';
-
-const SALT_ROUNDS = 10;
-
-interface HttpError extends Error {
-  status?: number;
-  isOperational?: boolean;
-  code?: string;
-}
-
-function globalErrorHandler(err: HttpError, req: Request, res: Response, next: NextFunction) {
-  console.error("----------------------------------------");
-  console.error("GLOBAL ERROR HANDLER CAUGHT AN ERROR:");
-  console.error("Timestamp:", new Date().toISOString());
-  console.error("Route:", req.method, req.originalUrl);
-  if (req.body && Object.keys(req.body).length > 0) {
-    console.error("Request Body Keys:", Object.keys(req.body).join(', '));
-  }
-  console.error("Error Name:", err.name);
-  console.error("Error Message:", err.message);
-  if (err.code) {
-    console.error("Original Error Code:", err.code);
-  }
-  if (err.status) {
-    console.error("HTTP Status:", err.status);
-  }
-  if (err.stack) {
-    console.error("Stack Trace:", err.stack);
-  }
-  console.error("----------------------------------------");
-
-  const statusCode = err.status || 500;
-  let responseMessage = "Ocorreu um erro interno no servidor.";
-  if (err.isOperational || (statusCode >= 400 && statusCode < 500)) {
-    responseMessage = err.message || "Ocorreu um erro.";
-  }
-
-  if (res.headersSent) {
-    console.error("Headers já enviados, não foi possível enviar resposta de erro formatada.");
-    return next(err);
-  }
-
-  res.status(statusCode).json({
-    status: 'error',
-    message: responseMessage,
-  });
-}
+import { triggerInpaintingForItem, processDesignProjectImage, generateFinalRenderForProject } from './ai-design-processor';
 
 type MoodboardCreateInput = {
   userId: number;
@@ -92,66 +37,28 @@ type MoodboardCreateInput = {
   quoteId?: number;
 };
 
-declare module "express-session" {
-  interface SessionData {
-    userId?: number;
-  }
-}
-
-let useS3Storage = true;
-
-const localStorage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, './uploads/');
-  },
-  filename: function (req, file, cb) {
-    cb(null, Date.now() + '-' + file.originalname);
-  }
-});
-
-let upload = multer({ storage: localStorage });
+const SALT_ROUNDS = 10;
 
 const logoUploadInMemory = multer({ 
   storage: multer.memoryStorage(),
-  limits: { fileSize: 5 * 1024 * 1024 }, 
+  limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     if (file.mimetype.startsWith('image/')) {
       cb(null, true);
     } else {
-      const err: HttpError = new Error('Tipo de arquivo inválido para logo. Use PNG, JPG, WEBP.');
-      err.status = 400;
-      err.isOperational = true;
-      cb(err);
-    }
-  }
-});
-
-const renderUploadInMemory = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 15 * 1024 * 1024 }, 
-  fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith('image/')) {
-      cb(null, true);
-    } else {
-      const err: HttpError = new Error('Tipo de arquivo inválido para render. Use PNG, JPG, WEBP, etc.');
-      err.status = 400;
-      err.isOperational = true;
-      cb(err);
+      cb(new Error('Tipo de arquivo inválido para logo. Use PNG, JPG, WEBP.'));
     }
   }
 });
 
 const visualSearchUpload = multer({ 
   storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 }, 
+  limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     if (file.mimetype.startsWith('image/')) {
       cb(null, true);
     } else {
-      const err: HttpError = new Error('Apenas imagens são permitidas para busca visual.');
-      err.status = 400;
-      err.isOperational = true;
-      cb(err);
+      cb(new Error('Apenas imagens são permitidas para busca visual.'));
     }
   }
 });
@@ -159,278 +66,146 @@ const visualSearchUpload = multer({
 const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
 
 function handleMulterError(err: any, req: Request, res: Response, next: NextFunction) {
-  if (err) {
-    console.error("!!!! MULTER ERROR DETECTED by handleMulterError !!!!", err);
-    const httpErr: HttpError = new Error(err.message || 'Erro durante o upload do arquivo.');
-    httpErr.status = (err instanceof multer.MulterError) ? 400 : 500;
-    httpErr.isOperational = true;
-    if (err.code) {
-      httpErr.code = err.code;
-    }
-    return next(httpErr);
+  if (err instanceof multer.MulterError) {
+    console.error("!!!! ERRO DO MULTER DETECTADO !!!!", err);
+    return res.status(400).json({ message: `Erro de Upload (Multer): ${err.message}`, code: err.code });
+  } else if (err) {
+    console.error("!!!! ERRO DESCONHECIDO DURANTE UPLOAD (antes da rota) !!!!", err);
+    return res.status(500).json({ message: `Erro inesperado durante upload: ${err.message}` });
   }
   next();
 }
 
 const requireAuth = (req: Request, res: Response, next: NextFunction) => {
   if (!req.session || !req.session.userId) {
-    const err: HttpError = new Error("Autenticação necessária.");
-    err.status = 401;
-    err.isOperational = true;
-    return next(err);
+    return res.status(401).json({ message: "Autenticação necessária." });
   }
   next();
 };
 
-export async function registerRoutes(app: Express): Promise<void> {
-  try {
-    const s3Config = await checkS3Configuration();
-    if (s3Config.status === 'success') {
-      console.log(`✅ Amazon S3 conectado com sucesso - Bucket: ${s3Config.bucket}, Região: ${s3Config.region}`);
-      useS3Storage = true;
-      try {
-        if (!fs.existsSync('./uploads')) {
-          fs.mkdirSync('./uploads', { recursive: true });
-        }
-        // @ts-ignore
-        const multerS3Setup = await import('./s3-service.js');
-        if (typeof multerS3Setup.getS3UploadMiddleware !== 'function') {
-          throw new Error('getS3UploadMiddleware não é uma função em s3-service.js');
-        }
-        upload = multerS3Setup.getS3UploadMiddleware('catalogs');
-        console.log('Upload de arquivos configurado para usar Amazon S3');
-      } catch (multerError: any) {
-        console.error('ERRO CRÍTICO: Falha ao configurar Multer com S3:', multerError);
-        throw new Error(`Configuração do Multer-S3 falhou: ${multerError.message}`);
-      }
-    } else {
-      console.error(`ERRO CRÍTICO: Não foi possível conectar ao S3: ${s3Config.message}. Verifique as credenciais e configuração.`);
-      throw new Error(`Configuração do S3 obrigatória para o funcionamento da aplicação: ${s3Config.message}`);
-    }
-  } catch (error: any) {
-    console.error('ERRO CRÍTICO DURANTE A CONFIGURAÇÃO INICIAL DO S3:', error);
-    throw new Error(`Falha crítica na inicialização das rotas (S3 Setup): ${error.message}`);
-  }
-  
-  try {
-    const { addS3ImageRoutes } = await import('./s3-image-routes');
-    if (typeof addS3ImageRoutes !== 'function') {
-        throw new Error('addS3ImageRoutes não é uma função em s3-image-routes.js');
-    }
-    await addS3ImageRoutes(app);
-    console.log('Rotas de imagem S3 adicionadas com sucesso');
-  } catch (error: any) {
-    console.error('ERRO CRÍTICO: Não foi possível adicionar rotas de imagem S3:', error);
-    throw new Error(`Configuração das rotas de imagem S3 é obrigatória: ${error.message}`);
-  }
-
-  app.get("/backend/healthcheck", (_req: Request, res: Response) => {
+export async function registerRoutes(router: ExpressRouter, upload: multer.Multer): Promise<void> {
+  router.get("/healthcheck", (_req: Request, res: Response) => {
     res.status(200).json({ 
       status: "ok",
       timestamp: new Date().toISOString()
     });
   });
 
-  app.get("/backend/test-route", (req: Request, res: Response) => {
-    console.log("Rota de teste acessada!");
-    res.status(200).json({ message: "Rota de teste funcionando!" });
-  });
-
-  app.post("/backend/auth/register", async (req: Request, res: Response, next: NextFunction) => {
+  router.post("/auth/register", async (req: Request, res: Response) => {
     try {
       const { email, password, name, companyName } = req.body;
       if (!email || !password || !name) {
-        const err: HttpError = new Error("Email, senha e nome são obrigatórios");
-        err.status = 400; err.isOperational = true; return next(err);
+        return res.status(400).json({ message: "Email, senha e nome são obrigatórios" });
+      }
+      const existingUser = await storage.getUserByEmail(email);
+      if (existingUser) {
+        return res.status(409).json({ message: "Email já cadastrado" });
       }
       const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
       const user = await storage.createUser({
-        email, password: hashedPassword, name, companyName: companyName || "Empresa Padrão",
-      });
-      req.session.userId = user.id;
-      return res.status(201).json({
-        id: user.id, email: user.email, name: user.name, companyName: user.companyName
-      });
-    } catch (error: any) {
-      if (error.code === 'P2002' && error.meta?.target?.includes('email')) {
-        const err: HttpError = new Error("Este email já está cadastrado.");
-        err.status = 409; err.isOperational = true; return next(err);
-      }
-      if (error.message && error.message.toLowerCase().includes('unique constraint failed: users.email')) {
-          const err: HttpError = new Error("Este email já está cadastrado.");
-          err.status = 409; err.isOperational = true; return next(err);
-      }
-      console.error("[Route /auth/register] Erro ao registrar usuário:", error);
-      return next(error);
-    }
-  });
-
-  app.post("/backend/auth/login", async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const { email, password } = req.body;
-      if (!email || !password) {
-        const err: HttpError = new Error("Email e senha são obrigatórios");
-        err.status = 400; err.isOperational = true; return next(err);
-      }
-      const user = await storage.getUserByEmail(email);
-      if (!user) { const err: HttpError = new Error("Credenciais inválidas"); err.status = 401; err.isOperational = true; return next(err); }
-      const isPasswordValid = await bcrypt.compare(password, user.password);
-      if (!isPasswordValid) { const err: HttpError = new Error("Credenciais inválidas"); err.status = 401; err.isOperational = true; return next(err); }
-      req.session.userId = user.id;
-      return res.status(200).json({
-        id: user.id, email: user.email, name: user.name, companyName: user.companyName
-      });
-    } catch (error) {
-      console.error("[Route /auth/login] Erro no login:", error);
-      return next(error);
-    }
-  });
-
-  app.get("/backend/auth/me", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const user = await storage.getUser(req.session.userId!);
-      if (!user) {
-        req.session.destroy(() => {}); 
-        const err: HttpError = new Error("Usuário da sessão não encontrado.");
-        err.status = 401; err.isOperational = true; return next(err);
-      }
-      return res.status(200).json({
-        id: user.id, email: user.email, name: user.name, companyName: user.companyName
-      });
-    } catch (error) {
-      console.error("[Route /auth/me] Erro ao obter usuário:", error);
-      return next(error);
-    }
-  });
-
-  app.put("/backend/auth/me", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const userId = req.session.userId!;
-      const receivedData = req.body;
-      if (!receivedData || typeof receivedData !== 'object' || Object.keys(receivedData).length === 0) {
-        const err: HttpError = new Error("Dados inválidos ou vazios para atualização.");
-        err.status = 400; err.isOperational = true; return next(err);
-      }
-      const updateDataForDb: Partial<InsertUser & { company_logo_url?: string | null, company_address?: string | null, company_phone?: string | null, company_cnpj?: string | null, quote_payment_terms?: string | null, quote_validity_days?: number | null, cash_discount_percentage?: number | null }> = {};
-      const allowedFields: string[] = ['name', 'companyName', 'companyAddress', 'companyPhone', 'companyCnpj', 'companyLogoUrl', 'quotePaymentTerms', 'quoteValidityDays', 'cashDiscountPercentage'];
-      const dbFieldMapping: Record<string, string> = {
-          companyAddress: 'company_address', companyPhone: 'company_phone', companyCnpj: 'company_cnpj',
-          companyLogoUrl: 'company_logo_url', quotePaymentTerms: 'quote_payment_terms',
-          quoteValidityDays: 'quote_validity_days', cashDiscountPercentage: 'cash_discount_percentage'
-      };
-      for (const key of allowedFields) {
-          if (key in receivedData && receivedData[key] !== undefined) {
-              const dbKey = dbFieldMapping[key] || key;
-              (updateDataForDb as any)[dbKey] = receivedData[key];
-          }
-      }
-      if (Object.keys(updateDataForDb).length === 0) {
-        const err: HttpError = new Error("Nenhum dado válido fornecido para atualização.");
-        err.status = 400; err.isOperational = true; return next(err);
-      }
-      const updatedUser = await storage.updateUser(userId, updateDataForDb);
-      if (!updatedUser) {
-        const err: HttpError = new Error("Usuário não encontrado para atualização.");
-        err.status = 404; err.isOperational = true; return next(err);
-      }
-      const { password, ...userToSend } = updatedUser;
-      return res.status(200).json(userToSend);
-    } catch (error) {
-      console.error("[Route /auth/me PUT] Erro ao atualizar perfil:", error);
-      return next(error);
-    }
-  });
-
-  app.post("/backend/auth/logout", requireAuth, (req: Request, res: Response, next: NextFunction) => {
-    req.session.destroy((err) => {
-      if (err) {
-        console.error("[Route /auth/logout] Erro ao destruir sessão:", err);
-        const httpErr: HttpError = new Error("Erro ao encerrar sessão");
-        httpErr.status = 500; return next(httpErr);
-      }
-      res.clearCookie('connect.sid'); 
-      return res.status(200).json({ message: "Logout realizado com sucesso" });
-    });
-  });
-
-  app.post("/api/register", async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const { email, password, name, companyName } = req.body;
-      if (!email || !password || !name) {
-        const err: HttpError = new Error("Email, senha e nome são obrigatórios");
-        err.status = 400; err.isOperational = true; return next(err);
-      }
-      const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
-      const user = await storage.createUser({
-        email, password: hashedPassword, name, companyName: companyName || "Empresa Padrão",
+        email,
+        password: hashedPassword,
+        name,
+        companyName: companyName || "Empresa Padrão",
       });
       req.session.userId = user.id;
       return res.status(201).json({ id: user.id, email: user.email, name: user.name, companyName: user.companyName });
-    } catch (error: any) {
-      if (error.code === 'P2002' && error.meta?.target?.includes('email') || (error.message && error.message.toLowerCase().includes('unique constraint failed: users.email'))) {
-          const err: HttpError = new Error("Este email já está cadastrado.");
-          err.status = 409; err.isOperational = true; return next(err);
-      }
-      console.error("[Route /api/register] Erro:", error);
-      return next(error);
+    } catch (error) {
+      console.error("Erro ao registrar usuário:", error);
+      return res.status(500).json({ message: "Erro interno ao registrar usuário" });
     }
   });
 
-  app.post("/api/login", async (req: Request, res: Response, next: NextFunction) => {
+  router.post("/auth/login", async (req: Request, res: Response) => {
     try {
       const { email, password } = req.body;
       if (!email || !password) {
-        const err: HttpError = new Error("Email e senha são obrigatórios");
-        err.status = 400; err.isOperational = true; return next(err);
+        return res.status(400).json({ message: "Email e senha são obrigatórios" });
       }
       const user = await storage.getUserByEmail(email);
-      if (!user) { const err: HttpError = new Error("Credenciais inválidas"); err.status = 401; err.isOperational = true; return next(err); }
+      if (!user) {
+        return res.status(401).json({ message: "Credenciais inválidas" });
+      }
       const isPasswordValid = await bcrypt.compare(password, user.password);
-      if (!isPasswordValid) { const err: HttpError = new Error("Credenciais inválidas"); err.status = 401; err.isOperational = true; return next(err); }
+      if (!isPasswordValid) {
+        return res.status(401).json({ message: "Credenciais inválidas" });
+      }
       req.session.userId = user.id;
       return res.status(200).json({ id: user.id, email: user.email, name: user.name, companyName: user.companyName });
     } catch (error) {
-      console.error("[Route /api/login] Erro:", error);
-      return next(error);
+      console.error("Erro ao fazer login:", error);
+      return res.status(500).json({ message: "Erro interno durante o login" });
     }
   });
 
-  app.get("/api/user", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+  router.get("/auth/me", requireAuth, async (req: Request, res: Response) => {
     try {
       const user = await storage.getUser(req.session.userId!);
       if (!user) {
         req.session.destroy(() => {});
-        const err: HttpError = new Error("Usuário da sessão não encontrado.");
-        err.status = 401; err.isOperational = true; return next(err);
+        return res.status(401).json({ message: "Usuário da sessão não encontrado." });
       }
-      return res.status(200).json({ id: user.id, email: user.email, name: user.name, companyName: user.companyName });
+      return res.status(200).json({ id: user.id, email: user.email, name: user.name, companyName: user.companyName, companyLogoUrl: user.companyLogoUrl, companyAddress: user.companyAddress, companyPhone: user.companyPhone, companyCnpj: user.companyCnpj, quotePaymentTerms: user.quotePaymentTerms, quoteValidityDays: user.quoteValidityDays, cashDiscountPercentage: user.cashDiscountPercentage });
     } catch (error) {
-      console.error("[Route /api/user] Erro:", error);
-      return next(error);
+      console.error("Erro ao obter usuário (/auth/me):", error);
+      return res.status(500).json({ message: "Erro ao obter dados do usuário" });
     }
   });
 
-  app.post("/api/logout", requireAuth, (req: Request, res: Response, next: NextFunction) => {
-      req.session.destroy((err) => {
-        if (err) {
-        console.error("[Route /api/logout] Erro ao destruir sessão:", err);
-        const httpErr: HttpError = new Error("Erro ao encerrar sessão");
-        httpErr.status = 500; return next(httpErr);
-        }
-        res.clearCookie('connect.sid');
-        return res.status(200).json({ message: "Logout realizado com sucesso" });
-      });
-  });
-
-  app.get("/backend/products", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+  router.put("/auth/me", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = req.session.userId!;
-      const catalogIdQuery = req.query.catalogId as string | undefined;
-      const catalogId = catalogIdQuery ? parseInt(catalogIdQuery) : undefined;
-      if (catalogIdQuery && isNaN(catalogId!)) {
-        const err: HttpError = new Error("catalogId inválido.");
-        err.status = 400; err.isOperational = true; return next(err);
+      const receivedData = req.body;
+      if (!receivedData || typeof receivedData !== 'object') {
+        return res.status(400).json({ message: "Dados inválidos." });
       }
+      const updateDataForDb: Partial<InsertUser & { company_logo_url?: string | null, company_address?: string | null, company_phone?: string | null, company_cnpj?: string | null, quote_payment_terms?: string | null, quote_validity_days?: number | null, cash_discount_percentage?: number | null }> = {};
+      if (receivedData.name !== undefined) updateDataForDb.name = receivedData.name;
+      if (receivedData.companyName !== undefined) updateDataForDb.companyName = receivedData.companyName;
+      if (receivedData.companyAddress !== undefined) updateDataForDb.company_address = receivedData.companyAddress;
+      if (receivedData.companyPhone !== undefined) updateDataForDb.company_phone = receivedData.companyPhone;
+      if (receivedData.companyCnpj !== undefined) updateDataForDb.company_cnpj = receivedData.companyCnpj;
+      if (receivedData.companyLogoUrl !== undefined) updateDataForDb.company_logo_url = receivedData.companyLogoUrl;
+      if (receivedData.quotePaymentTerms !== undefined) updateDataForDb.quote_payment_terms = receivedData.quotePaymentTerms;
+      if (receivedData.quoteValidityDays !== undefined) updateDataForDb.quote_validity_days = receivedData.quoteValidityDays;
+      if (receivedData.cashDiscountPercentage !== undefined) updateDataForDb.cash_discount_percentage = receivedData.cashDiscountPercentage;
+      
+      delete updateDataForDb.email;
+      delete updateDataForDb.password;
+      
+      if (Object.keys(updateDataForDb).length === 0) {
+          return res.status(400).json({ message: "Nenhum dado válido para atualizar." });
+      }
+      const updatedUser = await storage.updateUser(userId, updateDataForDb);
+      if (!updatedUser) {
+        return res.status(404).json({ message: "Usuário não encontrado." });
+      }
+      const { password, ...userToSend } = updatedUser;
+      return res.status(200).json(userToSend);
+    } catch (error) {
+      console.error("Erro ao atualizar perfil:", error);
+      return res.status(500).json({ message: "Erro interno ao atualizar perfil." });
+    }
+  });
+
+  router.post("/auth/logout", (req: Request, res: Response) => {
+    if (req.session) {
+      req.session.destroy((err) => {
+        if (err) {
+          return res.status(500).json({ message: "Erro ao encerrar sessão" });
+        }
+        res.clearCookie('connect.sid'); 
+        return res.status(200).json({ message: "Logout realizado com sucesso" });
+      });
+    } else {
+      return res.status(200).json({ message: "Nenhuma sessão ativa para encerrar" });
+    }
+  });
+
+  router.get("/products", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      const catalogId = req.query.catalogId ? parseInt(req.query.catalogId as string) : undefined;
       const products = await storage.getProducts(userId, catalogId);
       const productsForJson = products.map(p => ({
         ...p,
@@ -438,874 +213,631 @@ export async function registerRoutes(app: Express): Promise<void> {
       }));
       return res.status(200).json(productsForJson);
     } catch (error) {
-      console.error("[Route /products GET] Erro:", error);
-      return next(error);
+      console.error("Erro ao obter produtos:", error);
+      return res.status(500).json({ message: "Erro ao obter produtos" });
     }
   });
 
-  app.get("/backend/products/:id", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+  router.get("/products/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const id = parseInt(req.params.id);
-      if (isNaN(id)) {
-        const err: HttpError = new Error("ID do produto inválido");
-        err.status = 400; err.isOperational = true; return next(err);
-      }
+      if (isNaN(id)) return res.status(400).json({ message: "ID inválido" });
       const product = await storage.getProduct(id);
-      if (!product || product.userId !== req.session.userId!) {
-        const err: HttpError = new Error("Produto não encontrado ou acesso negado");
-        err.status = 404; err.isOperational = true; return next(err);
-      }
+      if (!product) return res.status(404).json({ message: "Produto não encontrado" });
       return res.status(200).json(product);
     } catch (error) {
-      console.error(`[Route /products/:id GET ${req.params.id}] Erro:`, error);
-      return next(error);
+      console.error("Erro ao obter produto:", error);
+      return res.status(500).json({ message: "Erro ao obter produto" });
     }
   });
 
-  app.post("/backend/products", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+  router.post("/products", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = req.session.userId!;
-      const product = await storage.createProduct({ ...req.body, userId });
+      const product = await storage.createProduct({ ...req.body, userId, createdAt: new Date(), updatedAt: new Date() });
       return res.status(201).json(product);
     } catch (error) {
-      console.error("[Route /products POST] Erro:", error);
-      return next(error);
+      console.error("Erro ao criar produto:", error);
+      return res.status(500).json({ message: "Erro ao criar produto" });
     }
   });
   
-  app.put("/backend/products/:id", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+  router.put("/products/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const id = parseInt(req.params.id);
-      if (isNaN(id)) {
-        const err: HttpError = new Error("ID do produto inválido"); 
-        err.status = 400; err.isOperational = true; return next(err);
-      }
-      const existingProduct = await storage.getProduct(id);
-      if (!existingProduct || existingProduct.userId !== req.session.userId!) {
-        const err: HttpError = new Error("Produto não encontrado ou acesso negado para atualização");
-        err.status = 404; err.isOperational = true; return next(err);
-      }
+      if (isNaN(id)) return res.status(400).json({ message: "ID inválido" });
       const data = req.body;
-      delete data.userId; delete data.id;
-      const product = await storage.updateProduct(id, { ...data, isEdited: true });
-      if (!product) {
-        const err: HttpError = new Error("Produto não encontrado após tentativa de atualização");
-        err.status = 404; err.isOperational = true; return next(err);
-      }
+      const product = await storage.updateProduct(id, { ...data, userId: req.session.userId!, updatedAt: new Date(), isEdited: true });
+      if (!product) return res.status(404).json({ message: "Produto não encontrado" });
       return res.status(200).json(product);
     } catch (error) {
-      console.error(`[Route /products/:id PUT ${req.params.id}] Erro:`, error);
-      return next(error);
+      console.error("Erro ao atualizar produto:", error);
+      return res.status(500).json({ message: "Erro ao atualizar produto" });
     }
   });
   
-  app.delete("/backend/products/:id", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+  router.delete("/products/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const id = parseInt(req.params.id);
-      if (isNaN(id)) {
-        const err: HttpError = new Error("ID do produto inválido");
-        err.status = 400; err.isOperational = true; return next(err);
-      }
-      const existingProduct = await storage.getProduct(id);
-      if (!existingProduct || existingProduct.userId !== req.session.userId!) {
-        const err: HttpError = new Error("Produto não encontrado ou acesso negado para exclusão");
-        err.status = 404; err.isOperational = true; return next(err);
-      }
+      if (isNaN(id)) return res.status(400).json({ message: "ID inválido" });
       const success = await storage.deleteProduct(id);
-      if (!success) {
-        const err: HttpError = new Error("Falha ao excluir produto, ou produto não encontrado");
-        err.status = 404; err.isOperational = true; return next(err);
-      }
+      if (!success) return res.status(404).json({ message: "Produto não encontrado" });
       return res.status(204).send();
     } catch (error) {
-      console.error(`[Route /products/:id DELETE ${req.params.id}] Erro:`, error);
-      return next(error);
+      console.error("Erro ao excluir produto:", error);
+      return res.status(500).json({ message: "Erro ao excluir produto" });
     }
   });
 
-  app.get("/backend/catalogs", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+  router.get("/catalogs", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = req.session.userId!;
       const catalogs = await storage.getCatalogs(userId);
       return res.status(200).json(catalogs);
     } catch (error) {
-      console.error("[Route /catalogs GET] Erro:", error);
-      return next(error);
+      console.error("Erro ao obter catálogos:", error);
+      return res.status(500).json({ message: "Erro ao obter catálogos" });
     }
   });
   
-  app.post("/backend/catalogs", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+  router.post("/catalogs", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = req.session.userId!;
-      const { fileName, fileUrl, originalCatalogId } = req.body;
-      if (!fileName || !fileUrl) {
-        const err: HttpError = new Error("Nome do arquivo (fileName) e URL (fileUrl) são obrigatórios");
-        err.status = 400; err.isOperational = true; return next(err);
-      }
-      const catalog = await storage.createCatalog({
-        userId,
-        fileName,
-        fileUrl,
-        processedStatus: "pending",
-        // originalCatalogId: originalCatalogId ? parseInt(originalCatalogId) : undefined,
-      });
+      const catalog = await storage.createCatalog({ ...req.body, userId, createdAt: new Date() });
       return res.status(201).json(catalog);
     } catch (error) {
-      console.error("[Route /catalogs POST] Erro:", error);
-      return next(error);
+      console.error("Erro ao criar catálogo:", error);
+      return res.status(500).json({ message: "Erro ao criar catálogo" });
     }
   });
   
-  app.get("/backend/catalogs/:id", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+  router.get("/catalogs/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const id = parseInt(req.params.id);
-      if (isNaN(id)) {
-        const err: HttpError = new Error("ID do catálogo inválido"); 
-        err.status = 400; err.isOperational = true; return next(err);
-      }
+      if (isNaN(id)) return res.status(400).json({ message: "ID inválido" });
       const catalog = await storage.getCatalog(id);
-      if (!catalog || catalog.userId !== req.session.userId!) {
-        const err: HttpError = new Error("Catálogo não encontrado ou acesso negado");
-        err.status = 404; err.isOperational = true; return next(err);
-      }
+      if (!catalog) return res.status(404).json({ message: "Catálogo não encontrado" });
+      if (catalog.userId !== req.session.userId) return res.status(403).json({ message: "Acesso negado" });
       const products = await storage.getProducts(catalog.userId, id);
       return res.status(200).json({ ...catalog, products });
     } catch (error) {
-      console.error(`[Route /catalogs/:id GET ${req.params.id}] Erro:`, error);
-      return next(error);
+      console.error("Erro ao obter catálogo:", error);
+      return res.status(500).json({ message: "Erro ao obter catálogo" });
     }
   });
   
-  app.put("/backend/catalogs/:id/status", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+  router.put("/catalogs/:id/status", requireAuth, async (req: Request, res: Response) => {
     try {
       const id = parseInt(req.params.id);
       const { status } = req.body;
-      if (isNaN(id)) {
-        const err: HttpError = new Error("ID do catálogo inválido"); 
-        err.status = 400; err.isOperational = true; return next(err);
-      }
-      if (!status || typeof status !== 'string') {
-        const err: HttpError = new Error("Status é obrigatório e deve ser uma string");
-        err.status = 400; err.isOperational = true; return next(err);
-      }
+      if (isNaN(id)) return res.status(400).json({ message: "ID inválido" });
+      if (!status) return res.status(400).json({ message: "Status é obrigatório" });
       const catalog = await storage.getCatalog(id);
-      if (!catalog || catalog.userId !== req.session.userId!) {
-        const err: HttpError = new Error("Catálogo não encontrado ou acesso negado");
-        err.status = 404; err.isOperational = true; return next(err);
+      if (!catalog || catalog.userId !== req.session.userId) {
+        return res.status(403).json({ message: "Acesso negado ou catálogo não encontrado" });
       }
-      const updatedCatalog = await storage.updateCatalogStatus(id, status);
-      if(!updatedCatalog){
-        const err: HttpError = new Error("Falha ao atualizar o status do catálogo.");
-        err.status = 500;
-        return next(err);
-      }
-      return res.status(200).json({ message: "Status atualizado com sucesso", catalog: updatedCatalog });
+      const success = await storage.updateCatalogStatus(id, status);
+      if (!success) return res.status(404).json({ message: "Catálogo não encontrado" });
+      return res.status(200).json({ message: "Status atualizado com sucesso" });
     } catch (error) {
-      console.error(`[Route /catalogs/:id/status PUT ${req.params.id}] Erro:`, error);
-      return next(error);
+      console.error("Erro ao atualizar status do catálogo:", error);
+      return res.status(500).json({ message: "Erro ao atualizar status do catálogo" });
     }
   });
   
-  app.post("/backend/catalogs/:id/remap-images", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+  router.post("/catalogs/:id/remap-images", requireAuth, async (req: Request, res: Response) => {
     try {
       const catalogId = parseInt(req.params.id);
       const userId = req.session.userId!;
-      if (isNaN(catalogId)) { 
-        const err: HttpError = new Error("ID do catálogo inválido"); 
-        err.status = 400; err.isOperational = true; return next(err);
-      }
+      if (isNaN(catalogId)) return res.status(400).json({ message: "ID inválido" });
       const catalog = await storage.getCatalog(catalogId);
       if (!catalog || catalog.userId !== userId) {
-          const err: HttpError = new Error("Catálogo não encontrado ou não pertence ao usuário");
-          err.status = 404; err.isOperational = true; return next(err);
+          return res.status(404).json({ message: "Catálogo não encontrado ou não pertence ao usuário" });
       }
       const result = await fixProductImages(userId, catalogId);
-      return res.status(result.success ? 200 : 500).json(result);
+      if (result.success) {
+        return res.status(200).json({ message: result.message, updatedCount: result.updated });
+      } else {
+          return res.status(500).json({ message: "Erro ao corrigir imagens", error: result.message });
+      }
     } catch (error) {
-      console.error(`[Route /catalogs/:id/remap-images POST ${req.params.id}] Erro:`, error);
-      return next(error);
+      console.error("Erro na rota /remap-images:", error);
+      const message = error instanceof Error ? error.message : "Erro desconhecido";
+      return res.status(500).json({ message: "Erro interno no servidor", error: message });
     }
   });
   
-  app.post("/backend/catalogs/remap-all-images", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+  router.post("/catalogs/remap-all-images", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = req.session.userId!;
       const catalogs = await storage.getCatalogs(userId);
       if (!catalogs || catalogs.length === 0) {
-        const err: HttpError = new Error("Nenhum catálogo encontrado para o usuário");
-        err.status = 404; err.isOperational = true; return next(err);
+        return res.status(404).json({ message: "Nenhum catálogo encontrado" });
       }
       const results = [];
-      let totalUpdatedAllCatalogs = 0;
+      let totalUpdated = 0;
         for (const catalog of catalogs) {
           try {
             const result = await fixProductImages(userId, catalog.id);
-          results.push({ catalogId: catalog.id, catalogName: catalog.fileName, ...result });
-          if(result.success) totalUpdatedAllCatalogs += result.updated || 0;
-        } catch (catalogError: any) {
-          results.push({ catalogId: catalog.id, catalogName: catalog.fileName, success: false, message: catalogError.message || "Erro desconhecido ao processar catálogo", updated: 0 });
+            results.push({
+              catalogId: catalog.id, catalogName: catalog.fileName, status: result.success ? "completed" : "error",
+              updatedCount: result.updated, message: result.message
+            });
+            if(result.success) totalUpdated += result.updated;
+          } catch (catalogError) {
+             const message = catalogError instanceof Error ? catalogError.message : String(catalogError);
+            results.push({
+              catalogId: catalog.id, catalogName: catalog.fileName, status: "error", updatedCount: 0, message: message
+            });
+          }
         }
-      }
         return res.status(200).json({
-        message: `Remapeamento concluído. ${totalUpdatedAllCatalogs} produtos atualizados em ${catalogs.length} catálogos.`,
-        totalUpdated: totalUpdatedAllCatalogs,
-        details: results
-      });
+        message: `Remapeamento concluído. ${totalUpdated} produtos atualizados em ${catalogs.length} catálogos.`,
+          totalUpdated, catalogsProcessed: results.filter(r => r.status === "completed").length, results
+        });
     } catch (error) {
-      console.error("[Route /catalogs/remap-all-images POST] Erro:", error);
-      return next(error);
+      console.error("Erro na rota /remap-all-images:", error);
+      const message = error instanceof Error ? error.message : "Erro desconhecido";
+      return res.status(500).json({ message: "Erro interno no servidor", error: message });
     }
   });
   
-  app.delete("/backend/catalogs/:id", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+  router.delete("/catalogs/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const id = parseInt(req.params.id);
-      if (isNaN(id)) {
-        const err: HttpError = new Error("ID do catálogo inválido"); 
-        err.status = 400; err.isOperational = true; return next(err);
-      }
+      if (isNaN(id)) return res.status(400).json({ message: "ID inválido" });
       const catalog = await storage.getCatalog(id);
-      if (!catalog || catalog.userId !== req.session.userId!) {
-        const err: HttpError = new Error("Catálogo não encontrado ou acesso negado para exclusão");
-        err.status = 404; err.isOperational = true; return next(err);
-      }
+      if (!catalog) return res.status(404).json({ message: "Catálogo não encontrado" });
+      if (catalog.userId !== req.session.userId) return res.status(403).json({ message: "Acesso negado" });
       const deletedProductsCount = await storage.deleteProductsByCatalogId(id);
       const success = await storage.deleteCatalog(id);
-      if (!success) {
-        const err: HttpError = new Error("Falha ao excluir catálogo do banco de dados");
-        err.status = 500; return next(err);
-      }
-      return res.status(200).json({ 
-        message: "Catálogo e seus produtos associados foram excluídos com sucesso.",
-        productsDeleted: deletedProductsCount
-      });
+      if (!success) return res.status(500).json({ message: "Erro ao excluir catálogo" });
+      return res.status(200).json({ message: "Catálogo excluído com sucesso", productsDeleted: deletedProductsCount });
     } catch (error) {
-      console.error(`[Route /catalogs/:id DELETE ${req.params.id}] Erro:`, error);
-      return next(error);
-    }
-  });
-
-  // ========================================
-  // ROTAS DE UPLOAD (Principalmente para Catálogos)
-  // ========================================
-  // app.post("/backend/catalogs/upload", requireAuth, upload.single('file'), handleMulterError, async (req: Request, res: Response, next: NextFunction) => {
-  // Código antigo comentado para substituí-lo pela sugestão do ChatGPT
-  // });
-
-  app.post("/backend/catalogs/upload", requireAuth, upload.single('file'), handleMulterError, async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const file = req.file as Express.Multer.File | undefined;
-  
-      if (!file) {
-        const err: HttpError = new Error("Nenhum arquivo enviado");
-        err.status = 400;
-        err.isOperational = true;
-        return next(err);
-      }
-  
-      const fileName = file.originalname;
-      const fileType = path.extname(fileName).substring(1).toLowerCase(); 
-      const userId = req.session.userId!;
-      
-      const fileUrl = (file as any)?.location || file.path || '';
-      const s3Key = (file as any)?.key || null; 
-  
-      const catalogData: InsertCatalog = {
-        userId,
-        fileName,
-        fileUrl,
-        processedStatus: "uploaded",
-      };
-  
-      const catalog = await storage.createCatalog(catalogData);
-  
-      const jobData = {
-        userId,
-        catalogId: catalog.id,
-        fileName,
-        fileType: fileType,
-        s3Key: s3Key,
-        processingFilePath: fileUrl, 
-      };
-  
-      processCatalogInBackground(jobData).catch(err => {
-        console.error(`ERRO ASYNC no processamento background do catálogo ${catalog.id}:`, err);
-        storage.updateCatalogStatus(catalog.id, 'failed').catch(updateErr => 
-          console.error("Erro ao atualizar status para falho após erro background:", updateErr)
-        );
-      });
-  
-      return res.status(202).json({
-        message: `Catálogo "${fileName}" enviado com sucesso e está na fila para processamento.`,
-        catalogId: catalog.id,
-        s3Url: (file as any)?.location || undefined
-      });
-    } catch (e: any) {
-      console.error("[Route /catalogs/upload POST] Erro:", e);
-      const errorToPass: HttpError = {
-        name: e.name || 'UploadError',
-        message: e.message || "Erro no upload do catálogo",
-        status: e.status || 500,
-        isOperational: e.isOperational || false,
-        code: e.code
-      };
-      return next(errorToPass);
+      console.error("Erro ao excluir catálogo:", error);
+      return res.status(500).json({ message: "Erro ao excluir catálogo", error: String(error) });
     }
   });
   
-  app.get("/backend/quotes", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+  router.get("/quotes", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = req.session.userId!;
       const quotes = await storage.getQuotes(userId);
       return res.status(200).json(quotes);
     } catch (error) {
-      console.error("[Route /quotes GET] Erro:", error);
-      return next(error);
+      console.error("Erro ao obter orçamentos:", error);
+      return res.status(500).json({ message: "Erro ao obter orçamentos" });
     }
   });
   
-  app.get("/backend/quotes/:id", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+  router.get("/quotes/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const id = parseInt(req.params.id);
-      if (isNaN(id)) {
-        const err: HttpError = new Error("ID do orçamento inválido"); 
-        err.status = 400; err.isOperational = true; return next(err);
-      }
+      if (isNaN(id)) return res.status(400).json({ message: "ID inválido" });
       const quote = await storage.getQuote(id);
-      if (!quote || quote.userId !== req.session.userId!) {
-        const err: HttpError = new Error("Orçamento não encontrado ou acesso negado");
-        err.status = 404; err.isOperational = true; return next(err);
-      }
+      if (!quote) return res.status(404).json({ message: "Orçamento não encontrado" });
+      if (quote.userId !== req.session.userId) return res.status(403).json({ message: "Acesso negado" });
       return res.status(200).json(quote);
     } catch (error) {
-      console.error(`[Route /quotes/:id GET ${req.params.id}] Erro:`, error);
-      return next(error);
+      console.error("Erro ao obter orçamento:", error);
+      return res.status(500).json({ message: "Erro ao obter orçamento" });
     }
   });
   
-  app.post("/backend/quotes", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+  router.post("/quotes", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = req.session.userId!;
-      const quoteData = req.body;
-      const quote = await storage.createQuote({ ...quoteData, userId });
+      const quote = await storage.createQuote({ ...req.body, userId, createdAt: new Date() });
       return res.status(201).json(quote);
     } catch (error) {
-      console.error("[Route /quotes POST] Erro:", error);
-      return next(error);
+      console.error("Erro ao criar orçamento:", error);
+      return res.status(500).json({ message: "Erro ao criar orçamento" });
     }
   });
   
-  app.put("/backend/quotes/:id", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+  router.put("/quotes/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const id = parseInt(req.params.id);
-      if (isNaN(id)) {
-        const err: HttpError = new Error("ID do orçamento inválido"); 
-        err.status = 400; err.isOperational = true; return next(err);
-      }
-      const quote = await storage.getQuote(id);
-      if (!quote || quote.userId !== req.session.userId!) {
-        const err: HttpError = new Error("Orçamento não encontrado ou acesso negado para atualização");
-        err.status = 404; err.isOperational = true; return next(err);
-      }
+      if (isNaN(id)) return res.status(400).json({ message: "ID inválido" });
       const data = req.body;
-      delete data.userId; delete data.id;
-      const updatedQuote = await storage.updateQuote(id, data);
-      if (!updatedQuote) {
-         const err: HttpError = new Error("Falha ao atualizar orçamento"); 
-         err.status = 500; return next(err);
-      }
-      return res.status(200).json(updatedQuote);
+      const quoteToUpdate = await storage.getQuote(id);
+      if (!quoteToUpdate || quoteToUpdate.userId !== req.session.userId) return res.status(403).json({ message: "Acesso negado ou orçamento não encontrado"});
+      const quote = await storage.updateQuote(id, data);
+      if (!quote) return res.status(404).json({ message: "Orçamento não encontrado" });
+      return res.status(200).json(quote);
     } catch (error) {
-      console.error(`[Route /quotes/:id PUT ${req.params.id}] Erro:`, error);
-      return next(error);
+      return res.status(500).json({ message: "Erro ao atualizar orçamento" });
     }
   });
   
-  app.delete("/backend/quotes/:id", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+  router.delete("/quotes/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const id = parseInt(req.params.id);
-      if (isNaN(id)) {
-        const err: HttpError = new Error("ID do orçamento inválido"); 
-        err.status = 400; err.isOperational = true; return next(err);
-      }
+      if (isNaN(id)) return res.status(400).json({ message: "ID inválido" });
       const quote = await storage.getQuote(id);
-      if (!quote || quote.userId !== req.session.userId!) {
-        const err: HttpError = new Error("Orçamento não encontrado ou acesso negado para exclusão");
-        err.status = 404; err.isOperational = true; return next(err);
-      }
+      if (!quote || quote.userId !== req.session.userId) return res.status(403).json({ message: 'Acesso negado' });
       const success = await storage.deleteQuote(id);
-      if (!success) {
-        const err: HttpError = new Error("Falha ao excluir orçamento");
-        err.status = 500; return next(err);
-      }
+      if (!success) return res.status(404).json({ message: "Orçamento não encontrado" });
       return res.status(204).send();
     } catch (error) {
-      console.error(`[Route /quotes/:id DELETE ${req.params.id}] Erro:`, error);
-      return next(error);
+      console.error("Erro ao excluir orçamento:", error);
+      return res.status(500).json({ message: "Erro ao excluir orçamento" });
     }
   });
   
-  //   app.post("/backend/quotes/generate-pdf-puppeteer", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
-  //     try {
-  //       const userId = req.session.userId!;
-  //       const user = await storage.getUser(userId);
-  //       if (!user) {
-  //         const err: HttpError = new Error("Usuário não encontrado"); 
-  //         err.status = 403; err.isOperational = true; return next(err);
-  //       }
-  //       const quoteData = req.body;
-  //       if (!quoteData || !quoteData.clientName || !quoteData.items || quoteData.items.length === 0) {
-  //         const err: HttpError = new Error("Dados do orçamento inválidos ou incompletos para PDF.");
-  //         err.status = 400; err.isOperational = true; return next(err);
-  //       }
-  //       try {
-  //         const pdfBuffer = await generateQuotePdfWithPuppeteer(quoteData, user);
-  //         res.setHeader('Content-Type', 'application/pdf');
-  //         res.setHeader('Content-Disposition', `attachment; filename="Orcamento_${quoteData.clientName.replace(/\s+/g, '_')}_P.pdf"`);
-  //         return res.send(pdfBuffer);
-  //       } catch (puppeteerError: any) {
-  //         console.error("⚠️ Falha no Puppeteer, tentando fallback pdf-lib:", puppeteerError);
-  //         const pdfBytes = await generateQuotePdf(quoteData, user); // Supondo que generateQuotePdf usa pdf-lib
-  //         res.setHeader('Content-Type', 'application/pdf');
-  //         res.setHeader('Content-Disposition', `attachment; filename="Orcamento_${quoteData.clientName.replace(/\s+/g, '_')}_Lib.pdf"`);
-  //         return res.send(Buffer.from(pdfBytes));
-  //       }
-  //     } catch (error) {
-  //       console.error("[Route /quotes/generate-pdf-puppeteer POST] Erro geral:", error);
-  //       return next(error);
-  //     }
-  //   });
-
-  app.post("/backend/quotes/generate-pdf", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+  router.post("/quotes/generate-pdf", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = req.session.userId!;
-        const user = await storage.getUser(userId);
-      if (!user) { 
-        const err: HttpError = new Error("Usuário não encontrado"); 
-        err.status = 403; err.isOperational = true; return next(err);
+      const user = await storage.getUser(userId);
+      if (!user) {
+        return res.status(403).json({ message: "Usuário não encontrado ou não autorizado." });
       }
-        const quoteData = req.body;
-        if (!quoteData || !quoteData.clientName || !quoteData.items || quoteData.items.length === 0) {
-         const err: HttpError = new Error("Dados do orçamento inválidos ou incompletos para PDF.");
-         err.status = 400; err.isOperational = true; return next(err);
-        }
-        const pdfBytes = await generateQuotePdf(quoteData, user);
-        res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename="Orcamento_${quoteData.clientName.replace(/s+/g, '_')}_Lib.pdf"`);
-        return res.send(Buffer.from(pdfBytes));
+      const quoteData = req.body; 
+      if (!quoteData || !quoteData.clientName || !quoteData.items || quoteData.items.length === 0) {
+        return res.status(400).json({ message: "Dados do orçamento inválidos ou incompletos." });
+      }
+      const pdfBytes = await generateQuotePdf(quoteData, user);
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="Orcamento_${quoteData.clientName.replace(/\s+/g, '_')}.pdf"`);
+      res.send(pdfBytes);
     } catch (error) {
-      console.error("[Route /quotes/generate-pdf POST] Erro:", error);
-      return next(error);
+      console.error("Erro ao gerar PDF do orçamento:", error);
+      const message = error instanceof Error ? error.message : "Erro interno ao gerar PDF";
+      return res.status(500).json({ message });
     }
   });
-
-  app.get("/backend/moodboards", requireAuth, async (req: Request, res: Response, next: NextFunction) => { 
+  
+  router.get("/moodboards", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = req.session.userId!;
       const moodboards = await storage.getMoodboards(userId);
       return res.status(200).json(moodboards);
     } catch (error) {
-      console.error("[Route /moodboards GET] Erro:", error);
-      return next(error);
+      console.error("Erro ao obter moodboards:", error);
+      return res.status(500).json({ message: "Erro ao obter moodboards" });
     }
-  });
-
-  app.post("/backend/moodboards", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const userId = req.session.userId!;
-      const { projectName, productIds, clientName, architectName, quoteId } = req.body as MoodboardCreateInput;
-      if (!projectName || !productIds || !Array.isArray(productIds) || productIds.length === 0) {
-        const err: HttpError = new Error("Nome do projeto e uma lista de IDs de produtos são obrigatórios.");
-        err.status = 400; err.isOperational = true; return next(err);
-      }
-      if (!productIds.every(id => typeof id === 'number' && !isNaN(id))) {
-        const err: HttpError = new Error("Todos os IDs de produtos devem ser números válidos.");
-        err.status = 400; err.isOperational = true; return next(err);
-      }
-      const moodboard = await storage.createMoodboard({
-        userId, projectName, productIds,
-        clientName: clientName || undefined, 
-        architectName: architectName || undefined,
-        quoteId: quoteId || undefined,
-      });
-      return res.status(201).json(moodboard);
-    } catch (error) {
-      console.error("[Route /moodboards POST] Erro:", error);
-      return next(error);
-    }
-  });
-
-  app.get("/backend/moodboards/:moodboardId", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const userId = req.session.userId!;
-      const moodboardId = parseInt(req.params.moodboardId);
-      if (isNaN(moodboardId)) { 
-        const err: HttpError = new Error("ID do moodboard inválido."); 
-        err.status = 400; err.isOperational = true; return next(err);
-      }
-      const moodboard = await storage.getMoodboard(moodboardId);
-      if (!moodboard || moodboard.userId !== userId) {
-        const err: HttpError = new Error("Moodboard não encontrado ou acesso não autorizado.");
-        err.status = 404; err.isOperational = true; return next(err);
-      }
-      return res.status(200).json(moodboard);
-    } catch (error) {
-      console.error(`[Route /moodboards/:id GET ${req.params.moodboardId}] Erro:`, error);
-      return next(error);
-    }
-  });
-
-  app.put("/backend/moodboards/:moodboardId", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const userId = req.session.userId!;
-      const moodboardId = parseInt(req.params.moodboardId);
-      const dataToUpdate = req.body as Partial<MoodboardCreateInput>;
-      if (isNaN(moodboardId)) { 
-        const err: HttpError = new Error("ID do moodboard inválido."); 
-        err.status = 400; err.isOperational = true; return next(err);
-      }
-      if (Object.keys(dataToUpdate).length === 0) {
-        const err: HttpError = new Error("Nenhum dado fornecido para atualização do moodboard.");
-        err.status = 400; err.isOperational = true; return next(err);
-      }
-      delete (dataToUpdate as any).userId; delete (dataToUpdate as any).id;
-      const moodboard = await storage.getMoodboard(moodboardId);
-      if (!moodboard || moodboard.userId !== userId) {
-        const err: HttpError = new Error("Moodboard não encontrado ou acesso não autorizado para atualização.");
-        err.status = 404; err.isOperational = true; return next(err);
-      }
-      const updatedMoodboard = await storage.updateMoodboard(moodboardId, dataToUpdate);
-      if (!updatedMoodboard) {
-          const err: HttpError = new Error("Falha ao atualizar moodboard.");
-          err.status = 500; return next(err);
-      }
-      return res.status(200).json(updatedMoodboard);
-    } catch (error) {
-      console.error(`[Route /moodboards/:id PUT ${req.params.moodboardId}] Erro:`, error);
-      return next(error);
-    }
-  });
-
-  app.delete("/backend/moodboards/:moodboardId", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const userId = req.session.userId!;
-      const moodboardId = parseInt(req.params.moodboardId);
-      if (isNaN(moodboardId)) { 
-        const err: HttpError = new Error("ID do moodboard inválido."); 
-        err.status = 400; err.isOperational = true; return next(err);
-      }
-      const moodboard = await storage.getMoodboard(moodboardId);
-      if (!moodboard || moodboard.userId !== userId) {
-        const err: HttpError = new Error("Moodboard não encontrado ou acesso não autorizado para exclusão.");
-        err.status = 404; err.isOperational = true; return next(err);
-      }
-      const success = await storage.deleteMoodboard(moodboardId);
-      if (!success) {
-          const err: HttpError = new Error("Falha ao excluir moodboard.");
-          err.status = 500; return next(err);
-      }
-      return res.status(204).send();
-    } catch (error) {
-      console.error(`[Route /moodboards/:id DELETE ${req.params.moodboardId}] Erro:`, error);
-      return next(error);
-    }
-  });
-
-  // =======================================
-  // ROTAS DE DESIGN COM IA
-  // =======================================
-  app.post("/api/ai-design-projects", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const userId = req.session.userId!;
-      const { name, title } = req.body;
-
-      const projectName = name || title;
-
-      if (!projectName || typeof projectName !== 'string' || projectName.trim() === '') {
-        const err: HttpError = new Error("O nome/título do projeto é obrigatório.");
-        err.status = 400; err.isOperational = true; return next(err);
-      }
-      
-      const projectData: NewDesignProject = {
-        userId,
-        name: projectName,
-      };
-      const newDesignProject = await storage.createDesignProject(projectData);
-      return res.status(201).json(newDesignProject);
-    } catch (error) {
-      console.error("[Route /api/ai-design-projects POST] Erro:", error);
-      return next(error);
-    }
-  });
-
-  app.get("/api/ai-design-projects/:projectId", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const userId = req.session.userId!;
-      const projectId = parseInt(req.params.projectId);
-      if (isNaN(projectId)) {
-        const err: HttpError = new Error("ID do projeto de design inválido.");
-        err.status = 400; err.isOperational = true; return next(err);
-      }
-      const project = await storage.getDesignProject(projectId);
-      if (!project || project.userId !== userId) {
-        const err: HttpError = new Error("Projeto de design não encontrado ou acesso não autorizado.");
-        err.status = 404; err.isOperational = true; return next(err);
-      }
-      const items: DesignProjectItem[] = await storage.getDesignProjectItems(projectId);
-      return res.status(200).json({ ...project, items: items ?? [] });
-    } catch (error) {
-      console.error(`[Route /api/ai-design-projects/:id GET ${req.params.projectId}] Erro:`, error);
-      return next(error);
-    }
-  });
-
-  app.post(
-    "/api/ai-design-projects/:projectId/upload-render",
-    requireAuth,
-    renderUploadInMemory.single("renderFile"), 
-    handleMulterError, 
-    async (req: Request, res: Response, next: NextFunction) => {
-      try {
-        const userId = req.session.userId!;
-        const projectId = parseInt(req.params.projectId);
-        if (isNaN(projectId)) {
-          const err: HttpError = new Error("ID do projeto inválido.");
-          err.status = 400; err.isOperational = true; return next(err);
-        }
-        if (!req.file || !req.file.buffer) {
-          const err: HttpError = new Error("Nenhum arquivo de render enviado.");
-          err.status = 400; err.isOperational = true; return next(err);
-        }
-        const project = await storage.getDesignProject(projectId);
-        if (!project || project.userId !== userId) {
-           const err: HttpError = new Error("Projeto de design não encontrado ou acesso não autorizado.");
-           err.status = 404; err.isOperational = true; return next(err);
-        }
-        const buffer = req.file.buffer;
-        const filename = req.file.originalname; 
-        const category = 'design-projects'; 
-        const subId = projectId.toString(); 
-        const renderImageUrl = await uploadBufferToS3(buffer, filename, userId, category, subId);
-        await storage.updateDesignProject(projectId, { clientRenderImageUrl: renderImageUrl, status: 'render_uploaded', updatedAt: new Date() });
-        
-        processDesignProjectImage(projectId, renderImageUrl).catch(err => {
-          console.error(`ERRO ASYNC no processamento de imagem do projeto de design ${projectId}:`, err);
-          storage.updateDesignProject(projectId, { status: 'processing_failed', updatedAt: new Date() })
-            .catch(updateErr => console.error("Erro ao atualizar status para falha (design project):", updateErr));
-        });
-        return res.status(202).json({
-          message: "Imagem recebida. O processamento da IA foi iniciado.",
-          projectId: projectId,
-          imageUrl: renderImageUrl 
-        });
-      } catch (error) { 
-        console.error(`[Route /api/ai-design-projects/:id/upload-render POST ${req.params.projectId}] Erro:`, error);
-        return next(error);
-      }
-    }
-  );
-
-  app.put("/api/ai-design-projects/:projectId/items/:itemId", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
-     try {
-        const userId = req.session.userId!;
-      const projectId = parseInt(req.params.projectId);
-      const itemId = parseInt(req.params.itemId);
-
-      if (isNaN(projectId) || isNaN(itemId)) {
-        const err: HttpError = new Error("ID do projeto ou do item inválido.");
-        err.status = 400; err.isOperational = true; return next(err);
-      }
-
-      const project = await storage.getDesignProject(projectId);
-      if (!project || project.userId !== userId) {
-        const err: HttpError = new Error("Projeto de design não encontrado ou acesso não autorizado.");
-        err.status = 404; err.isOperational = true; return next(err);
-      }
-
-      const items = await storage.getDesignProjectItems(projectId);
-      const existingItem = items.find(item => item.id === itemId);
-
-      if (!existingItem) {
-        const err: HttpError = new Error("Item do projeto não encontrado.");
-        err.status = 404; err.isOperational = true; return next(err);
-      }
-      
-      const { originalObjectId, detectedObjectName, suggestedProductId, userFeedback, notes } = req.body;
-      
-      const updateData: Partial<DesignProjectItem> = {};
-      // if (originalObjectId !== undefined) updateData.originalObjectId = originalObjectId; // Comentado - Verificar schema
-      // if (detectedObjectName !== undefined) updateData.detectedObjectName = detectedObjectName; // Comentado - Verificar schema
-      if (suggestedProductId !== undefined) updateData.suggestedProductId1 = suggestedProductId === null ? null : Number(suggestedProductId); // CORRIGIDO para suggestedProductId1
-      if (userFeedback !== undefined) updateData.userFeedback = userFeedback; 
-      // if (notes !== undefined) updateData.notes = notes; // Comentado - Verificar schema
-      updateData.updatedAt = new Date();
-
-      if (Object.keys(updateData).length === 1 && updateData.updatedAt) { // Apenas updatedAt
-          const err: HttpError = new Error("Nenhum dado válido para atualizar o item do projeto.");
-          err.status = 400; err.isOperational = true; return next(err);
-      }
-
-      // const updatedItem = await storage.updateDesignProjectItem(itemId, updateData); // Supondo que esta função existe
-
-      // return res.status(200).json(updatedItem); // Supondo que esta linha deve ser executada
-      // Retornar uma resposta de sucesso genérica ou o item existente (sem a atualização aplicada no DB ainda)
-      // Isso é para fazer o código compilar. A lógica de storage.updateDesignProjectItem precisa ser implementada.
-      return res.status(200).json({ message: "Atualização do item recebida (lógica de DB pendente)", itemBeforeUpdate: existingItem }); 
-
-    } catch (error) {
-      console.error(`[Route /api/ai-design-projects/:pid/items/:iid PUT] Erro:`, error);
-      return next(error);
-    }
-  });
-
-  // NOVA ROTA: GET para buscar mensagens de um projeto de design
-  app.get("/api/ai-design-projects/:projectId/messages", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const userId = req.session.userId!;
-      const projectId = parseInt(req.params.projectId);
-
-      if (isNaN(projectId)) {
-        const err: HttpError = new Error("ID do projeto inválido.");
-        err.status = 400; err.isOperational = true; return next(err);
-      }
-
-      // Verificar se o projeto pertence ao usuário (opcional, mas bom para segurança)
-      const project = await storage.getDesignProject(projectId);
-      if (!project || project.userId !== userId) {
-        const err: HttpError = new Error("Projeto de design não encontrado ou acesso não autorizado.");
-        err.status = 404; err.isOperational = true; return next(err);
-      }
-
-      const messages = await storage.getAiDesignChatMessages(projectId);
-      return res.status(200).json(messages);
-
-    } catch (error) {
-      console.error(`[Route /api/ai-design-projects/:id/messages GET] Erro:`, error);
-      return next(error);
-    }
-  });
-
-  // NOVA ROTA: POST para criar uma nova mensagem em um projeto de design
-  app.post("/api/ai-design-projects/:projectId/messages", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const userId = req.session.userId!;
-      const projectId = parseInt(req.params.projectId);
-      const { role, content, attachmentUrl } = req.body;
-
-      if (isNaN(projectId)) {
-        const err: HttpError = new Error("ID do projeto inválido.");
-        err.status = 400; err.isOperational = true; return next(err);
-      }
-
-      if (!role || !content) {
-        const err: HttpError = new Error("Role e content são obrigatórios para a mensagem.");
-        err.status = 400; err.isOperational = true; return next(err);
-      }
-
-      // Verificar se o projeto pertence ao usuário (opcional, mas bom para segurança)
-      const project = await storage.getDesignProject(projectId);
-      if (!project || project.userId !== userId) {
-        const err: HttpError = new Error("Projeto de design não encontrado ou acesso não autorizado.");
-        err.status = 404; err.isOperational = true; return next(err);
-      }
-
-      const messageData: InsertAiDesignChatMessage = {
-        projectId,
-        role, // 'user' ou 'assistant'
-        content,
-        attachmentUrl: attachmentUrl || null, // attachmentUrl é opcional
-      };
-
-      const newMessage = await storage.createAiDesignChatMessage(messageData);
-
-      // Se a mensagem criada tiver um anexo, disparar o processamento da imagem
-      if (newMessage.attachmentUrl && newMessage.content) { // Passar também o conteúdo da mensagem
-        console.log(`[Chat Message] Mensagem ${newMessage.id} com anexo ${newMessage.attachmentUrl}. Disparando processamento de imagem...`);
-        processDesignProjectImage(projectId, newMessage.attachmentUrl, newMessage.content).catch(err => {
-          console.error(`[Chat Message] ERRO ASYNC no processamento de imagem para anexo da mensagem ${newMessage.id} (projeto ${projectId}):`, err);
-          // Opcional: Enviar outra mensagem no chat informando sobre a falha no processamento do anexo?
-        });
-      } else if (newMessage.attachmentUrl) {
-        // Caso haja anexo mas não conteúdo (improvável para mensagens de usuário, mas para cobrir)
-        console.log(`[Chat Message] Mensagem ${newMessage.id} com anexo ${newMessage.attachmentUrl} mas sem conteúdo de texto. Disparando processamento de imagem...`);
-        processDesignProjectImage(projectId, newMessage.attachmentUrl).catch(err => {
-          console.error(`[Chat Message] ERRO ASYNC no processamento de imagem (sem texto) para anexo da mensagem ${newMessage.id} (projeto ${projectId}):`, err);
-        });
-      }
-
-      return res.status(201).json(newMessage);
-
-    } catch (error) {
-      console.error(`[Route /api/ai-design-projects/:id/messages POST] Erro:`, error);
-      return next(error);
-    }
-  });
-
-  // NOVA ROTA: POST para fazer upload de anexos para mensagens de chat de um projeto de design
-  app.post("/api/ai-design-projects/:projectId/attachments", 
-    requireAuth, 
-    renderUploadInMemory.single("file"), // Usar o mesmo nome de campo que o FormData no frontend usa ('file')
-    handleMulterError, // Reutilizar o handler de erro do Multer
-    async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const userId = req.session.userId!;
-      const projectId = parseInt(req.params.projectId);
-
-      if (isNaN(projectId)) {
-        const err: HttpError = new Error("ID do projeto inválido.");
-        err.status = 400; err.isOperational = true; return next(err);
-      }
-
-      if (!req.file || !req.file.buffer) {
-        const err: HttpError = new Error("Nenhum arquivo enviado para anexo.");
-        err.status = 400; err.isOperational = true; return next(err);
-      }
-
-      const project = await storage.getDesignProject(projectId);
-      if (!project || project.userId !== userId) {
-        const err: HttpError = new Error("Projeto de design não encontrado ou acesso não autorizado.");
-        err.status = 404; err.isOperational = true; return next(err);
-      }
-
-      const buffer = req.file.buffer;
-      const originalFilename = req.file.originalname;
-      const category = 'design-project-attachments'; 
-      const subId = projectId.toString(); 
-
-      const attachmentS3Url = await uploadBufferToS3(buffer, originalFilename, userId, category, subId);
-      
-      console.log(`[Route /api/ai-design-projects/:id/attachments POST] Anexo ${originalFilename} enviado para ${attachmentS3Url}`);
-
-      return res.status(200).json({ url: attachmentS3Url });
-
-    } catch (error) {
-      console.error(`[Route /api/ai-design-projects/:id/attachments POST] Erro ao fazer upload do anexo:`, error);
-      return next(error);
-    }
-  });
-
-  app.post("/backend/upload-logo", requireAuth, logoUploadInMemory.single("logoFile"), handleMulterError, async (req: Request, res: Response, next: NextFunction) => {
-     try {
-        const userId = req.session.userId!;
-        if (!req.file || !req.file.buffer) {
-          const err: HttpError = new Error("Nenhum arquivo de logo enviado ou buffer vazio.");
-          err.status = 400; err.isOperational = true; return next(err);
-        }
-        const buffer = req.file.buffer;
-        const filename = req.file.originalname;
-        const category = 'logos'; 
-        const logoUrl = await uploadBufferToS3(buffer, filename, userId, category, null);
-        
-        await storage.updateUser(userId, { companyLogoUrl: logoUrl });
-
-        return res.status(200).json({ logoUrl: logoUrl });
-     } catch (error) {
-        console.error("[Route /upload-logo POST] Erro:", error);
-        return next(error);
-     }
   });
   
-  console.log("Rotas da API configuradas no app.");
+  router.get("/moodboards/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ message: "ID inválido" });
+      const moodboard = await storage.getMoodboard(id);
+      if (!moodboard) return res.status(404).json({ message: "Moodboard não encontrado" });
+      if (moodboard.userId !== req.session.userId) return res.status(403).json({ message: 'Acesso negado' });
+      const products = [];
+      for (const productId of moodboard.productIds) {
+        const product = await storage.getProduct(productId);
+        if (product) products.push(product);
+      }
+      return res.status(200).json({ ...moodboard, products });
+    } catch (error) {
+      console.error("Erro ao obter moodboard:", error);
+      return res.status(500).json({ message: "Erro ao obter moodboard" });
+    }
+  });
+  
+  router.post("/moodboards", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      const input: MoodboardCreateInput = { ...req.body, userId };
+      const moodboard = await storage.createMoodboard(input);
+      return res.status(201).json(moodboard);
+    } catch (error) {
+      console.error("Erro ao criar moodboard:", error);
+      return res.status(500).json({ message: "Erro ao criar moodboard" });
+    }
+  });
+  
+  router.put("/moodboards/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ message: "ID inválido" });
+      const data = req.body;
+      const moodboardToUpdate = await storage.getMoodboard(id);
+      if(!moodboardToUpdate || moodboardToUpdate.userId !== req.session.userId) return res.status(403).json({message: "Acesso negado ou moodboard não encontrado"});
+      const moodboard = await storage.updateMoodboard(id, data);
+      if (!moodboard) return res.status(404).json({ message: "Moodboard não encontrado" });
+      return res.status(200).json(moodboard);
+    } catch (error) {
+      console.error("Erro ao atualizar moodboard:", error);
+      return res.status(500).json({ message: "Erro ao atualizar moodboard" });
+    }
+  });
+  
+  router.delete("/moodboards/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ message: "ID inválido" });
+      const moodboard = await storage.getMoodboard(id);
+      if (!moodboard || moodboard.userId !== req.session.userId) return res.status(403).json({ message: 'Acesso negado' });
+      const success = await storage.deleteMoodboard(id);
+      if (!success) return res.status(404).json({ message: "Moodboard não encontrado" });
+      return res.status(204).send();
+    } catch (error) {
+      console.error("Erro ao excluir moodboard:", error);
+      return res.status(500).json({ message: "Erro ao excluir moodboard" });
+    }
+  });
+  
+  router.post("/catalogs/upload", requireAuth, upload.single("file"), handleMulterError, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      const localUser = await storage.getUser(userId);
+      if (!localUser) {
+         return res.status(500).json({ message: "Erro interno: dados do usuário inconsistentes." });
+      }
+      if (!req.file) {
+        return res.status(400).json({ message: "Nenhum arquivo enviado" });
+      }
+      const { originalname, size } = req.file as any;
+      const location = (req.file as any).location || req.file.path;
+      const s3Bucket = (req.file as any).bucket;
+      const s3Key = (req.file as any).key;
+      const s3Etag = (req.file as any).etag;
 
-  app.use(globalErrorHandler);
+      const catalogData = {
+        userId: localUser.id,
+        fileName: originalname,
+        fileUrl: location,
+        fileType: originalname.split('.').pop()?.toLowerCase() || '',
+        fileSize: size,
+        s3Bucket: s3Bucket,
+        s3Key: s3Key,
+        s3Url: location,
+        s3Etag: s3Etag,
+        processedStatus: 'queued' as 'queued',
+      };
+      const catalog = await storage.createCatalog(catalogData);
+      
+      const processingFilePath = s3Key || req.file.path;
+      
+      const jobData = {
+        catalogId: catalog.id, userId: localUser.id, 
+        s3Key: s3Key,
+        processingFilePath: processingFilePath,
+        fileName: originalname, fileType: catalogData.fileType,
+        isS3Upload: !!s3Key
+      };
+      await processCatalogInBackground(jobData);
+      return res.status(201).json({
+        message: `Catálogo "${originalname}" enviado e na fila para processamento.`,
+        catalogId: catalog.id, s3Url: location
+      });
+    } catch (error) {
+      console.error("Erro GERAL na rota de upload:", error);
+      return res.status(500).json({
+        message: `Erro interno ao processar upload: ${error instanceof Error ? error.message : String(error)}`
+      });
+    }
+  });
+
+  router.get("/images/:userId/:catalogId/:filename", (req: Request, res: Response) => {
+    const { userId, catalogId, filename } = req.params;
+    const filePath = path.join("uploads", userId, catalogId, filename); 
+    if (fs.existsSync(filePath)) {
+      const contentType = mime.lookup(filePath) || 'application/octet-stream';
+      res.setHeader('Content-Type', contentType);
+      fs.createReadStream(filePath).pipe(res);
+    } else {
+      res.status(404).json({ message: "Imagem não encontrada" });
+    }
+  });
+
+  router.post("/ai-design-projects", requireAuth, async (req: Request, res: Response) => {
+    try {
+        const userId = req.session.userId!;
+        const { name, clientRenderImageUrl, clientFloorPlanImageUrl } = req.body;
+        if (!name) {
+            return res.status(400).json({ message: "Nome do projeto é obrigatório." });
+        }
+        const newProject = await storage.createDesignProject({
+            userId,
+            name,
+            clientRenderImageUrl: clientRenderImageUrl || null,
+            clientFloorPlanImageUrl: clientFloorPlanImageUrl || null,
+            status: 'new',
+        });
+        return res.status(201).json(newProject);
+    } catch (error) {
+        console.error("Erro ao criar projeto de design AI:", error);
+        return res.status(500).json({ message: "Erro interno ao criar projeto de design AI." });
+    }
+  });
+
+  router.get("/ai-design-projects", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      const projects = await storage.getAllDesignProjects(userId);
+      return res.status(200).json(projects);
+    } catch (error) {
+      console.error("Erro ao buscar lista de projetos de design AI:", error);
+      const message = error instanceof Error ? error.message : "Erro interno ao buscar lista de projetos.";
+      return res.status(500).json({ message });
+    }
+  });
+
+  router.get("/ai-design-projects/:projectId", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const projectIdParam = req.params.projectId;
+      const userId = req.session.userId!;
+      const projectId = parseInt(projectIdParam);
+      if (isNaN(projectId)) return res.status(400).json({ message: "ID de projeto deve ser um número." });
+      const project = await storage.getDesignProject(projectId);
+      if (!project) return res.status(404).json({ message: "Projeto de design não encontrado." });
+      if (project.userId !== userId) return res.status(403).json({ message: "Acesso negado." });
+      return res.status(200).json(project);
+    } catch (error) {
+      console.error("Erro ao buscar projeto de design:", error);
+      const message = error instanceof Error ? error.message : "Erro interno.";
+      return res.status(500).json({ message });
+    }
+  });
+
+  router.get("/ai-design-projects/:projectId/items", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const projectIdParam = req.params.projectId;
+      const userId = req.session.userId!;
+      const projectId = parseInt(projectIdParam);
+      if (isNaN(projectId)) return res.status(400).json({ message: "ID de projeto deve ser um número." });
+      const project = await storage.getDesignProject(projectId);
+      if (!project) return res.status(404).json({ message: "Projeto não encontrado." });
+      if (project.userId !== userId) return res.status(403).json({ message: "Acesso negado." });
+      const items = await storage.getDesignProjectItems(projectId);
+      return res.status(200).json(items); 
+    } catch (error) {
+      console.error("Erro ao buscar itens do projeto de design:", error);
+      const message = error instanceof Error ? error.message : "Erro interno.";
+      return res.status(500).json({ message });
+    }
+  });
+
+  router.put("/ai-design-projects/:projectId/items/:itemId", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const projectIdParam = req.params.projectId;
+      const itemIdParam = req.params.itemId;
+      const userId = req.session.userId!;
+      const updateData = req.body; 
+      const projectId = parseInt(projectIdParam);
+      const itemId = parseInt(itemIdParam);
+      if (isNaN(projectId) || isNaN(itemId)) {
+        return res.status(400).json({ message: "IDs de projeto e item devem ser números." });
+      }
+      const project = await storage.getDesignProject(projectId);
+      if (!project) return res.status(404).json({ message: "Projeto não encontrado." });
+      if (project.userId !== userId) return res.status(403).json({ message: "Acesso negado." });
+      
+      delete updateData.id;
+      delete updateData.designProjectId;
+      delete updateData.createdAt;
+
+      if (Object.keys(updateData).length === 0) {
+        return res.status(400).json({ message: "Nenhum dado fornecido para atualização." });
+      }
+      const updatedItem = await storage.updateDesignProjectItem(itemId, updateData);
+      if (!updatedItem) return res.status(404).json({ message: "Item não encontrado ou não pôde ser atualizado." });
+      
+      const baseImageUrlForInpainting = project.clientRenderImageUrl || project.clientFloorPlanImageUrl;
+      if (updateData.selectedProductId && baseImageUrlForInpainting) { 
+          triggerInpaintingForItem(updatedItem.id, projectId, baseImageUrlForInpainting)
+            .then(() => console.log(`[Routes] Inpainting para item ${updatedItem.id} iniciado.`))
+            .catch(err => console.error(`[Routes] Erro ao disparar inpainting para item ${updatedItem.id}:`, err));
+      }
+      return res.status(200).json(updatedItem);
+    } catch (error) {
+      console.error("Erro ao atualizar item de design:", error);
+      const message = error instanceof Error ? error.message : "Erro interno.";
+      return res.status(500).json({ message });
+    }
+  });
+
+  router.post("/ai-design-projects/:projectId/generate-final-render", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const projectIdParam = req.params.projectId;
+      const userId = req.session.userId!;
+      const projectId = parseInt(projectIdParam);
+      if (isNaN(projectId)) return res.status(400).json({ message: "ID de projeto deve ser um número." });
+      const project = await storage.getDesignProject(projectId);
+      if (!project) return res.status(404).json({ message: "Projeto não encontrado." });
+      if (project.userId !== userId) return res.status(403).json({ message: "Acesso negado." });
+      generateFinalRenderForProject(projectId)
+        .then(() => console.log(`[Routes] Render final para projeto ${projectId} iniciado.`))
+        .catch(err => console.error(`[Routes] Erro ao disparar render final para projeto ${projectId}:`, err));
+      return res.status(202).json({ message: "Processamento do render final iniciado." });
+    } catch (error) {
+      console.error("Erro na rota /generate-final-render:", error);
+      const message = error instanceof Error ? error.message : "Erro interno.";
+      return res.status(500).json({ message });
+    }
+  });
+
+  router.post("/ai-design-projects/:projectId/initiate-image-analysis", 
+    requireAuth, 
+    upload.single('projectImage'), 
+    handleMulterError, 
+    async (req: Request, res: Response) => {
+    try {
+      const projectIdParam = req.params.projectId;
+      const userId = req.session.userId!;
+      const projectId = parseInt(projectIdParam);
+      if (isNaN(projectId)) return res.status(400).json({ message: "ID de projeto deve ser um número." });
+      if (!req.file) return res.status(400).json({ message: "Nenhum arquivo de imagem enviado." });
+      
+      let project = await storage.getDesignProject(projectId);
+      if (!project) return res.status(404).json({ message: "Projeto não encontrado." });
+      if (project.userId !== userId) return res.status(403).json({ message: "Acesso negado." });
+
+      const imageUrl = (req.file as any).location || req.file.path;
+      if (!imageUrl) {
+        return res.status(500).json({ message: "Falha ao obter URL da imagem após upload." });
+      }
+      const updatedProject = await storage.updateDesignProject(projectId, {
+        clientRenderImageUrl: imageUrl, status: 'processing', updatedAt: new Date(),
+      });
+      if (!updatedProject) {
+        return res.status(500).json({ message: "Falha ao atualizar projeto com URL da imagem." });
+      }
+      processDesignProjectImage(projectId, imageUrl, req.body.userMessageText)
+        .then(() => console.log(`[API Upload Image] processDesignProjectImage para projeto ${projectId} concluído.`))
+        .catch(err => console.error(`[API Upload Image] Erro em processDesignProjectImage para ${projectId}:`, err));
+      return res.status(200).json(updatedProject);
+    } catch (error) {
+      console.error("Erro em /initiate-image-analysis:", error);
+      const message = error instanceof Error ? error.message : "Erro interno.";
+      return res.status(500).json({ message });
+    }
+  });
+
+  router.post("/upload-logo", requireAuth, logoUploadInMemory.single("logoFile"), handleMulterError, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      if (!req.file) return res.status(400).json({ message: "Nenhum arquivo de logo enviado." });
+      const fileBuffer = req.file.buffer;
+      const originalName = req.file.originalname;
+      const logoUrl = await uploadBufferToS3(fileBuffer, originalName, userId, 'profile', 'logo');
+      if (!logoUrl) throw new Error("Falha ao fazer upload do logo para S3.");
+      return res.status(200).json({ logoUrl: logoUrl }); 
+    } catch (error) {
+      console.error("Erro no upload do logo:", error);
+      const message = error instanceof Error ? error.message : "Erro interno.";
+      if (!res.headersSent) {
+         res.status(500).json({ message });
+      } else {
+         res.end();
+      }
+    }
+  });
+
+  router.post("/products/visual-search", requireAuth, visualSearchUpload.single("searchImage"), handleMulterError, async (req: Request, res: Response) => {
+    if (!openai) return res.status(503).json({ message: "Serviço de IA não configurado." });
+    if (!req.file) return res.status(400).json({ message: "Nenhuma imagem enviada." });
+
+    const userId = req.session.userId!;
+    const imageBuffer = req.file.buffer;
+    const mimeType = req.file.mimetype;
+    try {
+      const base64Image = imageBuffer.toString('base64');
+      const imageUrl = `data:${mimeType};base64,${base64Image}`;
+      const aiResponse = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [{
+            role: "user",
+            content: [
+                { type: "text", text: "Descreva os principais atributos visuais deste produto em poucas palavras-chave (ex: cor, forma, estilo, material)." },
+                { type: "image_url", image_url: { url: imageUrl } }
+            ]
+        }],
+        max_tokens: 100 
+      });
+      const description = aiResponse.choices[0].message.content;
+      if (!description) throw new Error("Não foi possível obter descrição da IA.");
+      
+      const products = await storage.findRelevantProducts(userId, description, 5);
+      return res.status(200).json({ descriptionFromAI: description, products });
+    } catch (error) {
+      console.error("Erro na busca visual:", error);
+      const message = error instanceof Error ? error.message : "Erro interno.";
+      return res.status(500).json({ message });
+    }
+  });
 }

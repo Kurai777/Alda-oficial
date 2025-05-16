@@ -13,28 +13,38 @@ export function useRealtimeProducts(userId?: number, catalogId?: number) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
   
-  // Construir a chave da query
   const queryKey = catalogId 
     ? ['/api/products', { userId, catalogId }] 
     : ['/api/products', { userId }];
   
-  // Usar React Query para buscar dados iniciais
   const query = useQuery({
     queryKey,
     queryFn: async () => {
-      console.log(`[WebSocket] Buscando produtos para usuário ${userId} ${catalogId ? `e catálogo ${catalogId}` : ''}`);
+      console.log(`[RealtimeProducts] Buscando produtos para usuário ${userId} ${catalogId ? `e catálogo ${catalogId}` : ''}`);
       
       const url = catalogId 
-        ? `/backend/products?catalogId=${catalogId}` 
-        : `/backend/products`;
+        ? `/api/products?catalogId=${catalogId}` 
+        : `/api/products`;
       
       const response = await fetch(url);
       
       if (!response.ok) {
-        throw new Error(`Erro ao buscar produtos: ${response.status}`);
+        let errorText = 'Erro desconhecido do servidor';
+        try {
+          errorText = await response.text();
+        } catch (e) {
+          // Ignorar se não conseguir ler o texto
+        }
+        console.error(`Erro ao buscar produtos (${url}): ${response.status} - ${errorText}`);
+        throw new Error(`Erro ao buscar produtos: ${response.status} - ${errorText}`);
       }
       
-      return await response.json();
+      try {
+        return await response.json();
+      } catch (e) {
+        console.error(`Erro ao fazer parse do JSON da resposta de ${url}:`, e);
+        throw new Error(`Falha ao processar resposta do servidor para ${url}.`);
+      }
     },
     enabled: !!userId,
   });

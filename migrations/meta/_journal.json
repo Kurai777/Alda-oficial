@@ -22,6 +22,20 @@
       "when": 1746313383931,
       "tag": "0002_cute_joystick",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1747070049482,
+      "tag": "0003_concerned_gorgon",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1747094945217,
+      "tag": "0004_famous_joseph",
+      "breakpoints": true
     }
   ]
 }

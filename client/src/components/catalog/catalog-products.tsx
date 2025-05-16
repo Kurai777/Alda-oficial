@@ -75,34 +75,30 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
   // Grid é o modo padrão para melhor visualização
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('grid');
 
-  // Buscar produtos do catálogo (somente da API local para evitar problemas de permissão)
+  // Buscar produtos do catálogo
   const { data: products = [], isLoading, refetch, isError } = useQuery({
     queryKey: ["/api/products", { catalogId }],
     queryFn: async () => {
       console.log(`Buscando produtos para catalogId=${catalogId}`);
       
       try {
-        // CORRIGIDO: Usar /backend/products
-        const response = await fetch(`/backend/products?catalogId=${catalogId}`, {
+        // CORRIGIDO: Usar /api/products
+        const response = await fetch(`/api/products?catalogId=${catalogId}`, {
           method: 'GET',
           headers: {
             'Content-Type': 'application/json',
           },
         });
         
-        // Se a resposta não for ok, lançar erro
         if (!response.ok) {
-          // Logar a resposta como texto para depuração
           const errorText = await response.text();
           console.error(`Erro ao buscar produtos (status ${response.status}) - Resposta não JSON:`, errorText);
           throw new Error(`Erro HTTP: ${response.status}`);
         }
         
-        // Converter a resposta para JSON
         const data = await response.json();
         console.log("API response:", data);
         
-        // Se encontrou produtos, retorná-los
         if (data && Array.isArray(data)) {
           console.log(`Encontrados ${data.length} produtos na API local`);
           return data;
@@ -112,7 +108,6 @@ export default function CatalogProducts({ catalogId, fileName, onBack }: Catalog
         return [];
       } catch (error) {
         console.error("Erro ao buscar produtos:", error);
-        // Retornar array vazio em caso de erro
         return [];
       }
     },

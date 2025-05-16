@@ -62,20 +62,24 @@ export default function Catalogs() {
   const [selectedCatalog, setSelectedCatalog] = useState<Catalog | null>(null);
 
   // Fetch catalogs
-  const { data: catalogs = [], isLoading } = useQuery({
-    queryKey: ["/backend/catalogs"],
+  const { data: catalogsData, isLoading, isError, error } = useQuery<Catalog[], Error>({
+    queryKey: ["/api/catalogs"],
     enabled: !!user,
   });
+
+  // Para usar no JSX, garanta que catalogs seja um array ou undefined/null para verificações
+  const catalogs = Array.isArray(catalogsData) ? catalogsData : [];
+  const catalogsErrorMessage = error instanceof Error ? error.message : 'Erro ao carregar catálogos';
 
   // Mutation to process catalog
   const processMutation = useMutation({
     mutationFn: async (catalogId: number) => {
-      await apiRequest("PUT", `/backend/catalogs/${catalogId}/status`, {
+      await apiRequest("PUT", `/api/catalogs/${catalogId}/status`, {
         status: "processed",
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/backend/catalogs"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/catalogs"] });
       toast({
         title: "Catálogo processado",
         description: "O catálogo foi processado com sucesso.",
@@ -97,7 +101,7 @@ export default function Catalogs() {
     mutationFn: async (catalogId: number) => {
       console.log(`Solicitando exclusão do catálogo ID ${catalogId}`);
       try {
-        const response = await apiRequest("DELETE", `/backend/catalogs/${catalogId}`);
+        const response = await apiRequest("DELETE", `/api/catalogs/${catalogId}`);
         
         if (!response.ok) {
           const errorText = await response.text();
@@ -112,8 +116,8 @@ export default function Catalogs() {
       }
     },
     onSuccess: (catalogId) => {
-      queryClient.invalidateQueries({ queryKey: ["/backend/catalogs"] });
-      queryClient.invalidateQueries({ queryKey: ["/backend/products"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/catalogs"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
       
       toast({
         title: "Catálogo removido",
@@ -225,20 +229,28 @@ export default function Catalogs() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {isLoading ? (
+          {isLoading && (
             <div className="animate-pulse space-y-3">
               {[...Array(3)].map((_, index) => (
                 <div key={index} className="h-16 bg-gray-100 rounded-md"></div>
               ))}
             </div>
-          ) : !catalogs || catalogs.length === 0 ? (
+          )}
+          {isError && (
+             <div className="text-center py-8 text-red-600">
+                <AlertCircle className="mx-auto h-12 w-12" />
+                <p className="mt-2">Erro ao carregar catálogos: {catalogsErrorMessage}</p>
+             </div>
+          )}
+          {!isLoading && !isError && catalogs.length === 0 && (
             <div className="text-center py-8">
               <FileText className="mx-auto h-12 w-12 text-gray-300" />
               <p className="mt-2 text-gray-500">
                 Nenhum catálogo importado. Faça o upload do seu primeiro catálogo.
               </p>
             </div>
-          ) : (
+          )}
+          {!isLoading && !isError && catalogs.length > 0 && (
             <Table>
               <TableHeader>
                 <TableRow>
@@ -318,7 +330,7 @@ export default function Catalogs() {
         </CardContent>
         <CardFooter className="flex justify-between text-sm text-gray-500">
           <div>
-            {catalogs?.length || 0} catálogo(s) importado(s)
+            {catalogs.length || 0} catálogo(s) importado(s)
           </div>
           <div>
             Última atualização: {new Date().toLocaleTimeString()}
