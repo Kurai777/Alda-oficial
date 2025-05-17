@@ -653,33 +653,42 @@ export class DatabaseStorage implements IStorage {
 
   async searchProducts(userId: number | string, searchText: string): Promise<Product[]> {
     console.log(`searchProducts chamado com userId: ${userId}, searchText: ${searchText}`);
-    // Implementação básica: Retorna array vazio. TODO: Implementar lógica de busca.
     try {
       const parsedUserId = typeof userId === 'string' ? parseInt(userId) : userId;
       if (!searchText || searchText.trim() === '') return [];
 
-      const results = await db.select()
+      const cleanedSearchText = searchText.replace(/[!*&|:'()[\]]/g, '').trim();
+      if (!cleanedSearchText) return [];
+
+      const query = sql`websearch_to_tsquery('portuguese', ${cleanedSearchText})`;
+
+      const results = await db.select({
+          // Seleciona todas as colunas da tabela products
+          ...(getTableColumns(products)), 
+          // Calcula a relevância
+          relevance: sql<number>`ts_rank_cd(products.search_tsv, ${query})`.as('relevance')
+        })
         .from(products)
         .where(and(
           eq(products.userId, parsedUserId),
-          or(
-            ilike(products.name, `%${searchText}%`),
-            ilike(products.description, `%${searchText}%`),
-            ilike(products.category, `%${searchText}%`),
-            ilike(products.code, `%${searchText}%`)
-          )
+          sql`products.search_tsv @@ ${query}` // Condição de busca Full-Text
         ))
-        .limit(50); // Limitar resultados para performance
-      return results;
+        .orderBy(desc(sql`relevance`)) // Ordena pela relevância (maior primeiro)
+        .limit(10); // Limitar para os 10 mais relevantes
+
+      console.log(`Busca textual FTS para "${cleanedSearchText}" encontrou ${results.length} resultados.`);
+      // Retornar os produtos. A UI/lógica de processamento pode precisar usar o campo 'relevance'.
+      // Se a UI espera um campo 'distance' (menor é melhor), uma transformação pode ser necessária.
+      // Por agora, vamos retornar com 'relevance'.
+      return results.map(r => ({ ...r.product, relevance: r.relevance } as any)); // Adiciona relevance ao objeto produto
     } catch (error) {
-      console.error('Error in searchProducts:', error);
+      console.error('Error in searchProducts (FTS):', error);
       return [];
     }
   }
 
   async findRelevantProducts(userId: number, description: string): Promise<Product[]> {
     console.log(`findRelevantProducts chamado com userId: ${userId}, description: ${description}`);
-    // Implementação básica: Reutiliza searchProducts. TODO: Implementar lógica mais específica se necessário.
     return this.searchProducts(userId, description);
   }
 
