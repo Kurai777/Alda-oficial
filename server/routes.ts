@@ -273,18 +273,14 @@ export async function registerRoutes(router: ExpressRouter, upload: multer.Multe
   router.get("/products/batch", requireAuth, async (req: Request, res: Response) => {
     try {
       const idsString = req.query.ids as string;
-      console.log(`[API /products/batch] Recebido idsString: ${idsString}`);
 
       if (!idsString) {
-        console.log("[API /products/batch] idsString está vazio ou undefined.");
         return res.status(400).json({ message: "Nenhum ID de produto fornecido." });
       }
 
       const productIds = idsString.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
-      console.log(`[API /products/batch] productIds após parse:`, productIds);
 
       if (productIds.length === 0) {
-        console.log("[API /products/batch] productIds array está vazio após parse/filter.");
         return res.status(400).json({ message: "IDs de produto inválidos ou vazios." });
       }
 
@@ -861,7 +857,7 @@ export async function registerRoutes(router: ExpressRouter, upload: multer.Multe
       const description = aiResponse.choices[0].message.content;
       if (!description) throw new Error("Não foi possível obter descrição da IA.");
 
-      const products = await storage.findRelevantProducts(userId, description, 5);
+      const products = await storage.findRelevantProducts(userId, description);
       return res.status(200).json({ descriptionFromAI: description, products });
     } catch (error) {
       console.error("Erro na busca visual:", error);
