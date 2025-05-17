@@ -1107,7 +1107,7 @@ async function performSingleInpaintingStep(baseImageUrl: string, item: DesignPro
     }
     const inpaintingResult = await runReplicateModel<string[] | string>(
       "stability-ai/stable-diffusion-inpainting",
-      "95b72231da0fb1aaa79984e148101881792b034290ed3c939369301063c00558",
+      "95b7223104132402a9ae91cc677285bc5eb997834bd2349fa486f53910fd68b3",
       {
         image: primedImageBase64, 
         mask: `data:image/png;base64,${maskBuffer.toString('base64')}`,

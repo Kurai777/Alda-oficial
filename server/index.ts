@@ -1,5 +1,5 @@
 import express, { type Request, Response, NextFunction, Router as ExpressRouter } from "express";
-import { registerRoutes } from "./routes";
+import { registerRoutes } from "./routes_v2";
 import { serveStatic, log } from "./vite";
 import { createServer as createViteServer } from 'vite';
 import session from "express-session";

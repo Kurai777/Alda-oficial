@@ -1,5 +1,5 @@
 import type { Express, Request, Response, NextFunction, Router as ExpressRouter } from "express";
-import { storage } from "./storage";
+import { storage } from "./storage.js";
 import { type InsertUser } from '@shared/schema';
 import multer from "multer";
 import * as fs from "fs";
@@ -18,14 +18,14 @@ import {
   getCatalogFileUrl
 } from "./catalog-s3-manager.js";
 import { processExcelWithAI } from './ai-excel-processor.js';
-import { fixProductImages } from './excel-fixed-image-mapper';
-import { extractAndUploadImagesSequentially, type ExtractedImageInfo } from './excel-image-extractor';
-import { processCatalogInBackground } from './catalog-processor';
+import { fixProductImages } from './excel-fixed-image-mapper.js';
+import { extractAndUploadImagesSequentially, type ExtractedImageInfo } from './excel-image-extractor.js';
+import { processCatalogInBackground } from './catalog-processor.js';
 import bcrypt from 'bcrypt';
-import { generateQuotePdf } from './pdf-generator';
+import { generateQuotePdf } from './pdf-generator.js';
 import { User } from '@shared/schema';
 import OpenAI from 'openai';
-import { triggerInpaintingForItem, processDesignProjectImage, generateFinalRenderForProject } from './ai-design-processor';
+import { triggerInpaintingForItem, processDesignProjectImage, generateFinalRenderForProject } from './ai-design-processor.js';
 
 type MoodboardCreateInput = {
   userId: number;
@@ -202,6 +202,31 @@ export async function registerRoutes(router: ExpressRouter, upload: multer.Multe
     }
   });
 
+  // Rota para buscar detalhes de múltiplos produtos por IDs
+  router.get("/products/batch", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const idsString = req.query.ids as string;
+
+      if (!idsString) {
+        return res.status(400).json({ message: "Nenhum ID de produto fornecido." });
+      }
+
+      const productIds = idsString.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
+
+      if (productIds.length === 0) {
+        return res.status(400).json({ message: "IDs de produto inválidos ou vazios." });
+      }
+
+      const productsDetailsMap = await storage.getProductsDetails(productIds);
+      return res.status(200).json(productsDetailsMap);
+
+    } catch (error) {
+      console.error("Erro ao buscar detalhes de produtos em batch:", error);
+      const message = error instanceof Error ? error.message : "Erro interno ao buscar produtos.";
+      return res.status(500).json({ message });
+    }
+  });
+
   router.get("/products", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = req.session.userId!;
@@ -266,31 +291,6 @@ export async function registerRoutes(router: ExpressRouter, upload: multer.Multe
     } catch (error) {
       console.error("Erro ao excluir produto:", error);
       return res.status(500).json({ message: "Erro ao excluir produto" });
-    }
-  });
-
-  // Rota para buscar detalhes de múltiplos produtos por IDs
-  router.get("/products/batch", requireAuth, async (req: Request, res: Response) => {
-    try {
-      const idsString = req.query.ids as string;
-
-      if (!idsString) {
-        return res.status(400).json({ message: "Nenhum ID de produto fornecido." });
-      }
-
-      const productIds = idsString.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
-
-      if (productIds.length === 0) {
-        return res.status(400).json({ message: "IDs de produto inválidos ou vazios." });
-      }
-
-      const productsDetailsMap = await storage.getProductsDetails(productIds);
-      return res.status(200).json(productsDetailsMap);
-
-    } catch (error) {
-      console.error("Erro ao buscar detalhes de produtos em batch:", error);
-      const message = error instanceof Error ? error.message : "Erro interno ao buscar produtos.";
-      return res.status(500).json({ message });
     }
   });
 
