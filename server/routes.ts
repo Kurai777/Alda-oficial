@@ -169,10 +169,10 @@ export async function registerRoutes(router: ExpressRouter, upload: multer.Multe
       if (receivedData.quotePaymentTerms !== undefined) updateDataForDb.quote_payment_terms = receivedData.quotePaymentTerms;
       if (receivedData.quoteValidityDays !== undefined) updateDataForDb.quote_validity_days = receivedData.quoteValidityDays;
       if (receivedData.cashDiscountPercentage !== undefined) updateDataForDb.cash_discount_percentage = receivedData.cashDiscountPercentage;
-      
+
       delete updateDataForDb.email;
       delete updateDataForDb.password;
-      
+
       if (Object.keys(updateDataForDb).length === 0) {
           return res.status(400).json({ message: "Nenhum dado válido para atualizar." });
       }
@@ -241,7 +241,7 @@ export async function registerRoutes(router: ExpressRouter, upload: multer.Multe
       return res.status(500).json({ message: "Erro ao criar produto" });
     }
   });
-  
+
   router.put("/products/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const id = parseInt(req.params.id);
@@ -255,7 +255,7 @@ export async function registerRoutes(router: ExpressRouter, upload: multer.Multe
       return res.status(500).json({ message: "Erro ao atualizar produto" });
     }
   });
-  
+
   router.delete("/products/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const id = parseInt(req.params.id);
@@ -269,6 +269,35 @@ export async function registerRoutes(router: ExpressRouter, upload: multer.Multe
     }
   });
 
+  // Rota para buscar detalhes de múltiplos produtos por IDs
+  router.get("/products/batch", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const idsString = req.query.ids as string;
+      console.log(`[API /products/batch] Recebido idsString: ${idsString}`);
+
+      if (!idsString) {
+        console.log("[API /products/batch] idsString está vazio ou undefined.");
+        return res.status(400).json({ message: "Nenhum ID de produto fornecido." });
+      }
+
+      const productIds = idsString.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
+      console.log(`[API /products/batch] productIds após parse:`, productIds);
+
+      if (productIds.length === 0) {
+        console.log("[API /products/batch] productIds array está vazio após parse/filter.");
+        return res.status(400).json({ message: "IDs de produto inválidos ou vazios." });
+      }
+
+      const productsDetailsMap = await storage.getProductsDetails(productIds);
+      return res.status(200).json(productsDetailsMap);
+
+    } catch (error) {
+      console.error("Erro ao buscar detalhes de produtos em batch:", error);
+      const message = error instanceof Error ? error.message : "Erro interno ao buscar produtos.";
+      return res.status(500).json({ message });
+    }
+  });
+
   router.get("/catalogs", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = req.session.userId!;
@@ -279,7 +308,7 @@ export async function registerRoutes(router: ExpressRouter, upload: multer.Multe
       return res.status(500).json({ message: "Erro ao obter catálogos" });
     }
   });
-  
+
   router.post("/catalogs", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = req.session.userId!;
@@ -290,7 +319,7 @@ export async function registerRoutes(router: ExpressRouter, upload: multer.Multe
       return res.status(500).json({ message: "Erro ao criar catálogo" });
     }
   });
-  
+
   router.get("/catalogs/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const id = parseInt(req.params.id);
@@ -305,7 +334,7 @@ export async function registerRoutes(router: ExpressRouter, upload: multer.Multe
       return res.status(500).json({ message: "Erro ao obter catálogo" });
     }
   });
-  
+
   router.put("/catalogs/:id/status", requireAuth, async (req: Request, res: Response) => {
     try {
       const id = parseInt(req.params.id);
@@ -324,7 +353,7 @@ export async function registerRoutes(router: ExpressRouter, upload: multer.Multe
       return res.status(500).json({ message: "Erro ao atualizar status do catálogo" });
     }
   });
-  
+
   router.post("/catalogs/:id/remap-images", requireAuth, async (req: Request, res: Response) => {
     try {
       const catalogId = parseInt(req.params.id);
@@ -346,7 +375,7 @@ export async function registerRoutes(router: ExpressRouter, upload: multer.Multe
       return res.status(500).json({ message: "Erro interno no servidor", error: message });
     }
   });
-  
+
   router.post("/catalogs/remap-all-images", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = req.session.userId!;
@@ -381,7 +410,7 @@ export async function registerRoutes(router: ExpressRouter, upload: multer.Multe
       return res.status(500).json({ message: "Erro interno no servidor", error: message });
     }
   });
-  
+
   router.delete("/catalogs/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const id = parseInt(req.params.id);
@@ -398,7 +427,7 @@ export async function registerRoutes(router: ExpressRouter, upload: multer.Multe
       return res.status(500).json({ message: "Erro ao excluir catálogo", error: String(error) });
     }
   });
-  
+
   router.get("/quotes", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = req.session.userId!;
@@ -409,7 +438,7 @@ export async function registerRoutes(router: ExpressRouter, upload: multer.Multe
       return res.status(500).json({ message: "Erro ao obter orçamentos" });
     }
   });
-  
+
   router.get("/quotes/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const id = parseInt(req.params.id);
@@ -423,7 +452,7 @@ export async function registerRoutes(router: ExpressRouter, upload: multer.Multe
       return res.status(500).json({ message: "Erro ao obter orçamento" });
     }
   });
-  
+
   router.post("/quotes", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = req.session.userId!;
@@ -434,7 +463,7 @@ export async function registerRoutes(router: ExpressRouter, upload: multer.Multe
       return res.status(500).json({ message: "Erro ao criar orçamento" });
     }
   });
-  
+
   router.put("/quotes/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const id = parseInt(req.params.id);
@@ -449,7 +478,7 @@ export async function registerRoutes(router: ExpressRouter, upload: multer.Multe
       return res.status(500).json({ message: "Erro ao atualizar orçamento" });
     }
   });
-  
+
   router.delete("/quotes/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const id = parseInt(req.params.id);
@@ -464,7 +493,7 @@ export async function registerRoutes(router: ExpressRouter, upload: multer.Multe
       return res.status(500).json({ message: "Erro ao excluir orçamento" });
     }
   });
-  
+
   router.post("/quotes/generate-pdf", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = req.session.userId!;
@@ -486,7 +515,7 @@ export async function registerRoutes(router: ExpressRouter, upload: multer.Multe
       return res.status(500).json({ message });
     }
   });
-  
+
   router.get("/moodboards", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = req.session.userId!;
@@ -497,7 +526,7 @@ export async function registerRoutes(router: ExpressRouter, upload: multer.Multe
       return res.status(500).json({ message: "Erro ao obter moodboards" });
     }
   });
-  
+
   router.get("/moodboards/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const id = parseInt(req.params.id);
@@ -516,7 +545,7 @@ export async function registerRoutes(router: ExpressRouter, upload: multer.Multe
       return res.status(500).json({ message: "Erro ao obter moodboard" });
     }
   });
-  
+
   router.post("/moodboards", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = req.session.userId!;
@@ -528,7 +557,7 @@ export async function registerRoutes(router: ExpressRouter, upload: multer.Multe
       return res.status(500).json({ message: "Erro ao criar moodboard" });
     }
   });
-  
+
   router.put("/moodboards/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const id = parseInt(req.params.id);
@@ -544,7 +573,7 @@ export async function registerRoutes(router: ExpressRouter, upload: multer.Multe
       return res.status(500).json({ message: "Erro ao atualizar moodboard" });
     }
   });
-  
+
   router.delete("/moodboards/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const id = parseInt(req.params.id);
@@ -559,7 +588,7 @@ export async function registerRoutes(router: ExpressRouter, upload: multer.Multe
       return res.status(500).json({ message: "Erro ao excluir moodboard" });
     }
   });
-  
+
   router.post("/catalogs/upload", requireAuth, upload.single("file"), handleMulterError, async (req: Request, res: Response) => {
     try {
       const userId = req.session.userId!;
@@ -589,9 +618,9 @@ export async function registerRoutes(router: ExpressRouter, upload: multer.Multe
         processedStatus: 'queued' as 'queued',
       };
       const catalog = await storage.createCatalog(catalogData);
-      
+
       const processingFilePath = s3Key || req.file.path;
-      
+
       const jobData = {
         catalogId: catalog.id, userId: localUser.id, 
         s3Key: s3Key,
@@ -706,7 +735,7 @@ export async function registerRoutes(router: ExpressRouter, upload: multer.Multe
       const project = await storage.getDesignProject(projectId);
       if (!project) return res.status(404).json({ message: "Projeto não encontrado." });
       if (project.userId !== userId) return res.status(403).json({ message: "Acesso negado." });
-      
+
       delete updateData.id;
       delete updateData.designProjectId;
       delete updateData.createdAt;
@@ -716,7 +745,7 @@ export async function registerRoutes(router: ExpressRouter, upload: multer.Multe
       }
       const updatedItem = await storage.updateDesignProjectItem(itemId, updateData);
       if (!updatedItem) return res.status(404).json({ message: "Item não encontrado ou não pôde ser atualizado." });
-      
+
       const baseImageUrlForInpainting = project.clientRenderImageUrl || project.clientFloorPlanImageUrl;
       if (updateData.selectedProductId && baseImageUrlForInpainting) { 
           triggerInpaintingForItem(updatedItem.id, projectId, baseImageUrlForInpainting)
@@ -762,7 +791,7 @@ export async function registerRoutes(router: ExpressRouter, upload: multer.Multe
       const projectId = parseInt(projectIdParam);
       if (isNaN(projectId)) return res.status(400).json({ message: "ID de projeto deve ser um número." });
       if (!req.file) return res.status(400).json({ message: "Nenhum arquivo de imagem enviado." });
-      
+
       let project = await storage.getDesignProject(projectId);
       if (!project) return res.status(404).json({ message: "Projeto não encontrado." });
       if (project.userId !== userId) return res.status(403).json({ message: "Acesso negado." });
@@ -831,7 +860,7 @@ export async function registerRoutes(router: ExpressRouter, upload: multer.Multe
       });
       const description = aiResponse.choices[0].message.content;
       if (!description) throw new Error("Não foi possível obter descrição da IA.");
-      
+
       const products = await storage.findRelevantProducts(userId, description, 5);
       return res.status(200).json({ descriptionFromAI: description, products });
     } catch (error) {

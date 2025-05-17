@@ -2,6 +2,17 @@ import type { DesignProject, DesignProjectItem } from '@shared/schema'; // Ideal
 
 // Tipos mock temporários para alinhar com o frontend atual (DesignAiProjectPage.tsx)
 // TODO: Alinhar frontend para usar os tipos reais de @shared/schema
+
+// ADICIONANDO MockDesignProjectSummary AQUI PARA RESOLVER LINTER ERROR
+type MockDesignProjectSummary = {
+  id: number;
+  name: string;
+  status: string; // Simplificado para a lista
+  // Adicionar talvez uma data ou thumbnail se útil para a lista de projetos
+  clientRenderImageUrl?: string | null; // Adicionado para possível thumbnail
+  createdAt?: string | Date; // Adicionado para possível ordenação/exibição
+};
+
 type MockProductSummary = {
   id: number;
   name: string;
@@ -221,6 +232,85 @@ export const uploadProjectImageApi = async (
     throw new Error(errorMessage);
   }
   return response.json(); 
+};
+
+/**
+ * Busca os detalhes de múltiplos produtos de uma vez.
+ * @param productIds Array com os IDs dos produtos a serem buscados.
+ * @returns Uma promessa que resolve para um mapa de ID de produto para detalhes do produto.
+ */
+export const getProductsDetailsApi = async (productIds: number[]): Promise<Record<number, MockProductSummary>> => {
+  if (!productIds || productIds.length === 0) {
+    return {}; // Retorna objeto vazio se não houver IDs
+  }
+  // Converter array de IDs para string separada por vírgulas
+  const idsString = productIds.join(',');
+  console.log(`[API Client] Buscando detalhes dos produtos em batch para IDs: ${idsString}`);
+  
+  const response = await fetch(`/api/products/batch?ids=${idsString}`);
+
+  if (!response.ok) {
+    let errorMessage = 'Falha ao buscar detalhes dos produtos em batch.';
+    try {
+      const errorData = await response.json();
+      errorMessage = errorData.message || errorMessage;
+    } catch (e) {
+      errorMessage = response.statusText || errorMessage;
+    }
+    console.error(`[API Client] Erro ao buscar produtos em batch: ${response.status} - ${errorMessage}`);
+    throw new Error(errorMessage);
+  }
+  // A resposta da API é Record<number, Product>, mas o frontend espera Record<number, MockProductSummary>
+  // Precisamos garantir que os campos correspondam ou fazer uma transformação aqui.
+  // Por agora, vamos assumir que Product tem pelo menos id, name, imageUrl.
+  const productsMap: Record<number, any> = await response.json();
+  const mockProductsMap: Record<number, MockProductSummary> = {};
+
+  for (const id in productsMap) {
+    if (Object.prototype.hasOwnProperty.call(productsMap, id)) {
+      const product = productsMap[id];
+      mockProductsMap[id] = {
+        id: product.id,
+        name: product.name,
+        imageUrl: product.imageUrl || null 
+      };
+    }
+  }
+  return mockProductsMap;
+};
+
+/**
+ * Busca a lista de todos os projetos de design AI para o usuário logado.
+ * @returns Uma promessa que resolve para um array de sumários de projetos de design.
+ */
+export const getDesignProjectsListApi = async (): Promise<MockDesignProjectSummary[]> => {
+  console.log("[API Client] Buscando lista de projetos de design AI...");
+  const response = await fetch(`/api/ai-design-projects`);
+
+  if (!response.ok) {
+    let errorMessage = 'Falha ao buscar a lista de projetos de design.';
+    try {
+      const errorData = await response.json();
+      errorMessage = errorData.message || errorMessage;
+    } catch (e) {
+      errorMessage = response.statusText || errorMessage;
+    }
+    console.error(`[API Client] Erro ao buscar lista de projetos de design: ${response.status} - ${errorMessage}`);
+    throw new Error(errorMessage);
+  }
+  
+  const projectsData: DesignProject[] = await response.json(); // A API retorna DesignProject[]
+  
+  // Mapear para MockDesignProjectSummary para compatibilidade com a UI atual de design-ai.tsx
+  // Idealmente, design-ai.tsx usaria DesignProject ou um tipo de sumário mais completo.
+  const mockSummaries: MockDesignProjectSummary[] = projectsData.map(project => ({
+    id: project.id,
+    name: project.name,
+    status: project.status, // Assumindo que DesignProject tem 'status'
+    // Adicionar outros campos se MockDesignProjectSummary evoluir
+  }));
+  
+  return mockSummaries;
 };
 
 // Adicione outras funções de chamada de API aqui no futuro, se necessário. 

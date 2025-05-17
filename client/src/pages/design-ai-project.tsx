@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useParams } from 'wouter';
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/card';
@@ -6,7 +6,7 @@ import { Progress } from "@/components/ui/progress";
 import { Upload, Image as ImageIcon, CheckCircle, XCircle, Clock, Eye, Sofa, Table, Plus, Loader2 } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useToast } from "@/hooks/use-toast";
-import { callGenerateFinalRenderApi, getDesignProjectDetailsApi, updateDesignProjectItemApi, uploadProjectImageApi } from "../lib/apiClient";
+import { callGenerateFinalRenderApi, getDesignProjectDetailsApi, updateDesignProjectItemApi, uploadProjectImageApi, getProductsDetailsApi } from "../lib/apiClient";
 
 // --- Mock Data --- 
 // (Simula os tipos que viriam do backend - @shared/schema)
@@ -185,13 +185,61 @@ const DesignAiProjectPage: React.FC = () => {
   const params = useParams();
   const projectId = parseInt(params.id || '0');
   const { toast } = useToast();
-  const queryClient = useQueryClient(); // Para invalidar queries
+  const queryClient = useQueryClient();
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const { data: project, isLoading, isError, error } = useQuery<MockDesignProject | null, Error>({
+  // Estado para armazenar os itens com detalhes dos produtos sugeridos preenchidos
+  const [processedItems, setProcessedItems] = useState<MockDesignProjectItem[]>([]);
+
+  const { data: project, isLoading, isError, error, refetch: refetchProjectDetails } = useQuery<MockDesignProject | null, Error>({
     queryKey: ['designProject', projectId],
-    queryFn: () => getDesignProjectDetailsApi(projectId), // <<< USAR A FUNÇÃO DE API REAL
-    enabled: !!projectId, 
+    queryFn: () => getDesignProjectDetailsApi(projectId),
+    enabled: !!projectId,
   });
+
+  // Efeito para buscar detalhes dos produtos sugeridos quando o projeto ou seus itens mudam
+  useEffect(() => {
+    if (project?.items && project.items.length > 0) {
+      const fetchDetails = async () => {
+        const allSuggestedIds = new Set<number>();
+        project.items!.forEach(item => {
+          if (item.suggestedProductId1) allSuggestedIds.add(item.suggestedProductId1);
+          if (item.suggestedProductId2) allSuggestedIds.add(item.suggestedProductId2);
+          if (item.suggestedProductId3) allSuggestedIds.add(item.suggestedProductId3);
+        });
+
+        if (allSuggestedIds.size > 0) {
+          try {
+            console.log("[DesignAiProjectPage] Buscando detalhes para IDs:", Array.from(allSuggestedIds));
+            const productsDetailsMap = await getProductsDetailsApi(Array.from(allSuggestedIds));
+            console.log("[DesignAiProjectPage] Detalhes dos produtos recebidos:", productsDetailsMap);
+            
+            const newProcessedItems = project.items!.map(item => ({
+              ...item,
+              suggestedProduct1Details: item.suggestedProductId1 ? productsDetailsMap[item.suggestedProductId1] || null : null,
+              suggestedProduct2Details: item.suggestedProductId2 ? productsDetailsMap[item.suggestedProductId2] || null : null,
+              suggestedProduct3Details: item.suggestedProductId3 ? productsDetailsMap[item.suggestedProductId3] || null : null,
+            }));
+            setProcessedItems(newProcessedItems);
+          } catch (fetchDetailsError) {
+            console.error("Erro ao buscar detalhes dos produtos sugeridos:", fetchDetailsError);
+            toast({
+              variant: "destructive",
+              title: "Erro ao carregar sugestões",
+              description: "Não foi possível carregar os detalhes dos produtos sugeridos."
+            });
+            // Manter os itens sem detalhes se a busca falhar
+            setProcessedItems(project.items || []); 
+          }
+        } else {
+          setProcessedItems(project.items || []); // Nenhum ID sugerido, apenas usar os itens como estão
+        }
+      };
+      fetchDetails();
+    } else if (project) { // Projeto carregado, mas sem itens
+      setProcessedItems([]);
+    }
+  }, [project, toast]); // Depender do objeto 'project' e 'toast'
 
   // Definir a Mutação para upload
   const uploadMutation = useMutation<
@@ -213,10 +261,15 @@ const DesignAiProjectPage: React.FC = () => {
     const file = event.target.files?.[0];
     if (file && projectId) {
       console.log("Arquivo selecionado:", file.name);
-      // Poderíamos adicionar um input para userMessageText se necessário, por agora não passaremos
       uploadMutation.mutate({ projectId, file }); 
     }
-    event.target.value = ''; 
+    if (event.target) {
+      event.target.value = ''; // Limpar o valor do input para permitir selecionar o mesmo arquivo novamente
+    }
+  };
+
+  const handleUploadButtonClick = () => {
+    fileInputRef.current?.click(); // Acionar o clique no input de arquivo escondido
   };
 
   const getStatusInfo = (status: MockDesignProject['status']) => {
@@ -353,12 +406,13 @@ const DesignAiProjectPage: React.FC = () => {
               )}
             </CardContent>
             <CardFooter>
-              {/* Manter o botão de upload se o render final não foi gerado ou se o usuário quiser trocar a imagem base */}
+              {/* Botão de Upload Principal */}
               {!(project.status === 'completed' && project.generatedRenderUrl) && (
-                <label htmlFor="render-upload" className="w-full">
+                <div className="w-full">
                   <Button 
                     variant="outline" 
                     className="w-full" 
+                    onClick={handleUploadButtonClick} // CHAMAR handleUploadButtonClick
                     disabled={project.status === 'processing' || isUploading || isGeneratingRender}
                   >
                     {isUploading ? (
@@ -369,14 +423,15 @@ const DesignAiProjectPage: React.FC = () => {
                     {isUploading ? 'Enviando...' : (project.clientRenderImageUrl ? 'Trocar Imagem Base' : 'Carregar Imagem Base')}
                   </Button>
                   <input 
-                    id="render-upload" 
+                    ref={fileInputRef} // Associar a ref
+                    id="render-upload" // Manter id se algum estilo depender dele, mas htmlFor não é mais usado
                     type="file" 
                     accept="image/*" 
                     className="hidden" 
                     onChange={handleImageUpload} 
                     disabled={project.status === 'processing' || isUploading || isGeneratingRender}
                   />
-                </label>
+                </div>
               )}
             </CardFooter>
           </Card>
@@ -398,8 +453,8 @@ const DesignAiProjectPage: React.FC = () => {
              <p className="text-muted-foreground">A IA processou a imagem, mas não identificou móveis para sugerir substituições.</p>
           )}
           
-          {(project?.items && project.items.length > 0 && (project.status === 'awaiting_selection' || project.status === 'completed')) && (
-            project.items.map((item) => {
+          {(processedItems && processedItems.length > 0 && (project.status === 'awaiting_selection' || project.status === 'completed')) && (
+            processedItems.map((item) => {
               // <<< Pegar seleção local para este item >>>
               const currentSelection = localSelections[item.id];
               const isSelecting = selectProductMutation.isPending && selectProductMutation.variables?.itemId === item.id;

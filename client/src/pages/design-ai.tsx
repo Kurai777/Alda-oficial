@@ -1,52 +1,38 @@
 import React, { useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'; // Adicionado useMutation, useQueryClient
-import { Link, useLocation } from 'wouter'; // Adicionado useLocation
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Link, useLocation } from 'wouter';
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
-import { Plus, Loader2, AlertTriangle, X } from 'lucide-react'; // Adicionado X
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogClose } from "@/components/ui/dialog"; // Componentes de Dialog
-import { Input } from "@/components/ui/input"; // Input para nome do projeto
-import { Label } from "@/components/ui/label"; // Label para o input
-import { createDesignProjectApi } from '../lib/apiClient'; // Importar a nova função da API
-import { useToast } from "@/hooks/use-toast"; // Importar useToast
+import { Plus, Loader2, AlertTriangle, X, Image as ImageIconLucide } from 'lucide-react'; // Renomeado Image para ImageIconLucide para evitar conflito
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogClose } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { createDesignProjectApi, getDesignProjectsListApi } from '../lib/apiClient'; // Importar getDesignProjectsListApi
+import { useToast } from "@/hooks/use-toast";
+import { formatDistanceToNow } from 'date-fns'; // Para formatar datas
+import { ptBR } from 'date-fns/locale';    // Para datas em pt-BR
 
-// --- Mock Data & API --- 
-type MockDesignProjectSummary = {
+// Tipo para o sumário do projeto, como esperado pela UI desta página
+type DesignProjectSummary = { // Renomeado de MockDesignProjectSummary para consistência, já que não é mais mock
   id: number;
   name: string;
-  status: string; // Simplificado para a lista
-  // Adicionar talvez uma data ou thumbnail se útil
+  status: string;
+  clientRenderImageUrl?: string | null; // Para thumbnail
+  createdAt?: string | Date; // Para "Criado há..."
 };
-
-// Simula a chamada API para buscar projetos
-const fetchDesignProjects = async (): Promise<MockDesignProjectSummary[]> => {
-  console.log("[Mock API] Fetching design projects...");
-  // Simular delay da rede
-  await new Promise(resolve => setTimeout(resolve, 700)); 
-  // Retornar dados mock
-  return [
-    { id: 1, name: "Sala de Estar - Cliente Joana", status: 'Aguardando Seleção' },
-    { id: 2, name: "Quarto Casal - Pedro", status: 'Processando' },
-    { id: 3, name: "Cozinha Gourmet", status: 'Novo' },
-  ];
-  // Para simular erro: throw new Error("Falha ao buscar projetos");
-  // Para simular lista vazia: return [];
-};
-// --- Fim Mock Data & API ---
-
 
 const DesignAiPage: React.FC = () => {
-  const { toast } = useToast(); // Hook para toasts
+  const { toast } = useToast();
   const queryClient = useQueryClient();
-  const [, navigate] = useLocation(); // Para navegação
+  const [, navigate] = useLocation();
 
-  // Estado para controlar a visibilidade do modal e o nome do novo projeto
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
 
-  const { data: projects, isLoading, isError, error } = useQuery<MockDesignProjectSummary[], Error>({
-     queryKey: ['designProjects'],
-     queryFn: fetchDesignProjects, 
+  // Buscar projetos reais usando getDesignProjectsListApi
+  const { data: projects, isLoading, isError, error } = useQuery<DesignProjectSummary[], Error>({
+     queryKey: ['designProjects'], // Chave da query para a lista de projetos
+     queryFn: getDesignProjectsListApi, // Usar a função da API real
   });
 
   // Mutação para criar um novo projeto
@@ -58,9 +44,9 @@ const DesignAiPage: React.FC = () => {
         description: `O projeto "${newProject.name}" foi criado com sucesso.`,
       });
       queryClient.invalidateQueries({ queryKey: ['designProjects'] });
-      setIsModalOpen(false); // Fechar o modal
-      setNewProjectName(""); // Limpar o nome
-      navigate(`/design-ai/${newProject.id}`); // Navegar para a página do novo projeto
+      setIsModalOpen(false);
+      setNewProjectName("");
+      navigate(`/design-ai/${newProject.id}`);
     },
     onError: (error: Error) => {
       toast({
@@ -72,7 +58,7 @@ const DesignAiPage: React.FC = () => {
   });
 
   const handleOpenModal = () => {
-    setNewProjectName(""); // Limpar nome ao abrir
+    setNewProjectName("");
     setIsModalOpen(true);
   };
 
@@ -85,9 +71,8 @@ const DesignAiPage: React.FC = () => {
       });
       return;
     }
-    // Construir e logar o payload explicitamente aqui
     const projectPayload = { name: newProjectName.trim() };
-    console.log("[DesignAiPage] Payload enviado para mutação:", projectPayload); // LOG ADICIONADO
+    console.log("[DesignAiPage] Payload enviado para mutação:", projectPayload);
     createProjectMutation.mutate(projectPayload);
   };
 
@@ -175,18 +160,27 @@ const DesignAiPage: React.FC = () => {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {projects.map((project) => (
             <Link key={project.id} href={`/design-ai/${project.id}`}>
-              <Card className="hover:shadow-md transition-shadow cursor-pointer">
+              <Card className="hover:shadow-md transition-shadow cursor-pointer flex flex-col">
                 <CardHeader>
                   <CardTitle>{project.name}</CardTitle>
-                  <CardDescription>Status: {project.status}</CardDescription>
+                  <CardDescription>
+                    Status: {project.status} 
+                    {project.createdAt && (
+                      <span className="text-xs text-muted-foreground ml-2">
+                        (Criado {formatDistanceToNow(new Date(project.createdAt), { addSuffix: true, locale: ptBR })})
+                      </span>
+                    )}
+                  </CardDescription>
                 </CardHeader>
-                <CardContent>
-                  {/* Placeholder para imagem thumb do projeto? */}
-                  <div className="h-32 bg-muted rounded-md flex items-center justify-center text-muted-foreground/50">
-                     (Thumb)
-                  </div>
+                <CardContent className="flex-grow flex items-center justify-center">
+                  {project.clientRenderImageUrl ? (
+                    <img src={project.clientRenderImageUrl} alt={project.name} className="max-h-40 w-auto object-contain rounded-md"/>
+                  ) : (
+                    <div className="h-40 w-full bg-muted rounded-md flex items-center justify-center text-muted-foreground/50">
+                       <ImageIconLucide size={48} />
+                    </div>
+                  )}
                 </CardContent>
-                {/* O Card inteiro é um link agora, não precisa de botão "Abrir" */}
               </Card>
             </Link>
           ))}
