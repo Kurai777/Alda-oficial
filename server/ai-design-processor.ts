@@ -696,10 +696,11 @@ export async function processDesignProjectImage(projectId: number, imageUrlToPro
                     collectedSuggestions.push(...filteredByRegionType.map(p => ({ ...p, source: 'visual_region_filtered' })));
                     console.log(`[AI Proc] Região "${furniture.name}": ${filteredByRegionType.length} filtrados por tipo.`);
                   } else {
-                    // Adiciona os não filtrados da região como BAIXA PRIORIDADE se o filtro forte falhou
-                    // MAS SÓ SE A CATEGORIA DETECTADA EXISTIR NO CATÁLOGO DO USUÁRIO
-                    const userCategories = await storage.getProductCategoriesForUser(project.userId); 
-                    const normalizedDetectedCategoryForLog = normalizeText(furniture.name); // Para log
+                    const userCategories = await storage.getProductCategoriesForUser(project.userId);
+                    const normalizedDetectedCategoryForLog = normalizeText(furniture.name);
+                    // LOG ADICIONADO PARA DEBUG
+                    console.log(`[AI Proc Debug] Categoria Detectada (para fallback unfiltered): "${normalizedDetectedCategoryForLog}". Categorias do Usuário: [${userCategories.map(c => normalizeText(c)).join(', ')}]`);
+
                     if (userCategories.some(cat => normalizeText(cat).includes(normalizedDetectedCategoryForLog))) {
                         collectedSuggestions.push(...visualRegionResults.slice(0, 1).map(p => ({ ...p, source: 'visual_region_unfiltered' }))); 
                         console.log(`[AI Proc] Região "${furniture.name}": Filtro de tipo falhou, mas categoria '${normalizedDetectedCategoryForLog}' existe no catálogo. Adicionando ${visualRegionResults.slice(0, 1).length} não filtrado (baixa prioridade).`);
