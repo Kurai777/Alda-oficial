@@ -652,43 +652,57 @@ export class DatabaseStorage implements IStorage {
   }
 
   async searchProducts(userId: number | string, searchText: string): Promise<Product[]> {
-    console.log(`searchProducts chamado com userId: ${userId}, searchText: ${searchText}`);
+    console.log(`[FTS Storage] searchProducts chamado com userId: ${userId}, searchText: "${searchText}"`);
     try {
       const parsedUserId = typeof userId === 'string' ? parseInt(userId) : userId;
       if (!searchText || searchText.trim() === '') return [];
 
-      const cleanedSearchText = searchText.replace(/[!*&|:'()[\]]/g, '').trim();
-      if (!cleanedSearchText) return [];
+      // 1. Tokenizar o searchText e remover stop words simples.
+      const stopWords = new Set([
+        'de', 'a', 'o', 'que', 'e', 'do', 'da', 'em', 'um', 'para', 'com', 'não', 'uma', 'os', 'no', 'na', 
+        'por', 'mais', 'as', 'dos', 'como', 'mas', 'foi', 'ao', 'ele', 'dela', 'dele', 'sem', 'ser', 'estar', 
+        'ter', 'seja', 'pelo', 'pela', 'este', 'esta', 'isto', 'isso', 'aquele', 'aquela', 'aquilo'
+      ]);
+      let keywords = searchText.toLowerCase()
+        .normalize("NFD").replace(/[\u0300-\u036f]/g, "") // Remove acentos
+        .replace(/[^a-z0-9\s]/g, '') // Remove pontuação exceto espaços
+        .split(/\s+/)
+        .filter(token => token.length > 2 && !stopWords.has(token))
+        .slice(0, 7); // Pega até 7 palavras-chave significativas
 
-      const query = sql`websearch_to_tsquery('portuguese', ${cleanedSearchText})`;
+      if (keywords.length === 0) {
+        console.log("[FTS Storage] Nenhuma palavra-chave válida após tokenização e remoção de stopwords.");
+        return [];
+      }
+      
+      const ftsQueryString = keywords.join(' '); 
+      console.log(`[FTS Storage] Texto limpo para plainto_tsquery: "${ftsQueryString}"`);
 
+      const query = sql`plainto_tsquery('portuguese', ${ftsQueryString})`;
+      
       const results = await db.select({
-          // Seleciona todas as colunas da tabela products
           ...(getTableColumns(products)), 
-          // Calcula a relevância
           relevance: sql<number>`ts_rank_cd(products.search_tsv, ${query})`.as('relevance')
         })
         .from(products)
         .where(and(
           eq(products.userId, parsedUserId),
-          sql`products.search_tsv @@ ${query}` // Condição de busca Full-Text
+          isNotNull(products.search_tsv),
+          sql`products.search_tsv @@ ${query}` 
         ))
-        .orderBy(desc(sql`relevance`)) // Ordena pela relevância (maior primeiro)
-        .limit(10); // Limitar para os 10 mais relevantes
+        .orderBy(desc(sql`relevance`)) 
+        .limit(10); 
 
-      console.log(`Busca textual FTS para "${cleanedSearchText}" encontrou ${results.length} resultados.`);
-      // Retornar os produtos. A UI/lógica de processamento pode precisar usar o campo 'relevance'.
-      // Se a UI espera um campo 'distance' (menor é melhor), uma transformação pode ser necessária.
-      // Por agora, vamos retornar com 'relevance'.
-      return results.map(r => ({ ...r.product, relevance: r.relevance } as any)); // Adiciona relevance ao objeto produto
+      console.log(`[FTS Storage] Busca textual FTS com plainto_tsquery para "${ftsQueryString}" encontrou ${results.length} resultados.`);
+      return results.map(r => r as any);
     } catch (error) {
-      console.error('Error in searchProducts (FTS):', error);
+      console.error('[FTS Storage] Error in searchProducts:', error);
       return [];
     }
   }
 
   async findRelevantProducts(userId: number, description: string): Promise<Product[]> {
-    console.log(`findRelevantProducts chamado com userId: ${userId}, description: ${description}`);
+    console.log(`[FTS Storage] findRelevantProducts (chamando searchProducts) com userId: ${userId}, description: "${description}"`);
     return this.searchProducts(userId, description);
   }
 

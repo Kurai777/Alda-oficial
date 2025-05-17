@@ -1,7 +1,14 @@
-import { pgTable, text, serial, integer, boolean, json, jsonb, timestamp, varchar, uuid, real, vector } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, integer, boolean, json, jsonb, timestamp, varchar, uuid, real, vector, customType } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { relations } from "drizzle-orm";
+
+// Definição do tipo customizado para tsvector
+const tsvectorType = customType<{ data: string, driverData: string }>({
+    dataType() {
+        return 'tsvector';
+    },
+});
 
 export const users = pgTable("users", {
   id: serial("id").primaryKey(),
@@ -45,6 +52,7 @@ export const products = pgTable("products", {
   stock: integer("stock"), // Quantidade em estoque
   excelRowNumber: integer("excel_row_number"), // Número da linha original no Excel
   embedding: vector('embedding', { dimensions: 512 }),
+  search_tsv: tsvectorType('search_tsv'),
   createdAt: timestamp("created_at").defaultNow(),
   firestoreId: text("firestore_id"), // ID do produto no Firestore
   firebaseUserId: text("firebase_user_id"), // ID do usuário no Firebase
