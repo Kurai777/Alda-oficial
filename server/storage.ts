@@ -653,48 +653,66 @@ export class DatabaseStorage implements IStorage {
   }
 
   async searchProducts(userId: number | string, searchText: string): Promise<Product[]> {
-    console.log(`[FTS Storage] searchProducts chamado com userId: ${userId}, searchText: "${searchText}"`);
+    console.log(`[FTS Storage] searchProducts INICIO - UserID: ${userId}, searchText (original): "${searchText.substring(0, 200)}..."`);
     try {
       const parsedUserId = typeof userId === 'string' ? parseInt(userId) : userId;
       if (!searchText || searchText.trim() === '') return [];
 
-      // 1. Tokenizar o searchText e remover stop words simples.
       const stopWords = new Set([
         'de', 'a', 'o', 'que', 'e', 'do', 'da', 'em', 'um', 'para', 'com', 'não', 'uma', 'os', 'no', 'na', 
         'por', 'mais', 'as', 'dos', 'como', 'mas', 'foi', 'ao', 'ele', 'dela', 'dele', 'sem', 'ser', 'estar', 
         'ter', 'seja', 'pelo', 'pela', 'este', 'esta', 'isto', 'isso', 'aquele', 'aquela', 'aquilo'
       ]);
       let keywords = searchText.toLowerCase()
-        .normalize("NFD").replace(/[\u0300-\u036f]/g, "") // Remove acentos
-        .replace(/[^a-z0-9\s]/g, '') // Remove pontuação exceto espaços
+        .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+        .replace(/[^a-z0-9\s]/g, '')
         .split(/\s+/)
         .filter(token => token.length > 2 && !stopWords.has(token))
-        .slice(0, 7); // Pega até 7 palavras-chave significativas
+        .slice(0, 7);
+      console.log(`[FTS Storage] Keywords extraídas: [${keywords.join(', ')}]`);
 
       if (keywords.length === 0) {
-        console.log("[FTS Storage] Nenhuma palavra-chave válida após tokenização e remoção de stopwords.");
+        console.log("[FTS Storage] Nenhuma palavra-chave válida após tokenização.");
         return [];
       }
       
-      const ftsQueryString = keywords.join(' '); 
-      console.log(`[FTS Storage] Texto limpo para plainto_tsquery: "${ftsQueryString}"`);
-
-      const query = sql`plainto_tsquery('portuguese', ${ftsQueryString})`;
+      const ftsQueryStringPlain = keywords.join(' '); 
+      console.log(`[FTS Storage] QueryString para plainto_tsquery: "${ftsQueryStringPlain}"`);
+      const queryPlain = sql`plainto_tsquery('portuguese', ${ftsQueryStringPlain})`;
       
-      const results = await db.select({
+      let results = await db.select({
           ...(getTableColumns(products)), 
-          relevance: sql<number>`ts_rank_cd(products.search_tsv, ${query})`.as('relevance')
+          relevance: sql<number>`ts_rank_cd(products.search_tsv, ${queryPlain})`.as('relevance')
         })
         .from(products)
         .where(and(
           eq(products.userId, parsedUserId),
           isNotNull(products.search_tsv),
-          sql`products.search_tsv @@ ${query}` 
+          sql`products.search_tsv @@ ${queryPlain}` 
         ))
         .orderBy(desc(sql`relevance`)) 
         .limit(10); 
+      console.log(`[FTS Storage] plainto_tsquery encontrou ${results.length} resultados.`);
 
-      console.log(`[FTS Storage] Busca textual FTS com plainto_tsquery para "${ftsQueryString}" encontrou ${results.length} resultados.`);
+      // Se plainto_tsquery (AND) não encontrar nada, tentar com OR (to_tsquery)
+      if (results.length === 0 && keywords.length > 0) {
+        const ftsQueryStringOr = keywords.join(' | '); // Constrói query com OR
+        console.log(`[FTS Storage] plainto_tsquery não encontrou resultados. Tentando com to_tsquery (OR): "${ftsQueryStringOr}"`);
+        const queryOr = sql`to_tsquery('portuguese', ${ftsQueryStringOr})`;
+        results = await db.select({
+            ...(getTableColumns(products)), 
+            relevance: sql<number>`ts_rank_cd(products.search_tsv, ${queryOr})`.as('relevance')
+          })
+          .from(products)
+          .where(and(
+            eq(products.userId, parsedUserId),
+            isNotNull(products.search_tsv),
+            sql`products.search_tsv @@ ${queryOr}` 
+          ))
+          .orderBy(desc(sql`relevance`)) 
+          .limit(10);
+        console.log(`[FTS Storage] to_tsquery (OR) encontrou ${results.length} resultados.`);
+      }
       return results.map(r => r as any);
     } catch (error) {
       console.error('[FTS Storage] Error in searchProducts:', error);
