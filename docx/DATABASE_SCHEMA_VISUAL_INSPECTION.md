@@ -182,6 +182,7 @@ Este documento descreve a estrutura das tabelas do banco de dados "neondb" com b
 | `stock`            | Integer, Nullable                        |                                                                         |
 | `excel_row_number` | Integer, Nullable                        |                                                                         |
 | `embedding`        | Vector                                   | **Dimensão 512 no BD**. Ajustar no `shared/schema.ts` (está 768 lá). |
+| `search_tsv`       | Tsvector                                 | **Nova coluna para Busca Full-Text**                                      |
 | `firestore_id`     | Text, Nullable                           |                                                                         |
 | `firebase_user_id` | Text, Nullable                           |                                                                         |
 | `is_edited`        | Boolean                                  |                                                                         |

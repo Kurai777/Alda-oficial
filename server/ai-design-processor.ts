@@ -60,6 +60,52 @@ interface ImageAnalysisResult {
   generalObservations: string;
 }
 
+// PLACEHOLDER FUNCTIONS MOVED TO MODULE SCOPE
+// Estas funções precisam ser implementadas corretamente.
+async function findSuggestionsForItem(
+    item: DesignProjectItem, 
+    userId: number, 
+    imageUrl: string, // Imagem original que foi analisada, para contexto se necessário
+    keyword?: string | null
+): Promise<{product: Product, source: string, matchScore: number}[]> {
+    console.warn(`[Placeholder] findSuggestionsForItem chamada para item: ${item.detectedObjectName}, keyword: ${keyword}. Implementação real necessária.`);
+    // Simula busca no storage e retorna até 3 produtos. Adapte à sua lógica real.
+    // A lógica real deve usar storage.searchProducts, storage.findProductsByEmbedding, etc.
+    // e considerar a imagem original (imageUrl) e o keyword para filtrar/priorizar.
+    const allUserProducts = await storage.getProductsByUserId(userId);
+    if (!allUserProducts || allUserProducts.length === 0) return [];
+
+    // Lógica de filtro MUITO simples como placeholder
+    let mockSuggestions = allUserProducts
+        .filter(p => item.detectedObjectName && p.category?.toLowerCase().includes(item.detectedObjectName.toLowerCase()))
+        .slice(0, 3)
+        .map((p, idx) => ({product: p, source: `placeholder_${idx === 0 ? 'text' : 'visual'}`, matchScore: 0.9 - idx * 0.1  }));
+    
+    if (mockSuggestions.length < 3 && allUserProducts.length > mockSuggestions.length) {
+        const remainingProducts = allUserProducts.filter(p => !mockSuggestions.some(s => s.product.id === p.id));
+        mockSuggestions.push(...remainingProducts.slice(0, 3 - mockSuggestions.length).map((p,idx) =>({product: p, source: 'placeholder_fallback', matchScore: 0.7 - idx * 0.1 }))) ;
+    }
+
+    return mockSuggestions;
+}
+
+function formatSuggestionsForChatItem(item: DesignProjectItem, suggestedProducts: Product[]): string {
+    console.warn(`[Placeholder] formatSuggestionsForChatItem chamada para item: ${item.detectedObjectName}. Implementação real necessária.`);
+    if (!item.detectedObjectName) return ''; // Não tentar formatar se não há nome de objeto
+    if (!suggestedProducts || suggestedProducts.length === 0) {
+      return `  - **${item.detectedObjectName}** (Original: *${item.detectedObjectDescription || 'N/A'}*): Nenhuma sugestão encontrada por enquanto.\n`;
+    }
+    let response = `  - **${item.detectedObjectName}** (Original: *${item.detectedObjectDescription || 'N/A'}*):\n`;
+    suggestedProducts.forEach(p => {
+        response += `    - Sugestão: ${p.name} (${p.category || 'N/A'}) - Preço: ${p.price ? p.price / 100 : 'N/A'}\n`;
+        if (p.imageUrl) {
+            response += `      ![Produto](${p.imageUrl}?w=100&h=100)\n`;
+        }
+    });
+    return response;
+}
+// FIM DOS PLACEHOLDERS
+
 /**
  * Analisa uma imagem de planta baixa para identificar cômodos e móveis
  * @param imageUrl URL da imagem da planta baixa
@@ -446,7 +492,7 @@ async function fetchImageAsBuffer(imageUrl: string): Promise<Buffer> {
   return Buffer.from(arrayBuffer);
 }
 
-function normalizeText(text: string): string {
+function normalizeText(text: string | null | undefined): string {
   if (!text) return '';
   return text.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
@@ -498,487 +544,288 @@ async function calculatePixelBbox(bboxInput: any, baseImageWidth: number, baseIm
  * ATENÇÃO: Esta função agora recebe a URL da imagem e o texto da mensagem do usuário (opcional).
  */
 export async function processDesignProjectImage(projectId: number, imageUrlToProcess: string, userMessageText?: string): Promise<void> {
-  console.log(`[AI Design Processor] Iniciando processamento para projeto ID: ${projectId}, Imagem URL: ${imageUrlToProcess}`);
+  console.log(`[AI Design Processor] Iniciando processamento para projeto ${projectId}, imagem: ${imageUrlToProcess}, mensagem: "${userMessageText}"`);
   
-  let createdItemsWithSuggestions: { detectedName: string, suggestedProduct: Product | null }[] = [];
-  let focusedItemsOutputFromTextSearch: { detectedName: string, suggestedProduct: Product | null }[] = [];
+  const initialUserMessageForChat = userMessageText ? 
+    `Analisando a imagem que você enviou com a mensagem: "${userMessageText}"...` :
+    `Analisando a imagem que você enviou...`;
+  
+  await storage.createAiDesignChatMessage({
+    projectId,
+    role: 'assistant',
+    content: initialUserMessageForChat,
+  });
+  broadcastToProject(projectId.toString(), { type: 'ai_processing_started' });
 
-  let mainKeyword: string | null = null;
-  let normalizedMainKeyword: string | null = null;
-  let userRequestedSpecificItem = false;
-
-  if (userMessageText) {
-    console.log(`[DEBUG] User Message Text: "${userMessageText}"`);
-    const keywords = FURNITURE_KEYWORDS; // Usar a constante definida no topo
-    const localNormalizedUserMessage = normalizeText(userMessageText); // Renomeado para evitar conflito de escopo
-    for (const kw of keywords) {
-      const normalizedKw = normalizeText(kw);
-      if (localNormalizedUserMessage.includes(normalizedKw)) {
-        mainKeyword = kw;
-        normalizedMainKeyword = normalizedKw;
-        userRequestedSpecificItem = true;
-        console.log(`[DEBUG] Keyword de foco detectada: "${mainKeyword}" (normalizada: "${normalizedMainKeyword}")`);
-        break;
-      }
-    }
-  } else {
-    console.log("[DEBUG] Sem userMessageText fornecido.");
-  }
-  console.log(`[DEBUG] userRequestedSpecificItem: ${userRequestedSpecificItem}, mainKeyword: ${mainKeyword}`);
-
-  if (!openai) {
-    console.error('[AI Design Processor] Chave da API OpenAI não configurada.');
-    throw new Error("OpenAI API Key not configured");
-  }
+  let detectedObjects: { name: string; description: string; bbox: any; originalName?: string; embedding?: number[] }[] = [];
+  let visionAnalysisFailed = false;
+  let project: DesignProject | undefined | null = null; 
 
   try {
-    const project = await storage.getDesignProject(projectId);
-    if (!project) {
+    project = await storage.getDesignProject(projectId); 
+    if (!project) { 
       console.error(`[AI Design Processor] Projeto ${projectId} não encontrado.`);
-      return; 
+      await storage.createAiDesignChatMessage({
+        projectId,
+        role: 'assistant',
+        content: `Erro: Não consegui encontrar os detalhes do projeto (ID: ${projectId}). Por favor, tente novamente ou contate o suporte.`,
+      });
+      broadcastToProject(projectId.toString(), { type: 'ai_processing_error', error: 'Project not found' });
+      return;
     }
 
     if (imageUrlToProcess === project.clientRenderImageUrl) {
         await storage.updateDesignProject(projectId, { status: 'processing', updatedAt: new Date() });
-        console.log(`[AI Design Processor] Status do projeto ${projectId} (render principal) atualizado para processing.`);
-    } else {
-        console.log(`[AI Design Processor] Processando imagem de anexo (${imageUrlToProcess}), status do projeto ${projectId} não alterado diretamente por esta função.`);
+        console.log(`[AI Design Processor] Status do projeto ${projectId} (imagem principal) atualizado para processing.`);
     }
 
-    console.log(`[AI Design Processor] Analisando imagem com GPT-4o: ${imageUrlToProcess}`);
+    console.log(`[AI Design Processor] Enviando imagem para análise de visão GPT-4o...`);
     const visionResponse = await openai.chat.completions.create({
-      model: "gpt-4o", 
+      model: "gpt-4o",
       messages: [
+        {
+          role: "system",
+          content: `Você é um especialista em design de interiores. Sua tarefa é analisar a imagem fornecida e identificar OS MÓVEIS PRINCIPAIS.
+Para cada móvel identificado:
+1.  Fale o nome do móvel (ex: "sofá", "mesa de centro", "luminária de chão"). **Seja preciso: uma "poltrona" é diferente de uma "cadeira de jantar". Uma "estante alta" é diferente de um "rack baixo".**
+2.  Forneça uma descrição CURTA e CONCISA (máximo 20 palavras) do estilo, cor, material **e quaisquer características distintivas** do móvel na imagem. Ex: "Sofá de 3 lugares, linho bege, estilo moderno." ou "Mesa de jantar redonda, madeira escura, pés de metal finos." **ou "Poltrona individual, couro marrom, com braços largos, aspecto robusto."**
+3.  Forneça as coordenadas da bounding box para CADA móvel, em formato JSON: { "x_min": %, "y_min": %, "x_max": %, "y_max": % } (valores de 0.0 a 1.0 relativos à dimensão da imagem). **A BBOX DEVE SER PRECISA E ENVOLVER COMPLETAMENTE APENAS O MÓVEL VISÍVEL, sem ser excessivamente pequena nem incluir muitos elementos ao redor. Certifique-se que a BBox cubra a maior parte do objeto.**
+
+Se o usuário perguntar sobre um tipo específico de móvel na mensagem dele (texto abaixo), foque sua análise em encontrar e descrever ESSE tipo de móvel, mas AINDA liste os outros móveis principais.
+SEMPRE retorne a resposta em formato JSON válido, como um array de objetos, onde cada objeto representa um móvel:
+[
+  { "name": "nome do móvel", "description": "descrição...", "bbox": { "x_min": 0.1, "y_min": 0.2, "x_max": 0.3, "y_max": 0.4 } },
+  { "name": "outro móvel", "description": "outra descrição...", "bbox": { "x_min": 0.5, "y_min": 0.1, "x_max": 0.7, "y_max": 0.3 } }
+]
+Se NENHUM MÓVEL for identificável, retorne um array JSON vazio []. Evite frases como "não foram encontrados móveis", apenas retorne [].`
+        },
         {
           role: "user",
           content: [
             {
               type: "text",
-              text: `Analise esta imagem de um ambiente. 
-                     1. Forneça uma 'overall_image_description' detalhada da imagem como um todo, incluindo estilo geral do ambiente (ex: contemporâneo, minimalista, industrial, boho, clássico), paleta de cores predominantes, tipos de materiais visíveis (ex: madeira clara, metal escuro, veludo, linho), iluminação (ex: natural abundante, artificial quente), atmosfera (ex: aconchegante, formal, vibrante) e quaisquer objetos ou características marcantes que definam a "vibe" da imagem.
-                     2. Identifique os principais móveis (como sofás, mesas, cadeiras, estantes, camas, tapetes, luminárias). Para cada móvel identificado, forneça:
-                        a. Um 'name' curto e genérico do tipo de móvel (ex: 'Sofá', 'Mesa de Centro', 'Cadeira', 'Tapete').
-                        b. Uma 'description' detalhada do móvel (estilo, cor principal, material aparente, forma, características marcantes).
-                        c. Opcional: 'bounding_box' (formato: { x_min, y_min, x_max, y_max } com valores percentuais ou em pixels).
-                     Responda em formato JSON, com uma chave 'overall_image_description' (string) e uma lista chamada 'identified_furniture' (array de objetos com chaves 'name', 'description', 'bounding_box').
-                     Exemplo de JSON: { "overall_image_description": "Sala de estar contemporânea com sofá cinza, muita luz natural, piso de madeira clara e detalhes em metal preto. Atmosfera calma e elegante.", "identified_furniture": [{ "name": "Sofá", "description": "Sofá de canto grande em tecido cinza escuro, estilo contemporâneo", "bounding_box": { "x_min": 10, "y_min": 40, "x_max": 60, "y_max": 80 } }] }`,
+              text: `Analise a imagem e identifique os móveis conforme as instruções. Mensagem do usuário (pode estar vazia): "${userMessageText || ''}"`
             },
             {
               type: "image_url",
-              image_url: { url: imageUrlToProcess }, 
-            },
-          ],
-        },
+              image_url: {
+                url: imageUrlToProcess,
+              }
+            }
+          ]
+        }
       ],
-      max_tokens: 2000, // Aumentado para acomodar descrição mais detalhada
-      response_format: { type: "json_object" }, 
+      response_format: { type: "json_object" },
+      max_tokens: 3000,
     });
 
-    const messageContent = visionResponse.choices[0]?.message?.content;
-    if (!messageContent) throw new Error("Resposta da API Vision vazia ou inválida.");
-    console.log("[AI Design Processor] Resposta da API Vision recebida.");
-
-    let overallImageDescription: string | null = null;
-    let identifiedFurniture: { name: string; description: string; bounding_box?: any }[] = [];
-    try {
-      const parsedJson = JSON.parse(messageContent);
-      if (parsedJson && parsedJson.overall_image_description) {
-        overallImageDescription = parsedJson.overall_image_description;
-        if (overallImageDescription) {
-          console.log(`[DEBUG] Descrição geral da imagem: "${overallImageDescription.substring(0,100)}..."`);
-        }
-      }
-      if (parsedJson && Array.isArray(parsedJson.identified_furniture)) {
-        identifiedFurniture = parsedJson.identified_furniture.map((item: any) => ({
-          description: item.description, 
-          bounding_box: item.bounding_box, 
-          name: item.name || item.description?.split(' ')[0] || 'Móvel' 
-        }));
-        console.log(`[DEBUG] ${identifiedFurniture.length} móveis identificados pela IA.`);
-      } else {
-        console.warn("[DEBUG] Formato JSON inesperado da API Vision (furniture ou overall description ausente):", messageContent);
-      }
-    } catch (parseError) {
-      console.error("[DEBUG] Erro ao parsear JSON da API Vision:", parseError, "Conteúdo:", messageContent);
-      throw new Error("Falha ao parsear resposta da IA.");
-    }
-
-    // --- BUSCA VISUAL GLOBAL (Embedding da imagem inteira) --- (RESTAURANDO ESTA SEÇÃO)
-    let similarProductsVisual: (Product & { distance?: number })[] = [];
-    let visualImageEmbeddingVector: number[] | null = null;
-
-    if (project && project.userId) {
-      try {
-          console.log('[AI Design Processor] Gerando embedding visual da imagem inteira via CLIP Service local...');
-          visualImageEmbeddingVector = await getClipEmbeddingFromImageUrl(imageUrlToProcess, undefined);
-          if (visualImageEmbeddingVector && visualImageEmbeddingVector.length > 0) {
-              similarProductsVisual = await storage.findProductsByEmbedding(project.userId, visualImageEmbeddingVector, 10); 
-              console.log(`[AI Design Processor] [Visual Embedding Search - Imagem Inteira] Encontrados ${similarProductsVisual.length} produtos.`);
-              if (similarProductsVisual.length > 0) {
-                console.log("     Produtos Visuais (Imagem Inteira) Encontrados (com distância):");
-                similarProductsVisual.forEach(p => {
-                  console.log(`       - ID: ${p.id}, Nome: ${p.name}, Código: ${p.code || 'N/A'}, Distância: ${p.distance?.toFixed(4) || 'N/A'}`);
-                });
-              }
-          } else {
-            console.warn('[AI Design Processor] Não foi possível gerar embedding visual da imagem inteira (vetor nulo ou vazio).');
-          }
-      } catch (err) {
-          console.error('[AI Design Processor] Erro ao gerar/buscar embedding visual da imagem inteira:', err);
-      }
+    const visionContent = visionResponse.choices[0]?.message?.content;
+    if (!visionContent) {
+      console.error("[AI Design Processor] Resposta da API Vision vazia ou inválida.");
+      visionAnalysisFailed = true; 
     } else {
-      console.error('[AI Design Processor] project.userId não encontrado para a busca por embedding visual da imagem inteira.');
-    }
-    // --- FIM DA BUSCA VISUAL GLOBAL ---
-
-    // Certificar que a pasta temp existe
-    const tempDir = path.join(process.cwd(), 'uploads', 'temp');
-    if (!fs.existsSync(tempDir)){
-        try {
-          fs.mkdirSync(tempDir, { recursive: true });
-          console.log(`[AI Design Processor] Diretório temporário criado em: ${tempDir}`);
-        } catch (mkdirErr) {
-          console.error(`[AI Design Processor] Erro ao criar diretório temporário ${tempDir}:`, mkdirErr);
-        }
-    }
-
-    createdItemsWithSuggestions = []; 
-    focusedItemsOutputFromTextSearch = [];
-
-    // Obter dimensões da imagem base UMA VEZ se formos processar por região
-    let baseImageMetadata: sharp.Metadata | undefined;
-    let baseImageBuffer: Buffer | undefined;
-    if (identifiedFurniture.length > 0) {
+      console.log("[AI Design Processor] Resposta da API Vision recebida.");
       try {
-        baseImageBuffer = await fetchImageAsBuffer(imageUrlToProcess);
-        baseImageMetadata = await sharp(baseImageBuffer).metadata();
-      } catch (err) {
-        console.error(`[AI Design Processor] Erro ao buscar ou ler metadados da imagem base ${imageUrlToProcess}:`, err);
-      }
-    }
-
-    // Loop através de cada móvel identificado pela IA de visão
-    if (identifiedFurniture.length > 0) {
-      console.log(`[AI Design Processor] Processando ${identifiedFurniture.length} móveis identificados...`);
-      for (const furniture of identifiedFurniture) {
-        if (!furniture.description || !furniture.name) {
-          console.warn(`[AI Design Processor] Móvel sem nome ou descrição, pulando: `, furniture);
-          continue;
-        }
-
-        let collectedSuggestions: (Product & { distance?: number; relevance?: number; source: string })[] = [];
-        const normalizedFurnitureName = normalizeText(furniture.name);
-        console.log(`[AI Proc] ---- Processando item: ${furniture.name} (Normalizado: ${normalizedFurnitureName}) ----`);
-
-        // 1. BUSCA VISUAL POR REGIÃO (Prioridade Alta)
-        if (furniture.bounding_box && baseImageMetadata?.width && baseImageMetadata?.height && baseImageBuffer) {
-          const pixelBbox = await calculatePixelBbox(furniture.bounding_box, baseImageMetadata.width, baseImageMetadata.height);
-          if (pixelBbox && pixelBbox.w > 20 && pixelBbox.h > 20) { // BBox válida e com tamanho mínimo
-            let tempFilePath: string | undefined;
-            try {
-              const regionBuffer = await sharp(baseImageBuffer)
-                .extract({ left: pixelBbox.x, top: pixelBbox.y, width: pixelBbox.w, height: pixelBbox.h })
-                .png()
-                .toBuffer();
-              tempFilePath = path.join(tempDir, `region_${projectId}_${furniture.name.replace(/\s+/g, '_')}_${Date.now()}.png`);
-              fs.writeFileSync(tempFilePath, regionBuffer);
-              const regionEmbedding = await getClipEmbeddingFromImageUrl(tempFilePath, undefined);
-
-              if (regionEmbedding && regionEmbedding.length > 0 && project?.userId) {
-                const visualRegionResults = await storage.findProductsByEmbedding(project.userId, regionEmbedding, 5);
-                if (visualRegionResults.length > 0) {
-                  console.log(`[AI Proc] Região "${furniture.name}": ${visualRegionResults.length} resultados visuais brutos.`);
-                  const filteredByRegionType = visualRegionResults.filter(p =>
-                    (p.category && normalizeText(p.category).includes(normalizedFurnitureName)) ||
-                    (p.name && normalizeText(p.name).includes(normalizedFurnitureName))
-                  );
-                  if (filteredByRegionType.length > 0) {
-                    collectedSuggestions.push(...filteredByRegionType.map(p => ({ ...p, source: 'visual_region_filtered' })));
-                    console.log(`[AI Proc] Região "${furniture.name}": ${filteredByRegionType.length} filtrados por tipo.`);
-                  } else {
-                    const userCategories = await storage.getProductCategoriesForUser(project.userId);
-                    const normalizedDetectedCategoryForLog = normalizeText(furniture.name);
-                    // LOG ADICIONADO PARA DEBUG
-                    console.log(`[AI Proc Debug] Categoria Detectada (para fallback unfiltered): "${normalizedDetectedCategoryForLog}". Categorias do Usuário: [${userCategories.map(c => normalizeText(c)).join(', ')}]`);
-
-                    if (userCategories.some(cat => normalizeText(cat).includes(normalizedDetectedCategoryForLog))) {
-                        collectedSuggestions.push(...visualRegionResults.slice(0, 1).map(p => ({ ...p, source: 'visual_region_unfiltered' }))); 
-                        console.log(`[AI Proc] Região "${furniture.name}": Filtro de tipo falhou, mas categoria '${normalizedDetectedCategoryForLog}' existe no catálogo. Adicionando ${visualRegionResults.slice(0, 1).length} não filtrado (baixa prioridade).`);
-                    } else {
-                        console.log(`[AI Proc] Região "${furniture.name}": Filtro de tipo falhou E categoria '${normalizedDetectedCategoryForLog}' NÃO encontrada no catálogo do usuário. Pulando fallback não filtrado para esta região.`);
-                    }
-                  }
-                }
-              }
-            } catch (regionError) {
-              console.error(`[AI Proc] Erro processando região para "${furniture.name}":`, regionError);
-            } finally {
-              if (tempFilePath && fs.existsSync(tempFilePath)) { try { fs.unlinkSync(tempFilePath); } catch (e) { console.warn('Falha ao remover temp ' + tempFilePath)} }
-            }
-          } else {
-            console.log(`[AI Proc] BBox para "${furniture.name}" inválida ou pequena (w:${pixelBbox?.w}, h:${pixelBbox?.h}), pulando busca por região.`);
-          }
-        }
-
-        // 2. BUSCA VISUAL GLOBAL (Prioridade Média)
-        const highQualityVisualSuggestionsCount = collectedSuggestions.filter(s => s.source === 'visual_region_filtered').length;
-        if (highQualityVisualSuggestionsCount < 2 && similarProductsVisual && similarProductsVisual.length > 0 && project?.userId) {
-          const globalVisualFiltered = similarProductsVisual.filter(p =>
-            (p.category && normalizeText(p.category).includes(normalizedFurnitureName)) ||
-            (p.name && normalizeText(p.name).includes(normalizedFurnitureName))
-          );
-          if (globalVisualFiltered.length > 0) {
-            console.log(`[AI Proc] Global Filtrado para "${furniture.name}": ${globalVisualFiltered.length} resultados.`);
-            globalVisualFiltered.forEach(p_global => {
-              if (!collectedSuggestions.find(ex => ex.id === p_global.id)) {
-                collectedSuggestions.push({ ...p_global, source: 'visual_global_filtered' });
-                }
-            });
-          }
-        }
-
-        // 3. BUSCA TEXTUAL FTS (Prioridade Baixa / Complementar)
-        const currentFilteredVisualCount = collectedSuggestions.filter(s => s.source.endsWith('_filtered')).length;
-        if (currentFilteredVisualCount < 2) { 
-          const ftsSearchInput = `${furniture.name} ${furniture.description}`;
-          console.log(`[AI Proc] Poucas sugestões visuais filtradas (${currentFilteredVisualCount}). Recorrendo à FTS para "${furniture.name}" com input: "${ftsSearchInput.substring(0, 100)}...".`);
-          const textualResults = await storage.findRelevantProducts(project.userId, ftsSearchInput);
-          
-          if (textualResults.length > 0) {
-            console.log(`[AI Proc] FTS para "${furniture.name}" encontrou ${textualResults.length} resultados brutos.`);
-            
-            const normalizedFurnitureNameForFilter = normalizeText(furniture.name);
-            const filteredTextualResults = textualResults.filter(p =>
-              (p.category && normalizeText(p.category).includes(normalizedFurnitureNameForFilter)) ||
-              (p.name && normalizeText(p.name).includes(normalizedFurnitureNameForFilter))
-            );
-
-            if (filteredTextualResults.length > 0) {
-              console.log(`[AI Proc] FTS para "${furniture.name}": ${filteredTextualResults.length} resultados APÓS FILTRO DE CATEGORIA.`);
-              filteredTextualResults.forEach(p_text => {
-                if (!collectedSuggestions.find(ex => ex.id === p_text.id)) {
-                  collectedSuggestions.push({ ...p_text, source: 'textual_fts_filtered' }); 
-                }
-              });
-            } else {
-              console.log(`[AI Proc] FTS para "${furniture.name}": Nenhum resultado após filtro de categoria.`);
-            }
-          }
-        }
-        
-        // 4. Ordenar e Selecionar as Top N sugestões
-        collectedSuggestions.sort((a, b) => {
-            const sourcePriority: Record<string, number> = {
-                'visual_region_filtered': 1,
-                'visual_global_filtered': 2,
-                'textual_fts_filtered': 3, // Prioridade ajustada
-                'visual_region_unfiltered': 4, 
-                'textual_fts': 5 // FTS não filtrada teria prioridade ainda menor (não estamos usando agora)
-            };
-            if (sourcePriority[a.source] !== sourcePriority[b.source]) {
-                return sourcePriority[a.source] - sourcePriority[b.source];
-            }
-            if (a.source.startsWith('visual')) { 
-                return (a.distance || Infinity) - (b.distance || Infinity);
-            } else if (a.source.startsWith('textual_fts')) { // cobre _filtered
-                return (b.relevance || 0) - (a.relevance || 0); 
-            }
-            return 0;
-        });
-
-        const finalUniqueSuggestions: (Product & { distance?: number; relevance?: number; source: string })[] = [];
-        const seenIds = new Set<number>();
-        for (const sug of collectedSuggestions) {
-            if (!seenIds.has(sug.id)) {
-                finalUniqueSuggestions.push(sug);
-                seenIds.add(sug.id);
-            }
-            if (finalUniqueSuggestions.length >= 3) break;
-        }
-        
-        console.log(`[AI Proc] SUGESTÕES FINAIS para "${furniture.name}" (${finalUniqueSuggestions.length} produtos):`,
-          finalUniqueSuggestions.map(p => ({ id: p.id, name: p.name, source: p.source, score: p.distance ?? p.relevance }))
-        );
-
-        const newItemData: NewDesignProjectItem = {
-          designProjectId: projectId,
-          detectedObjectName: furniture.name,
-          detectedObjectDescription: furniture.description,
-          detectedObjectBoundingBox: furniture.bounding_box || null,
-          suggestedProductId1: finalUniqueSuggestions[0]?.id || null,
-          matchScore1: finalUniqueSuggestions[0] ? (finalUniqueSuggestions[0].distance ?? finalUniqueSuggestions[0].relevance ?? 0) : null,
-          suggestedProductId2: finalUniqueSuggestions[1]?.id || null,
-          matchScore2: finalUniqueSuggestions[1] ? (finalUniqueSuggestions[1].distance ?? finalUniqueSuggestions[1].relevance ?? 0) : null,
-          suggestedProductId3: finalUniqueSuggestions[2]?.id || null,
-          matchScore3: finalUniqueSuggestions[2] ? (finalUniqueSuggestions[2].distance ?? finalUniqueSuggestions[2].relevance ?? 0) : null,
-          userFeedback: 'pending',
-        };
-
-        try {
-          const createdItem = await storage.createDesignProjectItem(newItemData);
-          console.log(`[AI Proc] Item de Design salvo para "${furniture.name}", ID: ${createdItem.id}, Sugestão 1: ${finalUniqueSuggestions[0]?.name || 'N/A'} (Fonte: ${finalUniqueSuggestions[0]?.source || 'N/A'})`);
-        } catch (dbError) {
-          console.error(`[AI Proc] Erro ao salvar DesignProjectItem para "${furniture.name}":`, dbError);
-        }
-      } // Fim do loop for (const furniture of identifiedFurniture)
-      console.log(`[AI Design Processor] Processamento de ${identifiedFurniture.length} itens de design concluído.`);
-    } else if (similarProductsVisual && similarProductsVisual.length === 0 && identifiedFurniture.length === 0) { 
-        console.log("[DEBUG] Nenhum móvel identificado pela IA e nenhuma sugestão global (imagem inteira) encontrada.");
-        await storage.createAiDesignChatMessage({ projectId, role: "assistant", content: "Não consegui identificar móveis específicos nem encontrar sugestões gerais para esta imagem. Você pode tentar outra imagem ou descrever o que procura?" });
-    }
-
-    // Montar a mensagem de chat (REFINADA)
-    let chatMessageContent = "";
-    let hasContent = false;
-    const MAX_DISTANCE_THRESHOLD = 15.0; 
-
-    let productsWithinThreshold: (Product & { distance: number; source?: string })[] = [];
-    if (similarProductsVisual.length > 0) {
-        productsWithinThreshold = similarProductsVisual
-            .filter(p => p.distance !== undefined && p.distance !== null && p.distance <= MAX_DISTANCE_THRESHOLD)
-            .map(p => ({ ...p, distance: p.distance!, source: 'visual' }))
-            .sort((a, b) => a.distance - b.distance);
-    }
-    
-    let finalSuggestionsToShow = productsWithinThreshold.slice(0, 3);
-    let introMessage = "";
-    let foundFocusedItemVisually = false;
-
-    if (userRequestedSpecificItem && mainKeyword && productsWithinThreshold.length > 0) {
-        const normalizedQueryKeyword = normalizeText(mainKeyword);
-        const focusedSuggestionsFromVisual = productsWithinThreshold.filter(p => 
-            (p.category && normalizeText(p.category).includes(normalizedQueryKeyword)) ||
-            (p.name && normalizeText(p.name).includes(normalizedQueryKeyword))
-        );
-        
-        if (focusedSuggestionsFromVisual.length > 0) {
-            // Se encontrou o item focado visualmente, essa será a introdução (ou podemos omiti-la)
-            // introMessage = `Sugestões para '${mainKeyword}' com base na imagem:\n`;
-            finalSuggestionsToShow = focusedSuggestionsFromVisual.slice(0, 3);
-            foundFocusedItemVisually = true;
+        const parsedJsonResponse = JSON.parse(visionContent);
+        if (Array.isArray(parsedJsonResponse)) {
+          detectedObjects = parsedJsonResponse.map((item: any) => ({
+              name: item.name,
+              description: item.description,
+              bbox: item.bbox,
+              originalName: item.name 
+          }));
+          console.log(`[AI Design Processor] ${detectedObjects.length} objetos detectados e parseados da visão.`);
         } else {
-            // Não encontrou o item focado visualmente, mas há sugestões visuais gerais
-            // introMessage = `Não encontrei '${mainKeyword}' com alta similaridade visual, mas estas são algumas sugestões gerais da imagem:\n`;
+          console.warn("[AI Design Processor] Formato JSON inesperado da API Vision (não é um array), tentando parse legado:", visionContent);
+          if (parsedJsonResponse && parsedJsonResponse.identified_furniture && Array.isArray(parsedJsonResponse.identified_furniture)) {
+               detectedObjects = parsedJsonResponse.identified_furniture.map((item: any) => ({
+                  name: item.name,
+                  description: item.description,
+                  bbox: item.bounding_box || item.bbox, 
+                  originalName: item.name
+              }));
+              console.log(`[AI Design Processor] ${detectedObjects.length} objetos detectados (formato legado) e parseados da visão.`);
+          } else {
+              visionAnalysisFailed = true;
+              console.warn("[AI Design Processor] Falha ao parsear JSON da visão, mesmo com fallback para formato legado. Conteúdo:", visionContent);
+          }
         }
-    } else if (productsWithinThreshold.length > 0) {
-        // introMessage = `Sugestões com base na imagem:\n`;
-    } // Se não houver introMessage, as sugestões serão listadas diretamente.
-
-    if (finalSuggestionsToShow.length > 0) {
-        if (introMessage) chatMessageContent += introMessage;
-        finalSuggestionsToShow.forEach((product, index) => {
-            chatMessageContent += `\n**${product.name}** (Ref: ${product.code || 'N/A'}`;
-            if (product.source === 'visual') {
-                 chatMessageContent += `, Distância Visual: ${product.distance?.toFixed(4) || 'N/A'}`;
-            }
-            chatMessageContent += `)\n`;
-            if (product.imageUrl) {
-                chatMessageContent += `  ![${product.name}](${product.imageUrl})\n`;
-            }
-            if (product.description) {
-                 // Descrição mais curta e objetiva
-                const shortDesc = product.description.split(/[\.\r\n]+/)[0]; // Pega a primeira frase ou linha
-                chatMessageContent += `  *${shortDesc}${shortDesc.length < product.description.length ? '...' : ''}*\n`;
-            }
-        });
-        // Opcional: Adicionar mensagem sobre mais sugestões se houver mais do que 3
-        // if (productsWithinThreshold.length > finalSuggestionsToShow.length) {
-        //      chatMessageContent += `\n  (... e mais ${productsWithinThreshold.length - finalSuggestionsToShow.length} sugestões encontradas com boa similaridade visual)\n`;
-        // }
-        chatMessageContent += "\n---\n";
-        hasContent = true;
+      } catch (parseError) {
+        console.error("[AI Design Processor] Erro CRÍTICO ao parsear JSON da API Vision:", parseError, "Conteúdo:", visionContent);
+        visionAnalysisFailed = true;
+      }
     }
 
-    // Lógica para sugestões textuais (REFINADA)
-    // Só adiciona textual se o item focado NÃO foi encontrado visualmente E há sugestões textuais para ele.
-    if (userRequestedSpecificItem && mainKeyword && !foundFocusedItemVisually && focusedItemsOutputFromTextSearch.length > 0) {
-        const textualSuggestion = focusedItemsOutputFromTextSearch.find(item => 
-            (item.detectedName && normalizeText(item.detectedName).includes(normalizeText(mainKeyword))) ||
-            (item.suggestedProduct?.category && normalizeText(item.suggestedProduct.category).includes(normalizeText(mainKeyword))) ||
-            (item.suggestedProduct?.name && normalizeText(item.suggestedProduct.name).includes(normalizeText(mainKeyword)))
+    if (visionAnalysisFailed || detectedObjects.length === 0) {
+        if (detectedObjects.length === 0) { 
+            console.log("[AI Design Processor] Nenhum objeto detectado pela IA de Visão.");
+            await storage.createAiDesignChatMessage({
+                projectId,
+                role: 'assistant',
+                content: "Não consegui identificar móveis principais na imagem fornecida. Você poderia tentar uma imagem diferente ou com os objetos mais em destaque?",
+            });
+            if (project && imageUrlToProcess === project.clientRenderImageUrl) {
+                await storage.updateDesignProject(projectId, { status: 'error_vision', updatedAt: new Date() });
+            }
+            broadcastToProject(projectId.toString(), { type: 'ai_processing_complete_no_objects' });
+            return; 
+        }
+    }
+    
+    const createdDesignProjectItems: DesignProjectItem[] = [];
+    for (const obj of detectedObjects) {
+        // Garantindo que apenas campos válidos de NewDesignProjectItem (conforme schema) são usados.
+        const newItemData: NewDesignProjectItem = {
+            designProjectId: projectId, 
+            detectedObjectName: obj.name,
+            detectedObjectDescription: obj.description,
+            detectedObjectBoundingBox: obj.bbox, 
+            // Os campos 'originalImageUrl' e 'status' foram intencionalmente removidos 
+            // pois não existem no schema de NewDesignProjectItem (DesignProjectItemsTable.$inferInsert)
+        };
+        const createdItem = await storage.createDesignProjectItem(newItemData);
+        if (createdItem) {
+            createdDesignProjectItems.push(createdItem as DesignProjectItem); 
+        }
+    }
+    console.log(`[AI Design Processor] ${createdDesignProjectItems.length} DesignProjectItems criados para os objetos detectados.`);
+    
+    let chatResponseContent = "";
+    let focusedProcessing = false; 
+    let mainKeyword: string | null = null;
+    let normalizedMainKeyword: string | null = null;
+
+    if (userMessageText && project) { 
+        const keywords = FURNITURE_KEYWORDS;
+        const localNormalizedUserMessage = normalizeText(userMessageText);
+        for (const kw of keywords) {
+            const normalizedKw = normalizeText(kw);
+            if (localNormalizedUserMessage.includes(normalizedKw)) {
+                mainKeyword = kw; 
+                normalizedMainKeyword = normalizedKw;
+                console.log(`[AI Design Processor] Keyword de foco detectada: "${mainKeyword}"`);
+                break;
+            }
+        }
+    }
+    
+    if (mainKeyword && normalizedMainKeyword && createdDesignProjectItems.length > 0 && project) {
+        const itemsToFocus = createdDesignProjectItems.filter(item => 
+            item.detectedObjectName && normalizeText(item.detectedObjectName).includes(normalizedMainKeyword!) 
         );
 
-        if (textualSuggestion && textualSuggestion.suggestedProduct) {
-            chatMessageContent += `\nNão encontrei '${mainKeyword}' com alta similaridade visual, mas achei este aqui por texto:\n`;
-            chatMessageContent += `  **${textualSuggestion.suggestedProduct.name}** (Ref: ${textualSuggestion.suggestedProduct.code || 'N/A'})\n`;
-            if (textualSuggestion.suggestedProduct.imageUrl) {
-                chatMessageContent += `    ![${textualSuggestion.suggestedProduct.name}](${textualSuggestion.suggestedProduct.imageUrl})\n`;
+        if (itemsToFocus.length > 0) {
+            focusedProcessing = true;
+            chatResponseContent += `Entendido! Focando em sugestões para **${mainKeyword}** que identifiquei na imagem:\n\n`;
+            for (const item of itemsToFocus) {
+                const suggestions = await findSuggestionsForItem(item, project.userId, imageUrlToProcess, mainKeyword); 
+                
+                const updatePayload: Partial<Omit<DesignProjectItem, 'id' | 'designProjectId' | 'createdAt' | 'updatedAt'>> = {};
+                if(suggestions.length > 0 && suggestions[0]?.product?.id) {
+                    updatePayload.suggestedProductId1 = suggestions[0].product.id;
+                    updatePayload.matchScore1 = suggestions[0].matchScore;
+                }
+                if(suggestions.length > 1 && suggestions[1]?.product?.id) {
+                    updatePayload.suggestedProductId2 = suggestions[1].product.id;
+                    updatePayload.matchScore2 = suggestions[1].matchScore;
+                }
+                if(suggestions.length > 2 && suggestions[2]?.product?.id) {
+                    updatePayload.suggestedProductId3 = suggestions[2].product.id;
+                    updatePayload.matchScore3 = suggestions[2].matchScore;
+                }
+                if (Object.keys(updatePayload).length > 0) {
+                    await storage.updateDesignProjectItem(item.id, updatePayload);
+                }
+                chatResponseContent += formatSuggestionsForChatItem(item, suggestions.map(s => s.product));
             }
-            const shortDesc = textualSuggestion.suggestedProduct.description?.split(/[\.\r\n]+/)[0];
-            if (shortDesc) {
-                 chatMessageContent += `  *${shortDesc}${shortDesc.length < (textualSuggestion.suggestedProduct.description?.length || 0) ? '...' : ''}*\n`;
+             const otherItems = createdDesignProjectItems.filter(item => !itemsToFocus.some(focusedItem => focusedItem.id === item.id));
+             if (otherItems.length > 0) {
+                 chatResponseContent += `\nTambém identifiquei outros itens (${otherItems.map(i => i.detectedObjectName).join(', ')}). Se quiser sugestões para eles, me diga!`;
+             }
+        } else {
+             chatResponseContent += `Não encontrei especificamente um "${mainKeyword}" claro na imagem. `;
+             focusedProcessing = false; 
+        }
+    }
+
+    if (!focusedProcessing && project) { 
+        if (createdDesignProjectItems.length > 0) {
+            chatResponseContent += chatResponseContent.length > 0 ? "\n\n" : ""; 
+            chatResponseContent += "Aqui estão os móveis que identifiquei na imagem e algumas sugestões do nosso catálogo:\n\n";
+            for (const item of createdDesignProjectItems) {
+                const suggestions = await findSuggestionsForItem(item, project.userId, imageUrlToProcess);
+                const updatePayload: Partial<Omit<DesignProjectItem, 'id' | 'designProjectId' | 'createdAt' | 'updatedAt'>> = {};
+                if(suggestions.length > 0 && suggestions[0]?.product?.id) {
+                    updatePayload.suggestedProductId1 = suggestions[0].product.id;
+                    updatePayload.matchScore1 = suggestions[0].matchScore;
+                }
+                if(suggestions.length > 1 && suggestions[1]?.product?.id) {
+                    updatePayload.suggestedProductId2 = suggestions[1].product.id;
+                    updatePayload.matchScore2 = suggestions[1].matchScore;
+                }
+                if(suggestions.length > 2 && suggestions[2]?.product?.id) {
+                    updatePayload.suggestedProductId3 = suggestions[2].product.id;
+                    updatePayload.matchScore3 = suggestions[2].matchScore;
+                }
+                if (Object.keys(updatePayload).length > 0) {
+                    await storage.updateDesignProjectItem(item.id, updatePayload);
+                }
+                chatResponseContent += formatSuggestionsForChatItem(item, suggestions.map(s => s.product));
             }
-            hasContent = true; 
+        } else if (!visionAnalysisFailed) {  
+             chatResponseContent = "Não identifiquei móveis claros nesta imagem. Poderia tentar outra imagem ou descrever o que você procura?";
         }
     }
     
-    // Mensagens de Fallback (se não houve nenhuma sugestão visual ou textual focada)
-    if (!hasContent) {
-      if (userRequestedSpecificItem && mainKeyword) {
-        chatMessageContent = `Desculpe, não encontrei nenhuma sugestão para '${mainKeyword}' com base na imagem ou por busca textual.`;
-      } else if (identifiedFurniture.length > 0 && similarProductsVisual.length === 0) { 
-        chatMessageContent = "Analisei a imagem e identifiquei alguns móveis, mas não encontrei produtos visualmente similares no catálogo.";
-      } else if (identifiedFurniture.length === 0 && similarProductsVisual.length === 0) {
-        chatMessageContent = "Não consegui identificar móveis específicos nem encontrar sugestões visuais para esta imagem. Você pode tentar outra imagem ou descrever o que procura?";
-      } else {
-        chatMessageContent = "Não consegui encontrar sugestões para esta imagem. Você pode tentar outra ou descrever melhor o que procura?";
-      }
-      hasContent = true; 
-    }
-
-    console.log(`[DEBUG] FINAL chatMessageContent antes de enviar: "${chatMessageContent.substring(0, 200)}..."`);
-
-    if (chatMessageContent.trim() !== "" && hasContent) { 
-        const newAiMessage = await storage.createAiDesignChatMessage({ 
-            projectId,
-            role: "assistant", 
-            content: chatMessageContent 
-        });
-        // ADICIONADO: Enviar a nova mensagem via WebSocket
-        if (newAiMessage) {
-            console.log(`[AI Design Processor] Enviando nova mensagem AI via WebSocket para projeto ${projectId}`);
-            broadcastToProject(projectId.toString(), { 
-                type: 'NEW_AI_MESSAGE', 
-                payload: newAiMessage 
-            });
-        }
-    }
-
-    if (imageUrlToProcess === project.clientRenderImageUrl) {
-        let projectStatusAfterProcessing: DesignProject['status'] = 'completed';
-        if (identifiedFurniture.length === 0) {
-            projectStatusAfterProcessing = 'processed_no_items';
-        } else if (focusedItemsOutputFromTextSearch.length > 0) {
-            projectStatusAfterProcessing = 'awaiting_selection';
-        } else if (userRequestedSpecificItem && finalSuggestionsToShow.length === 0) {
-            projectStatusAfterProcessing = 'processed_no_match_for_focus';
-        }
-        await storage.updateDesignProject(projectId, { status: projectStatusAfterProcessing, updatedAt: new Date() });
-        console.log(`[AI Design Processor] Status final do projeto ${projectId} (render principal) atualizado para ${projectStatusAfterProcessing}.`);
+    if (chatResponseContent.trim() !== "") {
+        await storage.createAiDesignChatMessage({ projectId, role: 'assistant', content: chatResponseContent });
+    } else if (visionAnalysisFailed) { // Somente envia mensagem de falha se nenhuma outra resposta foi construída
+         await storage.createAiDesignChatMessage({ projectId, role: 'assistant', content: "Houve uma falha na análise da imagem. Por favor, tente novamente." });
+    } else {
+        console.log("[AI Design Processor] Nenhuma nova mensagem de chat para enviar.");
     }
     
-    console.log(`[AI Design Processor] Processamento da imagem de anexo ${imageUrlToProcess} para projeto ${projectId} concluído.`);
+    if (project && project.clientRenderImageUrl === imageUrlToProcess) {
+        const allItems = await storage.getDesignProjectItems(projectId);
+        // Inferir status com base nos campos preenchidos, já que não há campo status
+        const allProcessed = allItems.every(item => 
+            item.selectedProductId || // Se está selecionado, está processado
+            (item.suggestedProductId1 && item.userFeedback === 'user_rejected') || // Se tem sugestão e foi rejeitado
+            (item.suggestedProductId1 && !item.selectedProductId && !item.userFeedback) // Se tem sugestão, não selecionado, sem feedback (aguardando)
+            // Adicione mais condições conforme sua lógica de "processado"
+        );
+        
+        if (allProcessed && allItems.length > 0) {
+            await storage.updateDesignProject(projectId, { status: 'suggestions_provided', updatedAt: new Date() });
+        } else if (allItems.length === 0 && !visionAnalysisFailed) {
+            // Status 'error_vision' já foi setado para o projeto
+        }
+    }
+    
+    broadcastToProject(projectId.toString(), { type: 'ai_processing_complete', projectId });
+    console.log(`[AI Design Processor] Processamento da imagem para projeto ${projectId} concluído.`);
 
-  } catch (error) {
-    console.error(`[AI Design Processor] Erro GERAL no processamento da imagem para projeto ${projectId}:`, error);
+  } catch (error: any) {
+    console.error(`[AI Design Processor] Erro GERAL no processamento do projeto ${projectId} para imagem ${imageUrlToProcess}:`, error);
+    let errorMessage = "Ocorreu um erro inesperado ao processar sua imagem. ";
+    if (error.message) {
+        errorMessage += `Detalhe: ${error.message}`;
+    }
+    
     try {
-      const projectForStatus = await storage.getDesignProject(projectId);
-      if (projectForStatus && imageUrlToProcess === projectForStatus.clientRenderImageUrl) {
-        await storage.updateDesignProject(projectId, { status: 'failed', updatedAt: new Date() });
-      }
-      await storage.createAiDesignChatMessage({
-        projectId: projectId,
-        role: "assistant",
-        content: `Desculpe, ocorreu um erro ao tentar analisar a imagem que você enviou. Detalhes do erro: ${error instanceof Error ? error.message : String(error)}`
-      });
-    } catch (nestedError) {
-      console.error(`[AI Design Processor] Erro CRÍTICO ao tentar lidar com erro anterior ou atualizar status para falha (Projeto ${projectId}):`, nestedError);
+        await storage.createAiDesignChatMessage({
+            projectId,
+            role: 'assistant',
+            content: errorMessage,
+        });
+        
+        if (project && project.clientRenderImageUrl === imageUrlToProcess) {
+            await storage.updateDesignProject(projectId, { status: 'error', updatedAt: new Date() });
+        }
+        broadcastToProject(projectId.toString(), { type: 'ai_processing_error', error: error.message || 'Unknown error' });
+    } catch (dbError) {
+        console.error(`[AI Design Processor] Erro ao registrar erro no chat/projeto ${projectId}:`, dbError);
     }
-    // Considerar enviar uma mensagem de erro via WebSocket também, se apropriado
-    broadcastToProject(projectId.toString(), { 
-        type: 'PROCESSING_ERROR', 
-        payload: { message: error instanceof Error ? error.message : String(error) } 
-    });
   }
 }
 

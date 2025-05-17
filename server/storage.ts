@@ -663,41 +663,76 @@ export class DatabaseStorage implements IStorage {
         'por', 'mais', 'as', 'dos', 'como', 'mas', 'foi', 'ao', 'ele', 'dela', 'dele', 'sem', 'ser', 'estar', 
         'ter', 'seja', 'pelo', 'pela', 'este', 'esta', 'isto', 'isso', 'aquele', 'aquela', 'aquilo'
       ]);
-      let keywords = searchText.toLowerCase()
-        .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-        .replace(/[^a-z0-9\s]/g, '')
-        .split(/\s+/)
-        .filter(token => token.length > 2 && !stopWords.has(token))
-        .slice(0, 7);
-      console.log(`[FTS Storage] Keywords extraídas: [${keywords.join(', ')}]`);
+      
+      // Normalização e tokenização inicial
+      let normalizedSearchText = searchText.toLowerCase()
+        .normalize("NFD").replace(/[\u0300-\u036f]/g, "") 
+        .replace(/[^a-z0-9\s.-]/g, ' ') // Manter . e - para casos como "2.5m" ou "mesa-de-canto", mas substituir outros não alfanuméricos por espaço
+        .trim();
+      console.log(`[FTS Storage] Texto Normalizado: "${normalizedSearchText}"`);
+
+      let keywords = normalizedSearchText.split(/\s+/)
+        .filter(token => token.length > 1 && !stopWords.has(token)) // Reduzido token.length para > 1 para pegar termos como "m" de "2.5m" se necessário, ajuste conforme o caso.
+        .slice(0, 10); // Aumentado para 10 palavras-chave
+      
+      console.log(`[FTS Storage] Keywords extraídas (antes de refinar): [${keywords.join(', ')}]`);
 
       if (keywords.length === 0) {
-        console.log("[FTS Storage] Nenhuma palavra-chave válida após tokenização.");
-        return [];
+        // Se ainda não há keywords, tentar com a string normalizada diretamente se ela não for só espaços
+        if (normalizedSearchText.length > 1) {
+            keywords = [normalizedSearchText]; // Usa o texto normalizado como uma única keyword
+            console.log(`[FTS Storage] Nenhuma keyword após filtro, usando texto normalizado como keyword única: [${normalizedSearchText}]`);
+        } else {
+            console.log("[FTS Storage] Nenhuma palavra-chave válida após tokenização e fallback.");
+            return [];
+        }
       }
       
-      const ftsQueryStringPlain = keywords.join(' '); 
-      console.log(`[FTS Storage] QueryString para plainto_tsquery: "${ftsQueryStringPlain}"`);
-      const queryPlain = sql`plainto_tsquery('portuguese', ${ftsQueryStringPlain})`;
+      // Tentativa 1: websearch_to_tsquery (robusto para input de usuário)
+      // Constrói uma query AND, mas é mais flexível com a sintaxe do usuário.
+      const webSearchQueryString = keywords.join(' ');
+      console.log(`[FTS Storage] QueryString para websearch_to_tsquery: "${webSearchQueryString}"`);
+      const queryWebSearch = sql`websearch_to_tsquery('portuguese', ${webSearchQueryString})`;
       
       let results = await db.select({
           ...(getTableColumns(products)), 
-          relevance: sql<number>`ts_rank_cd(products.search_tsv, ${queryPlain})`.as('relevance')
+          relevance: sql<number>`ts_rank_cd(products.search_tsv, ${queryWebSearch})`.as('relevance')
         })
         .from(products)
         .where(and(
           eq(products.userId, parsedUserId),
           isNotNull(products.search_tsv),
-          sql`products.search_tsv @@ ${queryPlain}` 
+          sql`products.search_tsv @@ ${queryWebSearch}` 
         ))
         .orderBy(desc(sql`relevance`)) 
-        .limit(10); 
-      console.log(`[FTS Storage] plainto_tsquery encontrou ${results.length} resultados.`);
+        .limit(15); // Aumentado limite
+      console.log(`[FTS Storage] websearch_to_tsquery encontrou ${results.length} resultados.`);
 
-      // Se plainto_tsquery (AND) não encontrar nada, tentar com OR (to_tsquery)
-      if (results.length === 0 && keywords.length > 0) {
-        const ftsQueryStringOr = keywords.join(' | '); // Constrói query com OR
-        console.log(`[FTS Storage] plainto_tsquery não encontrou resultados. Tentando com to_tsquery (OR): "${ftsQueryStringOr}"`);
+      // Tentativa 2: plainto_tsquery (AND mais estrito) se websearch não retornou muitos resultados
+      if (results.length < 5 && keywords.length > 0) { // Se poucos resultados, tenta plainto
+        const ftsQueryStringPlain = keywords.join(' '); 
+        console.log(`[FTS Storage] websearch_to_tsquery retornou poucos (${results.length}). Tentando com plainto_tsquery: "${ftsQueryStringPlain}"`);
+        const queryPlain = sql`plainto_tsquery('portuguese', ${ftsQueryStringPlain})`;
+        
+        results = await db.select({
+            ...(getTableColumns(products)), 
+            relevance: sql<number>`ts_rank_cd(products.search_tsv, ${queryPlain})`.as('relevance')
+          })
+          .from(products)
+          .where(and(
+            eq(products.userId, parsedUserId),
+            isNotNull(products.search_tsv),
+            sql`products.search_tsv @@ ${queryPlain}` 
+          ))
+          .orderBy(desc(sql`relevance`)) 
+          .limit(15); 
+        console.log(`[FTS Storage] plainto_tsquery encontrou ${results.length} resultados.`);
+      }
+
+      // Tentativa 3: to_tsquery com OR (mais abrangente) se os anteriores falharem ou retornarem poucos
+      if (results.length < 3 && keywords.length > 0) {
+        const ftsQueryStringOr = keywords.join(' | '); 
+        console.log(`[FTS Storage] Tentativas anteriores retornaram poucos (${results.length}). Tentando com to_tsquery (OR): "${ftsQueryStringOr}"`);
         const queryOr = sql`to_tsquery('portuguese', ${ftsQueryStringOr})`;
         results = await db.select({
             ...(getTableColumns(products)), 
@@ -710,10 +745,11 @@ export class DatabaseStorage implements IStorage {
             sql`products.search_tsv @@ ${queryOr}` 
           ))
           .orderBy(desc(sql`relevance`)) 
-          .limit(10);
+          .limit(15);
         console.log(`[FTS Storage] to_tsquery (OR) encontrou ${results.length} resultados.`);
       }
-      return results.map(r => r as any);
+      // TODO: Tipar melhor o resultado aqui se relevance for usado, ou remover relevance se não for usado no frontend.
+      return results.map(r => ({...r, relevance: r.relevance || 0 }) as unknown as Product[]); 
     } catch (error) {
       console.error('[FTS Storage] Error in searchProducts:', error);
       return [];

@@ -75,8 +75,8 @@ Refira-se ao `README.md` para detalhes sobre as funcionalidades.
 
 - [x] Definir escopo e fluxo da funcionalidade (Análise de render, busca híbrida texto/visual, UI).
 - [x] Implementar backend (rotas, storage) para Projetos de Design.
-  - [x] Definir e aplicar schema do banco de dados (storage) (`designProjects`, `designProjectItems`, coluna `embedding` em `products`, `aiDesignChatMessages` referenciando `designProjects`).
-  - [x] Implementar métodos de storage (`get/create/update/deleteDesignProject`, `get/createDesignProjectItems`, `findRelevantProducts`, `createAiDesignChatMessage`, `getAiDesignChatMessages`).
+  - [x] Definir e aplicar schema do banco de dados (storage) (`designProjects`, `designProjectItems`, coluna `embedding` e `search_tsv` em `products`, `aiDesignChatMessages` referenciando `designProjects`).
+  - [x] Implementar métodos de storage (`get/create/update/deleteDesignProject`, `get/createDesignProjectItems`, `findRelevantProducts` - agora com FTS, `createAiDesignChatMessage`, `getAiDesignChatMessages`).
   - [x] Implementar rotas API (`POST /api/ai-design-projects`, `GET /api/ai-design-projects/:id`).
   - [x] Implementar rota `POST /api/ai-design-projects/:id/upload-render`.
   - [x] Implementar rota `POST /api/ai-design-projects/:id/attachments` (para anexos de chat).
@@ -85,25 +85,37 @@ Refira-se ao `README.md` para detalhes sobre as funcionalidades.
 - [x] Implementar lógica de busca por similaridade visual (embeddings).
   - [x] Criar script `scripts/generate-product-embeddings.ts`.
   - [x] Popular coluna `embedding` nos produtos - **CONCLUÍDO!** Script depurado e executado com sucesso para todos os produtos.
-  - [ ] Implementar função `storage.findProductsByEmbedding(userId, imageEmbeddingVector, limit)` - **Implementada em `server/storage.ts` (usa embedding da descrição por enquanto, precisa de embedding da imagem).**
-  - [ ] Integrar busca por embedding no `ai-design-processor.ts` - **Iniciado (usa embedding da descrição do móvel detectado). Próximo passo é usar embedding da imagem de input.**
+  - [x] Implementar função `storage.findProductsByEmbedding(userId, imageEmbeddingVector, limit)` - **Implementada em `server/storage.ts`.**
+  - [x] Integrar busca por embedding no `ai-design-processor.ts` (busca visual global e por região).
 - [-] Implementar frontend para interface de Design com IA.
   - [x] Criar página de listagem (`design-ai.tsx`) com busca mock.
   - [x] Criar página do projeto (`design-ai-project.tsx`) com dados mock, upload simulado e seleção simulada.
   - [x] Chat funcional (`ai-design-chat.tsx`) com envio de texto e anexos de imagem.
   - [x] Resposta da IA no chat com sugestões de produtos (incluindo imagens dos produtos sugeridos renderizadas via Markdown) e lógica de foco no pedido do usuário.
-  - [ ] Conectar frontend às rotas reais do backend (quando disponíveis) - **Em progresso, a maioria conectada e funcional.**
-  - [ ] Implementar busca de detalhes dos produtos sugeridos na UI.
+  - [x] Conectar frontend às rotas reais do backend (quando disponíveis) - **Em progresso, a maioria conectada e funcional.**
+  - [x] Implementar busca de detalhes dos produtos sugeridos na UI. **(Erro 400 - ID Inválido resolvido)**
   - [ ] Implementar UI para o usuário ver e ajustar as sugestões de `DesignProjectItems` (geradas pela IA).
+  - [ ] **Novo:** Integrar funcionalidade de "Gerar Orçamento" para produtos selecionados na UI de Design com IA.
+  - [ ] **Novo:** Integrar funcionalidade de "Criar Moodboard" para produtos selecionados na UI de Design com IA.
 - [x] Implementar lógica de processamento de IA (`ai-design-processor.ts`):
   - [x] Análise de imagem (OpenAI GPT-4o Vision) para identificar móveis e suas descrições.
-  - [x] Busca textual de produtos (`storage.findRelevantProducts`).
-  - [x] Criação de `DesignProjectItems` com sugestões baseadas na busca textual.
+  - [x] Busca textual de produtos (`storage.findRelevantProducts` - **agora usa FTS com `ts_vector` e fallback OR**).
+  - [x] Criação de `DesignProjectItems` com sugestões baseadas na busca textual e visual.
   - [x] Geração de embeddings para as descrições dos móveis detectados (via OpenAI `text-embedding-3-small`).
   - [x] Chamada inicial para `storage.findProductsByEmbedding` usando os embeddings das descrições.
   - [x] Feedback no chat para o usuário com as sugestões (incluindo imagens e foco no pedido do usuário).
+  - [x] **Refinada lógica de combinação de sugestões (visual regional filtrada, visual global filtrada, FTS filtrada, fallback visual não filtrado com checagem de categoria).**
 - [ ] Integrar com APIs de IA para geração de planta baixa/render (escopo futuro).
 - [x] Aperfeiçoar a busca por similaridade visual de produtos a partir de imagens enviadas pelo usuário, integrando embedding visual real (CLIP/HuggingFace) ao fluxo de sugestão.
+- [ ] **Novo:** Refinar qualidade e precisão do Render Final com IA (inpainting).
+  - [ ] Investigar e corrigir o "esticamento" da imagem.
+  - [ ] Melhorar o prompt enviado ao Replicate para o inpainting.
+  - [ ] Avaliar a qualidade do inpainting para BBoxes de diferentes tamanhos.
+- [x] **Novo:** Melhorar precisão da IA de Visão (GPT-4o) na identificação de tipos de móveis (ex: Cadeira vs. Poltrona) e na qualidade das Bounding Boxes.
+  - [x] Refinar prompt do GPT-4o.
+- [ ] **Novo:** Melhorar robustez e relevância da Busca Textual FTS.
+  - [ ] Diagnosticar por que ainda falha para alguns termos.
+  - [x] Refinar tokenização e estratégia de query no `storage.searchProducts`.
 
 ## Bugs Conhecidos / Impedimentos Atuais
 
@@ -135,34 +147,25 @@ Refira-se ao `README.md` para detalhes sobre as funcionalidades.
   - Resolvido erro `Property 'text' does not exist on type 'ContentBlock'` em `ai-design-processor.ts` (Anthropic SDK).
   - Corrigidos erros de tipo e referências em `server/routes.ts`, `server/ai-design-processor.ts` e `server/storage.ts` ao longo do desenvolvimento.
 
-## Próximos Passos Imediatos
+## Próximos Passos Imediatos (Revisado para 17 de Maio de 2025)
 
-1.  **Implementar Busca por Similaridade Visual Real (Embedding da Imagem de Input):**
-    *   **Objetivo:** Melhorar drasticamente a relevância das sugestões de produtos, comparando visualmente a imagem enviada pelo usuário com as imagens dos produtos do catálogo.
-    *   **Em `server/ai-design-processor.ts` (função `processDesignProjectImage`):**
-        *   Após a IA de Visão analisar a `imageUrlToProcess`, obter o embedding vetorial *desta imagem*. Isso pode exigir uma chamada a um modelo de embedding de imagem da OpenAI (ex: modelos multimodais como o próprio GPT-4o com inputs específicos ou APIs de embedding de imagem se disponíveis via SDK) ou um modelo de embedding de imagem de terceiros.
-        *   Passar este `imageEmbeddingVector` para `await storage.findProductsByEmbedding(project.userId, imageEmbeddingVector)`. 
-    *   **Em `server/storage.ts` (função `findProductsByEmbedding`):**
-        *   Garantir que a função esteja otimizada para buscar usando o embedding da imagem (a estrutura atual já é um bom começo).
-    *   **Em `server/ai-design-processor.ts` (função `processDesignProjectImage`):**
-        *   Desenvolver uma estratégia para **combinar e priorizar** os resultados da busca textual (`relevantProductsTextual`) com os resultados da busca por embedding visual (`similarProductsFromEmbedding`). Por exemplo, dar mais peso aos matches visuais ou usar a busca textual como um primeiro filtro e depois refinar com a visual.
-        *   Atualizar a criação dos `DesignProjectItem` e a mensagem de chat para usar essas sugestões combinadas/priorizadas.
+1.  **Refinar Precisão da Busca Textual FTS:**
+    *   **Objetivo:** Garantir que a FTS retorne resultados relevantes consistentemente.
+    *   **Ação:** Diagnosticar falhas atuais da FTS (quando retorna 0 resultados), analisar conteúdo dos `tsvector`s e refinar a construção da query em `storage.searchProducts`.
 
-2.  **Refinar Lógica de Foco e Resposta da IA:**
-    *   Melhorar a extração de intenção/palavras-chave do texto do usuário em `processDesignProjectImage` (talvez com uma chamada a um LLM mais simples para parsear o pedido do usuário de forma estruturada).
-    *   Ajustar o prompt da IA de Visão para, opcionalmente, focar em tipos específicos de móveis de forma mais eficaz se solicitado pelo usuário.
-    *   Permitir que o usuário explicitamente peça para a IA analisar a "imagem toda" ou "outros itens" se o foco inicial não foi satisfatório.
+2.  **Melhorar Qualidade e Precisão da IA de Visão (GPT-4o):**
+    *   **Objetivo:** Reduzir erros de classificação de móveis e obter Bounding Boxes mais úteis.
+    *   **Ação:** Experimentar com o prompt enviado ao GPT-4o em `ai-design-processor.ts`.
 
-3.  **Implementar Funcionalidade de `storage.updateDesignProjectItem`:**
-    *   Criar o método `updateDesignProjectItem(itemId: number, data: Partial<DesignProjectItem>)` em `server/storage.ts` para permitir que o usuário modifique as sugestões (ex: aceitar um produto, rejeitar, adicionar notas).
-    *   Descomentar e finalizar a lógica na rota `PUT /api/ai-design-projects/:projectId/items/:itemId` em `server/routes.ts`.
-    *   No frontend (`ai-design-chat.tsx` ou um novo componente), implementar a UI para o usuário interagir com os `DesignProjectItems` e disparar essa atualização.
+3.  **Aperfeiçoar o Render Final com Inpainting:**
+    *   **Objetivo:** Obter um render final que aplique as substituições de produtos de forma clara e visualmente correta.
+    *   **Ação:** Investigar o "esticamento" da imagem, analisar os parâmetros enviados ao Replicate, e avaliar a qualidade do inpainting especialmente para BBoxes menores (agora que a restrição foi removida).
 
-4.  **Resolver Problemas de Tipo do Drizzle (`storage.ts`):**
-    *   Investigar e corrigir os erros "No overload matches this call" nos métodos `createProduct`, `updateProduct`, `createQuote`, `updateQuote`, `createMoodboard`, `updateMoodboard`.
+4.  **Implementar Funcionalidade de `storage.updateDesignProjectItem` e Rota PUT correspondente:**
+    *   Permitir que o usuário interaja com as sugestões (aceitar/rejeitar/adicionar notas).
 
-5.  **Tratar Declarações de Tipo para Módulos `.js`:**
-    *   Converter os arquivos `.js` problemáticos para `.ts` ou criar os arquivos de declaração `.d.ts` correspondentes para remover a necessidade dos comentários `// @ts-ignore`.
+5.  **Resolver Problemas de Tipo do Drizzle (`storage.ts`):** (Movido para Bugs Conhecidos, mas ainda importante)
+    *   Investigar e corrigir os erros "No overload matches this call".
 
 ---
-*Última atualização: [DATA_ATUAL]* 
+*Última atualização: 17 de Maio de 2025* 
