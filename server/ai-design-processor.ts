@@ -739,17 +739,29 @@ export async function processDesignProjectImage(projectId: number, imageUrlToPro
         // 3. BUSCA TEXTUAL FTS (Prioridade Baixa / Complementar)
         const currentFilteredVisualCount = collectedSuggestions.filter(s => s.source.endsWith('_filtered')).length;
         if (currentFilteredVisualCount < 2) { 
-          // MODIFICADO: Usar nome + descrição completa para a busca FTS. A tokenização ocorre em searchProducts.
           const ftsSearchInput = `${furniture.name} ${furniture.description}`;
           console.log(`[AI Proc] Poucas sugestões visuais filtradas (${currentFilteredVisualCount}). Recorrendo à FTS para "${furniture.name}" com input: "${ftsSearchInput.substring(0, 100)}...".`);
           const textualResults = await storage.findRelevantProducts(project.userId, ftsSearchInput);
+          
           if (textualResults.length > 0) {
-            console.log(`[AI Proc] FTS para "${furniture.name}" encontrou ${textualResults.length} resultados.`);
-            textualResults.forEach(p_text => {
-              if (!collectedSuggestions.find(ex => ex.id === p_text.id)) {
-                collectedSuggestions.push({ ...p_text, source: 'textual_fts' });
-              }
-            });
+            console.log(`[AI Proc] FTS para "${furniture.name}" encontrou ${textualResults.length} resultados brutos.`);
+            
+            const normalizedFurnitureNameForFilter = normalizeText(furniture.name);
+            const filteredTextualResults = textualResults.filter(p =>
+              (p.category && normalizeText(p.category).includes(normalizedFurnitureNameForFilter)) ||
+              (p.name && normalizeText(p.name).includes(normalizedFurnitureNameForFilter))
+            );
+
+            if (filteredTextualResults.length > 0) {
+              console.log(`[AI Proc] FTS para "${furniture.name}": ${filteredTextualResults.length} resultados APÓS FILTRO DE CATEGORIA.`);
+              filteredTextualResults.forEach(p_text => {
+                if (!collectedSuggestions.find(ex => ex.id === p_text.id)) {
+                  collectedSuggestions.push({ ...p_text, source: 'textual_fts_filtered' }); 
+                }
+              });
+            } else {
+              console.log(`[AI Proc] FTS para "${furniture.name}": Nenhum resultado após filtro de categoria.`);
+            }
           }
         }
         
@@ -758,16 +770,17 @@ export async function processDesignProjectImage(projectId: number, imageUrlToPro
             const sourcePriority: Record<string, number> = {
                 'visual_region_filtered': 1,
                 'visual_global_filtered': 2,
-                'visual_region_unfiltered': 3,
-                'textual_fts': 4
+                'textual_fts_filtered': 3, // Prioridade ajustada
+                'visual_region_unfiltered': 4, 
+                'textual_fts': 5 // FTS não filtrada teria prioridade ainda menor (não estamos usando agora)
             };
             if (sourcePriority[a.source] !== sourcePriority[b.source]) {
                 return sourcePriority[a.source] - sourcePriority[b.source];
             }
-            if (a.source.startsWith('visual')) { // Inclui _filtered e _unfiltered
+            if (a.source.startsWith('visual')) { 
                 return (a.distance || Infinity) - (b.distance || Infinity);
-            } else if (a.source === 'textual_fts') {
-                return (b.relevance || 0) - (a.relevance || 0); // Maior relevance é melhor
+            } else if (a.source.startsWith('textual_fts')) { // cobre _filtered
+                return (b.relevance || 0) - (a.relevance || 0); 
             }
             return 0;
         });
@@ -1079,23 +1092,10 @@ async function performSingleInpaintingStep(baseImageUrl: string, item: DesignPro
     }
     console.log(`[Inpainting Step] BBox calculada para item ${item.id}: ${rectWidth}x${rectHeight} em ${rectX},${rectY} (Base: ${imageWidth}x${imageHeight})`);
 
-    // Adicionando a checagem de tamanho mínimo da BBox
-    const MIN_BBOX_WIDTH = 50; // Definir um valor razoável
-    const MIN_BBOX_HEIGHT = 50; // Definir um valor razoável
-    // Recalcular a BBox para garantir que está dentro dos limites da imagem antes da checagem
-    // (A lógica de cálculo da BBox já deve fazer isso, mas é bom garantir o contexto)
-    // Supondo que rectX, rectY, rectWidth, rectHeight já foram calculados e ajustados aos limites da imagem.
-    console.log(`[Inpainting Step] BBox calculada para item ${item.id}: ${rectWidth}x${rectHeight} em ${rectX},${rectY} (Base: ${imageWidth}x${imageHeight})`);
-
-    if (rectWidth < MIN_BBOX_WIDTH || rectHeight < MIN_BBOX_HEIGHT) {
-      console.warn(`[Inpainting Step] BBox para item ${item.id} (${rectWidth}x${rectHeight}) é menor que o mínimo (${MIN_BBOX_WIDTH}x${MIN_BBOX_HEIGHT}). Pulando inpainting.`);
-      return null; // Ou retorna baseImageUrl se a função chamadora espera sempre uma URL
-    }
-
     // Etapa 2: Preparar Máscara
     const blackBackground = await sharp({ create: { width: imageWidth, height: imageHeight, channels: 3, background: { r: 0, g: 0, b: 0 } } }).png().toBuffer();
     const whiteRectangle = await sharp({ create: { width: rectWidth, height: rectHeight, channels: 3, background: { r: 255, g: 255, b: 255 } } }).png().toBuffer();
-    maskBuffer = await sharp(blackBackground) // Atribuição
+    maskBuffer = await sharp(blackBackground)
       .composite([{ input: whiteRectangle, left: rectX, top: rectY }])
       .grayscale()
       .png()
@@ -1127,10 +1127,9 @@ async function performSingleInpaintingStep(baseImageUrl: string, item: DesignPro
       }])
       .png() 
       .toBuffer();
-    primedImageBase64 = `data:image/png;base64,${primedBuffer.toString('base64')}`; // Atribuição
+    primedImageBase64 = `data:image/png;base64,${primedBuffer.toString('base64')}`; 
     console.log(`[Inpainting Step] Imagem Primed preparada para item ${item.id}. Produto redimensionado para ${resizedInfo.width}x${resizedInfo.height}, posicionado em ${offsetX},${offsetY}.`);
 
-    // Definir o prompt AQUI, depois que product.name e product.description são conhecidos e antes de ser usado
     inpaintingPrompt = `A photo of a ${product.name}, ${product.description || 'high quality'}.`;
     console.log(`[Inpainting Step] Prompt para Replicate item ${item.id}: "${inpaintingPrompt}"`);
     console.log(`[Inpainting Step] Primed image base64 (length) para item ${item.id}: ${primedImageBase64?.length || 'N/A'}`);
@@ -1142,7 +1141,6 @@ async function performSingleInpaintingStep(baseImageUrl: string, item: DesignPro
   
   // Etapa 4: Chamar Replicate 
   try {
-    // Agora inpaintingPrompt está acessível aqui
     const replicateApiKey = process.env.REPLICATE_API_TOKEN;
     if (!replicateApiKey) {
       console.error("[Inpainting Step] REPLICATE_API_TOKEN não configurado.");
