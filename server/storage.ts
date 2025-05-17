@@ -82,6 +82,7 @@ export interface IStorage {
   findRelevantProducts(userId: number, description: string): Promise<Product[]>;
   getProductsDetails(productIds: number[]): Promise<Record<number, Product>>;
   findProductsByEmbedding(userId: number, imageEmbeddingVector: number[], limit?: number): Promise<(Product & { distance?: number })[]>;
+  getProductCategoriesForUser(userId: number): Promise<string[]>;
 
   // FloorPlan methods
   createFloorPlan(data: InsertFloorPlan): Promise<FloorPlan>;
@@ -738,6 +739,22 @@ export class DatabaseStorage implements IStorage {
       return results.map(res => ({ ...res.product, distance: res.distance }));
     } catch (error) {
       console.error(`Error finding products by embedding for userId ${userId}:`, error);
+      return [];
+    }
+  }
+
+  async getProductCategoriesForUser(userId: number): Promise<string[]> {
+    try {
+      const results = await db.selectDistinct({ category: products.category })
+        .from(products)
+        .where(and(
+          eq(products.userId, userId),
+          isNotNull(products.category) 
+        ));
+      // Filtrar categorias nulas ou vazias que podem vir do banco e garantir que são strings
+      return results.map(r => r.category).filter(c => c && c.trim() !== '') as string[];
+    } catch (error) {
+      console.error(`[Storage] Error fetching categories for user ${userId}:`, error);
       return [];
     }
   }

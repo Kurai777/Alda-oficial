@@ -696,9 +696,16 @@ export async function processDesignProjectImage(projectId: number, imageUrlToPro
                     collectedSuggestions.push(...filteredByRegionType.map(p => ({ ...p, source: 'visual_region_filtered' })));
                     console.log(`[AI Proc] Região "${furniture.name}": ${filteredByRegionType.length} filtrados por tipo.`);
                   } else {
-                    // Adiciona os não filtrados da região como baixa prioridade se o filtro forte falhou
-                    collectedSuggestions.push(...visualRegionResults.slice(0, 1).map(p => ({ ...p, source: 'visual_region_unfiltered' }))); // Top 1 apenas
-                    console.log(`[AI Proc] Região "${furniture.name}": Filtro de tipo falhou. Adicionando ${visualRegionResults.slice(0, 1).length} não filtrado (baixa prioridade).`);
+                    // Adiciona os não filtrados da região como BAIXA PRIORIDADE se o filtro forte falhou
+                    // MAS SÓ SE A CATEGORIA DETECTADA EXISTIR NO CATÁLOGO DO USUÁRIO
+                    const userCategories = await storage.getProductCategoriesForUser(project.userId); 
+                    const normalizedDetectedCategoryForLog = normalizeText(furniture.name); // Para log
+                    if (userCategories.some(cat => normalizeText(cat).includes(normalizedDetectedCategoryForLog))) {
+                        collectedSuggestions.push(...visualRegionResults.slice(0, 1).map(p => ({ ...p, source: 'visual_region_unfiltered' }))); 
+                        console.log(`[AI Proc] Região "${furniture.name}": Filtro de tipo falhou, mas categoria '${normalizedDetectedCategoryForLog}' existe no catálogo. Adicionando ${visualRegionResults.slice(0, 1).length} não filtrado (baixa prioridade).`);
+                    } else {
+                        console.log(`[AI Proc] Região "${furniture.name}": Filtro de tipo falhou E categoria '${normalizedDetectedCategoryForLog}' NÃO encontrada no catálogo do usuário. Pulando fallback não filtrado para esta região.`);
+                    }
                   }
                 }
               }
@@ -1021,13 +1028,9 @@ export async function triggerInpaintingForItem(itemId: number, projectId: number
 async function performSingleInpaintingStep(baseImageUrl: string, item: DesignProjectItem, product: Product): Promise<string | null> {
   console.log(`[Inpainting Step] Iniciando para item ID: ${item.id} sobre imagem base: ${baseImageUrl.substring(0, 60)}...`);
 
-  // Declaração de variáveis no escopo mais alto da função
   let imageWidth: number;
   let imageHeight: number;
-  let rectX: number;
-  let rectY: number;
-  let rectWidth: number;
-  let rectHeight: number;
+  let rectX: number, rectY: number, rectWidth: number, rectHeight: number;
   let maskBuffer: Buffer;
   let primedImageBase64: string;
 
@@ -1040,20 +1043,14 @@ async function performSingleInpaintingStep(baseImageUrl: string, item: DesignPro
     return null;
   }
 
-  // Envolver todo o processo de preparação da imagem em um único try...catch
   try {
-    // Etapa 1: Calcular dimensões da imagem base e da BBox em pixels
     const baseImageBufferForMetadata = await fetchImageAsBuffer(baseImageUrl);
     const metadata = await sharp(baseImageBufferForMetadata).metadata();
-    imageWidth = metadata.width ?? 0; // Atribuição
-    imageHeight = metadata.height ?? 0; // Atribuição
-
-    if (imageWidth === 0 || imageHeight === 0) {
-      throw new Error("Dimensões da imagem base inválidas ou não obtidas.");
-    }
+    imageWidth = metadata.width ?? 0;
+    imageHeight = metadata.height ?? 0;
+    if (imageWidth === 0 || imageHeight === 0) throw new Error("Dimensões da imagem base inválidas.");
 
     const bboxInput = item.detectedObjectBoundingBox as any;
-    // Variáveis rectX, rectY, rectWidth, rectHeight são atribuídas aqui dentro
     if (bboxInput.x_min !== undefined && bboxInput.x_max !== undefined && Math.max(bboxInput.x_min, bboxInput.y_min, bboxInput.x_max, bboxInput.y_max) <= 1.5 && Math.max(bboxInput.x_min, bboxInput.y_min, bboxInput.x_max, bboxInput.y_max) > 0) { 
         rectX = Math.round(bboxInput.x_min * imageWidth);
         rectY = Math.round(bboxInput.y_min * imageHeight);
@@ -1080,7 +1077,20 @@ async function performSingleInpaintingStep(baseImageUrl: string, item: DesignPro
     if (rectWidth <= 0 || rectHeight <= 0) {
         throw new Error(`Bounding box resultou em dimensões inválidas: w=${rectWidth}, h=${rectHeight}`);
     }
-    console.log(`[Inpainting Step] BBox calculada para item ${item.id}: ${rectWidth}x${rectHeight} em ${rectX},${rectY} (Imagem Base: ${imageWidth}x${imageHeight})`);
+    console.log(`[Inpainting Step] BBox calculada para item ${item.id}: ${rectWidth}x${rectHeight} em ${rectX},${rectY} (Base: ${imageWidth}x${imageHeight})`);
+
+    // Adicionando a checagem de tamanho mínimo da BBox
+    const MIN_BBOX_WIDTH = 50; // Definir um valor razoável
+    const MIN_BBOX_HEIGHT = 50; // Definir um valor razoável
+    // Recalcular a BBox para garantir que está dentro dos limites da imagem antes da checagem
+    // (A lógica de cálculo da BBox já deve fazer isso, mas é bom garantir o contexto)
+    // Supondo que rectX, rectY, rectWidth, rectHeight já foram calculados e ajustados aos limites da imagem.
+    console.log(`[Inpainting Step] BBox calculada para item ${item.id}: ${rectWidth}x${rectHeight} em ${rectX},${rectY} (Base: ${imageWidth}x${imageHeight})`);
+
+    if (rectWidth < MIN_BBOX_WIDTH || rectHeight < MIN_BBOX_HEIGHT) {
+      console.warn(`[Inpainting Step] BBox para item ${item.id} (${rectWidth}x${rectHeight}) é menor que o mínimo (${MIN_BBOX_WIDTH}x${MIN_BBOX_HEIGHT}). Pulando inpainting.`);
+      return null; // Ou retorna baseImageUrl se a função chamadora espera sempre uma URL
+    }
 
     // Etapa 2: Preparar Máscara
     const blackBackground = await sharp({ create: { width: imageWidth, height: imageHeight, channels: 3, background: { r: 0, g: 0, b: 0 } } }).png().toBuffer();
@@ -1120,14 +1130,20 @@ async function performSingleInpaintingStep(baseImageUrl: string, item: DesignPro
     primedImageBase64 = `data:image/png;base64,${primedBuffer.toString('base64')}`; // Atribuição
     console.log(`[Inpainting Step] Imagem Primed preparada para item ${item.id}. Produto redimensionado para ${resizedInfo.width}x${resizedInfo.height}, posicionado em ${offsetX},${offsetY}.`);
 
+    // Adicionar logs para o prompt e para a imagem primed (ou seu tamanho)
+    const inpaintingPrompt = `A photo of a ${product.name}, ${product.description || 'high quality'}.`; // Este já existe
+    console.log(`[Inpainting Step] Prompt para Replicate item ${item.id}: "${inpaintingPrompt}"`);
+    // console.log(`[Inpainting Step] Primed image base64 (primeiros 100 chars) para item ${item.id}: ${primedImageBase64.substring(0,100)}...`);
+    console.log(`[Inpainting Step] Primed image base64 (length) para item ${item.id}: ${primedImageBase64?.length || 'N/A'}`);
+
   } catch (imagePrepError) {
-      console.error(`[Inpainting Step] Erro durante preparação de imagem/máscara para item ${item.id}:`, imagePrepError);
-      return null; // Retorna null se a preparação falhar
+    console.error(`[Inpainting Step] Erro durante preparação de imagem/máscara para item ${item.id}:`, imagePrepError);
+    return null;
   }
   
-  // Etapa 4: Chamar Replicate (só executa se as etapas anteriores foram bem-sucedidas)
+  // Etapa 4: Chamar Replicate 
   try {
-    const inpaintingPrompt = `A photo of a ${product.name}, ${product.description || 'high quality'}.`;
+    // O prompt já foi definido e logado acima
     const replicateApiKey = process.env.REPLICATE_API_TOKEN;
     if (!replicateApiKey) {
       console.error("[Inpainting Step] REPLICATE_API_TOKEN não configurado.");
