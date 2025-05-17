@@ -1,6 +1,6 @@
 # Estado Atual, Desafios e Próximos Passos do Projeto Ald-a (Foco: Design com IA)
 
-**Data da Última Atualização:** (Preencher com a data atual)
+**Data da Última Atualização:** 16 de Maio de 2025
 
 ## 1. Visão Geral do Projeto Ald-a
 
@@ -25,143 +25,91 @@ O usuário envia uma imagem de um ambiente (planta baixa ou um render existente)
 3.  Permitir que o usuário **confirme ou altere** essas sugestões para cada objeto.
 4.  **Gerar (Renderizar)** uma nova imagem do ambiente, substituindo os móveis originais pelos produtos selecionados do catálogo, de forma realista e integrada à cena (considerando perspectiva, iluminação, etc.).
 
-### 2.2. Progresso Realizado nesta Funcionalidade
+### 2.2. Progresso Realizado nesta Funcionalidade (Atualizado em 16/05/2025)
 
 **Backend (`server/`):**
 
 *   **Análise de Imagem com GPT-4o Vision (`ai-design-processor.ts`):**
-    *   A imagem do usuário é enviada ao GPT-4o Vision.
-    *   O prompt foi elaborado para que a IA retorne uma descrição geral do ambiente e uma lista de `identified_furniture`, onde cada item deve conter: `name` (nome genérico), `description` (detalhes do móvel) e, crucialmente, `bounding_box` (coordenadas percentuais x_min, y_min, x_max, y_max).
-*   **Preparação de Dados para Inpainting (`ai-design-processor.ts`):**
-    *   Para cada objeto com `bounding_box` e um produto do catálogo associado (assumindo que a seleção do usuário será armazenada e recuperada corretamente no futuro):
-        *   **Máscara:** Geração de uma imagem de máscara (fundo preto, retângulo branco na `bounding_box`) usando a biblioteca `sharp`.
-        *   **Imagem "Primed":** A imagem do produto do catálogo selecionado é baixada, redimensionada (mantendo proporção, com fundo transparente via `sharp`) e composta (colada) sobre a imagem original do cliente na posição da `bounding_box` (também via `sharp`).
-        *   Os buffers da máscara e da imagem "primed" são convertidos para base64 (data URIs) para envio à API de inpainting.
-*   **Serviço de Chamada ao Replicate (`replicate-service.ts`):**
-    *   Implementada a função `runInpaintingWithProduct`.
-    *   Configurada para chamar o modelo `stability-ai/stable-diffusion-inpainting` (versão específica `95b72231...`) no Replicate.
-    *   Recebe a imagem "primed", a máscara, um prompt textual detalhado e parâmetros de inferência.
-*   **Integração da Chamada ao Replicate (`ai-design-processor.ts`):**
-    *   A função `processDesignProjectImage` agora chama `runInpaintingWithProduct`.
-    *   A URL da imagem resultante do Replicate é atualmente logada no console. O salvamento efetivo no banco de dados está pendente da correção do `storage.ts`.
+    *   Mantém-se a análise da imagem do cliente via GPT-4o para descrição geral e identificação de móveis com `name`, `description`, e `bounding_box`.
+*   **Geração de Embedding Visual por Região do Objeto:**
+    *   **Implementado:** Para cada objeto com `bounding_box`, a região é recortada com `sharp`, salva temporariamente, e um embedding CLIP é gerado para este recorte.
+    *   Estes embeddings de região são usados para buscar produtos visualmente similares no catálogo via `storage.findProductsByEmbedding`.
+*   **Sugestão de Produtos para `DesignProjectItem`:**
+    *   Os `DesignProjectItem` agora são preenchidos prioritariamente com sugestões da busca visual por região. A busca textual serve como fallback.
 *   **Rotas da API (`routes.ts`):**
-    *   `POST /api/floorplans/:floorPlanId/initiate-analysis`: Dispara a análise da imagem da planta baixa (chamando `processDesignProjectImage`).
-    *   `GET /api/ai-design-projects/:projectId/items`: Busca os `DesignProjectItems` (objetos detectados, sugestões) para um projeto. Esta rota foi modificada para tentar popular os detalhes dos produtos sugeridos (product1, product2, product3).
-    *   `PUT /api/ai-design-projects/:projectId/items/:itemId`: Rota iniciada com lógica placeholder para o frontend confirmar/atualizar uma sugestão. **Precisa ser completada para chamar `storage.updateDesignProjectItem`**.
+    *   `POST /api/ai-design-projects`: Funcional para criar novos projetos.
+    *   `GET /api/ai-design-projects`: Nova rota para listar todos os projetos de design do usuário.
+    *   `GET /api/ai-design-projects/:projectId/items`: Busca os itens de um projeto.
+    *   `GET /api/ai-design-projects/:projectId`: Busca detalhes de um projeto específico.
+    *   `PUT /api/ai-design-projects/:projectId/items/:itemId`: Para o usuário selecionar/atualizar sugestões (precisa ser testada e integrada completamente com a lógica de inpainting).
+    *   `POST /api/ai-design-projects/:projectId/initiate-image-analysis`: Funcional para upload de imagem e início da análise.
+    *   `GET /api/products/batch`: Nova rota para buscar detalhes de múltiplos produtos por ID.
+    *   Estrutura de rotas refatorada para modularidade com `ExpressRouter`.
+*   **Serviço de Inpainting (Replicate):** A lógica de preparação de máscara e imagem "primed" em `performSingleInpaintingStep` foi mantida e refatorada para melhor escopo. A chamada ao Replicate acontece após a seleção do produto (fluxo a ser completado).
 
-**Frontend (Lógica anteriormente em `FloorPlanEditorPage.tsx` - arquivo deletado, precisa ser recriado/reintegrado):**
+**Frontend (`client/`):**
 
-*   Exibição da imagem da planta/render.
-*   Chamada à API para iniciar a análise da imagem ao carregar a página.
-*   Busca e listagem dos `DesignProjectItems` com polling para atualizações.
-*   Desenho das `bounding_boxes` (retângulos) sobre a imagem da planta/render.
-*   Exibição de até 3 sugestões de produtos (com imagem, nome, código) para cada objeto detectado.
-*   Botões "Usar este" para cada sugestão, com atualização otimista da UI (a persistência no backend depende da correção do `storage.ts`).
-*   Botão placeholder "Gerar Novo Render com Produtos Selecionados".
+*   **Página de Listagem de Projetos (`design-ai.tsx`):**
+    *   Agora busca e exibe a lista real de projetos do usuário.
+    *   Permite a criação de novos projetos através de um modal, chamando a API real.
+*   **Página de Detalhe do Projeto (`design-ai-project.tsx`):**
+    *   Busca e exibe os detalhes de um projeto, incluindo a imagem carregada e os itens detectados pela IA.
+    *   Implementado `useEffect` para buscar os detalhes dos produtos sugeridos (usando a nova rota batch) e popular a UI.
+    *   Botão de upload de imagem funcional (usando `useRef`).
+    *   Lógica de seleção de produto (`selectProductMutation`) e geração de render final (`generateRenderMutation`) estruturadas, mas o fluxo completo de interação e visualização do inpainting/render final precisa ser testado e refinado.
 
-**Schema (`shared/schema.ts`):**
+**Infraestrutura e Correções Gerais:**
 
-*   O campo `detectedObjectName: text('detected_object_name')` foi adicionado à tabela `designProjectItems`.
-*   O campo `generatedInpaintedImageUrl: text('generated_inpainted_image_url')` foi adicionado à tabela `designProjectItems` para armazenar o resultado do Replicate.
-*   O campo `selectedProductId` e suas relações foram verificados.
+*   **Sincronização com GitHub:** Estabelecido fluxo de versionamento.
+*   **Bugs Críticos Resolvidos:** Problemas de login, criação de projeto (payload `title` vs `name`), e funcionalidade do botão de upload foram corrigidos.
 
-## 3. Problemas Críticos a Serem Corrigidos Manualmente pela Equipe (URGENTE)
+## 3. Problemas Atuais e Pontos de Atenção (16/05/2025)
 
-A funcionalidade completa está atualmente bloqueada por problemas significativos no arquivo `server/storage.ts`. As tentativas de correção via ferramenta de edição assistida por IA foram mal sucedidas em resolver completamente os problemas estruturais e de sintaxe.
+1.  **Erro "ID Inválido" na Rota `/api/products/batch` (Backend/Sincronização):**
+    *   **Problema:** O frontend recebe um erro 400 "ID Inválido" ao tentar buscar detalhes de produtos em batch. Os logs do servidor não indicam que a versão mais recente de `server/routes.ts` (com logs de depuração para esta rota) está sendo executada no Replit.
+    *   **Ação Imediata:** Garantir que o Replit execute a última versão de `server/routes.ts` (puxando do GitHub ou atualizando manualmente no editor web do Replit). Testar novamente e analisar os logs do servidor para diagnosticar como o parâmetro `ids` está sendo recebido e processado.
 
-**É essencial que este arquivo seja revisado e corrigido manualmente para que o backend opere corretamente.**
+2.  **Qualidade e Exibição das Sugestões de Produto:**
+    *   Apesar da busca visual por região estar implementada, a qualidade do filtro por nome/categoria aplicado aos resultados visuais pode precisar de ajustes.
+    *   A busca textual (fallback) raramente retorna resultados úteis e precisa ser melhorada ou substituída por uma busca semântica mais robusta.
+    *   O cálculo e a exibição do `matchScore` precisam ser refinados.
 
-### 3.1. Detalhamento dos Problemas e Ações para `server/storage.ts`
+3.  **Interface do Usuário (UI) para Sugestões:**
+    *   Garantir que, após a correção do item 1, os detalhes dos produtos sugeridos (nome, imagem do produto, etc.) sejam corretamente exibidos na lista de "Móveis Identificados e Sugestões".
 
-1.  **Estrutura da Classe `DatabaseStorage`:**
-    *   **Problema:** Suspeita-se que métodos da classe `DatabaseStorage` podem estar definidos fora do escopo da classe, ou que a estrutura da classe (chaves `{}`) foi corrompida, fazendo com que a classe não implemente corretamente a interface `IStorage`.
-    *   **Ação de Correção:**
-        *   Abrir `server/storage.ts`.
-        *   Confirmar que `export class DatabaseStorage implements IStorage { ... }` (linha ~97 até ~1119, antes de `export const storage = ...;`) engloba TODAS as definições de métodos listados na interface `IStorage` (definida nas linhas 23-95).
-        *   Mover quaisquer métodos da interface que estejam fora da classe para dentro dela. Cuidado com o balanceamento das chaves `{}`.
+4.  **Itens de `TAREFAS_PONTOS_ATENCAO_ALDA.md` (Revisão Pendente):**
+    *   Refinamento da lógica de criação da imagem "primed" e tratamento de transparência (Seção II.2).
+    *   Testes de ponta-a-ponta completos do fluxo de inpainting e render final (Seção V).
+    *   Implementação das melhorias da Seção VI (limpeza de `generatedInpaintedImageUrl`, feedback de progresso granular, etc.).
 
-2.  **Métodos `createDesignProjectItem` e `updateDesignProjectItem`:**
-    *   **Problema:** Além de garantir que estão dentro da classe, suas implementações precisam estar corretas.
-    *   **Ação de Correção:**
-        *   Verificar se ambos são `async` métodos DENTRO de `DatabaseStorage`.
-        *   Suas assinaturas devem ser:
-            ```typescript
-            async createDesignProjectItem(data: NewDesignProjectItem): Promise<DesignProjectItem>;
-            async updateDesignProjectItem(itemId: number, data: Partial<NewDesignProjectItem>): Promise<DesignProjectItem | undefined>;
-            ```
-        *   `createDesignProjectItem` deve conseguir salvar o campo `detectedObjectName` (que é opcional no `NewDesignProjectItem` vindo do `@shared/schema`).
-        *   `updateDesignProjectItem` deve efetivamente atualizar o item no banco com os campos fornecidos em `data` (ex: `suggestedProductId1`, `userFeedback`, e o novo `generatedInpaintedImageUrl`) e atualizar o campo `updatedAt`.
+5.  **Débitos Técnicos de `server/storage.ts`:**
+    *   Conforme mencionado no `RESUMO_DESENVOLVIMENTO_ALDA.md`, ainda podem existir erros de tipo Drizzle que precisam ser investigados e corrigidos para garantir a robustez total das operações de banco de dados.
 
-3.  **Importações Duplicadas/Conflitantes:**
-    *   **Problema:** O linter apontou importações duplicadas ou conflitantes para tipos como `AiDesignChatMessage`.
-    *   **Ação de Correção:** Revisar as primeiras ~20 linhas de `server/storage.ts` e garantir que cada tipo de `@shared/schema` seja importado apenas uma vez.
+## 4. Próximos Passos de Desenvolvimento Sugeridos
 
-4.  **Erro de "Spread Type" em `createProduct` (Linha ~280-295 na última versão vista):**
-    *   **Problema:** O linter persistentemente indicava `Spread types may only be created from object types.` nas linhas `productForDb.colors = [...insertProductData.colors];` (e similar para `materials`), mesmo com verificações `Array.isArray()`.
-    *   **Ação de Correção:** Confirmar que a lógica abaixo (ou similar) está implementada e correta. Se o erro persistir *após a estrutura da classe estar 100% correta*, o problema pode ser com os dados de entrada para `createProduct` vindos de `ai-excel-processor.js` ou `catalog-processor.ts`.
-        ```typescript
-        if (Array.isArray(insertProductData.colors)) {
-          productForDb.colors = [...insertProductData.colors];
-        } else if (insertProductData.colors === null || insertProductData.colors === undefined) {
-          productForDb.colors = insertProductData.colors === undefined ? undefined : [];
-        } // else: não faz nada, deixa undefined para ser deletado.
-        // Similar para materials e sizes (sizes usa .map que é seguro).
-        if (productForDb.colors === undefined) delete productForDb.colors;
-        // etc.
-        ```
+1.  **Estabilização da Busca de Detalhes de Produtos (Prioridade Alta):**
+    *   Resolver o erro "ID Inválido" na rota `/api/products/batch`, garantindo que o Replit execute o código mais recente.
+    *   Confirmar que as sugestões de produtos (com nome e imagem) aparecem corretamente na UI da página do projeto.
 
-5.  **Métodos `createMoodboard` e `updateMoodboard` (Linhas ~561-680 na última versão vista):**
-    *   **Problema:** O linter indicava que propriedades como `id`, `createdAt`, `updatedAt` não existiam no tipo `Partial<InsertMoodboard>`.
-    *   **Ação de Correção:** Garantir que esses métodos não tentem deletar/acessar `id`, `userId`, `createdAt` do objeto de input `moodboardUpdateData`. O `updatedAt` deve ser adicionado ao payload final que vai para o `db.update()`. A lógica de remover chaves `undefined` do input é correta.
+2.  **Teste e Refinamento do Fluxo de Seleção e Inpainting Individual:**
+    *   Permitir que o usuário selecione uma das sugestões para um item.
+    *   Garantir que `updateDesignProjectItem` seja chamado corretamente para salvar `selectedProductId`.
+    *   Verificar se `triggerInpaintingForItem` é chamado e se a `generatedInpaintedImageUrl` é gerada e exibida.
 
-### 3.2. Ações de Correção Manual para `shared/schema.ts`
+3.  **Implementar Geração do Render Final:**
+    *   Conectar o botão "Gerar Render Final" à `generateRenderMutation`.
+    *   Testar a função `generateFinalRenderForProject` no backend, que aplica inpainting iterativamente.
+    *   Exibir a `generatedRenderUrl` final.
 
-1.  **`designProjectItems.detectedObjectName`:**
-    *   Confirmar: `detectedObjectName: text('detected_object_name'),` está presente.
-2.  **`designProjectItems.detectedObjectBoundingBox`:**
-    *   Confirmar: O tipo está como `jsonb('detected_object_bounding_box')`. Se estiver `json(...)` e não causar problemas, pode ser mantido, mas `jsonb` é geralmente melhor.
-3.  **`designProjectItems.selectedProductId`:**
-    *   Confirmar: `selectedProductId: integer('selected_product_id').references(() => products.id, { onDelete: "set null" }),` existe.
-    *   Confirmar Relação: Em `designProjectItemsRelations`, a relação `selectedProduct` deve usar `fields: [designProjectItems.selectedProductId]`.
-4.  **`designProjectItems.generatedInpaintedImageUrl`:**
-    *   Confirmar: `generatedInpaintedImageUrl: text('generated_inpainted_image_url'),` está presente.
+4.  **Aprimorar Qualidade das Sugestões (Iterativo):**
+    *   **Filtro da Busca Visual por Região:** Melhorar o critério de filtro após a busca por embedding da região (além de nome/categoria, talvez usar atributos textuais básicos).
+    *   **Extração de Atributos (IA):** Implementar a extração de atributos (cor, tipo, estilo) da descrição textual fornecida pelo GPT-4o para cada item detectado. Usar esses atributos para refinar as buscas no catálogo.
+    *   **Melhorar Busca Textual:** Se mantida, explorar técnicas de busca textual mais flexíveis (ex: full-text search do PostgreSQL, ou extração de keywords).
 
-### 3.3. Teste Pós-Correção Manual Obrigatório
+5.  **Histórico de Chat do Projeto:**
+    *   Implementar a exibição das `AiDesignChatMessage` na página do projeto para fornecer contexto e registrar as interações e sugestões da IA.
 
-*   **Rodar Migração:** Após quaisquer alterações em `shared/schema.ts`, executar `npm run db:push` (ou o comando de migração Drizzle configurado) é **OBRIGATÓRIO** para aplicar as mudanças ao banco de dados Neon.
-*   **Iniciar Servidor:** Tentar rodar o servidor backend (ex: `npm run dev`). Observar o console do Replit para quaisquer erros de compilação do TypeScript ou erros em tempo de execução ao iniciar. O servidor precisa iniciar sem erros para prosseguir.
-
-## 4. Próximas Etapas de Desenvolvimento (Após Correções Manuais no Backend)
-
-Com o backend estabilizado:
-
-1.  **Completar Rota PUT para Itens (`server/routes.ts`):**
-    *   Na rota `PUT /api/ai-design-projects/:projectId/items/:itemId`, fazer com que ela chame `await storage.updateDesignProjectItem(itemId, updateData)` (onde `updateData` inclui `suggestedProductId1`, `userFeedback`, `notes`, e o `selectedProductId` que o usuário eventualmente escolher).
-    *   Retornar o `updatedItem`.
-2.  **Remover `// @ts-ignore` (`server/ai-design-processor.ts`):**
-    *   Na criação de `newItemData` dentro de `processDesignProjectImage`, remover o comentário `// @ts-ignore` de `detectedObjectName`.
-3.  **Lógica de `productToInpaint` (`server/ai-design-processor.ts`):**
-    *   Modificar a determinação de `productToInpaint`. Antes de chamar `runInpaintingWithProduct`, buscar o `DesignProjectItem` correspondente ao `furniture` atual (que pode ter sido atualizado pela rota PUT).
-    *   Se o `userFeedback` for `'confirmed'` e `suggestedProductId1` (ou `selectedProductId`) estiver preenchido, usar esse ID para buscar o produto (`await storage.getProduct(...)`) e essa será a imagem do produto a ser usada no inpainting. Se nenhum produto estiver confirmado, pode-se pular o inpainting para esse objeto ou usar um default.
-4.  **Salvar Imagem Gerada pelo Replicate (`server/ai-design-processor.ts`):**
-    *   No bloco `if (generatedImageUrl)` (após a chamada a `runInpaintingWithProduct`), chamar `await storage.updateDesignProjectItem(itemId, { generatedInpaintedImageUrl: generatedImageUrl })` para salvar a URL no item do projeto. (Será necessário ter o `itemId` correto aqui).
-5.  **Frontend - Exibir Imagem Renderizada e Finalizar Fluxo:**
-    *   Na (recriada) `FloorPlanEditorPage.tsx`:
-        *   A query que busca `designItems` deve trazer o novo campo `generatedInpaintedImageUrl`.
-        *   Exibir esta imagem para cada item como "Prévia do Render do Objeto".
-        *   **Botão "Gerar Render Final do Ambiente":**
-            *   Este botão, quando clicado, chamará uma **nova rota de backend** (ex: `POST /api/ai-design-projects/:projectId/generate-final-render`).
-            *   **Lógica da Nova Rota Backend (`generate-final-render`):**
-                *   Buscar todos os `DesignProjectItem`s do projeto que foram confirmados (`userFeedback: 'confirmed'`) e que possuem um `selectedProductId` (ou `suggestedProductId1` se for o confirmado).
-                *   Pegar a imagem original do projeto (`clientRenderImageUrl` ou `clientFloorPlanImageUrl`).
-                *   **Iterativamente aplicar o inpainting:** Para cada item confirmado, pegar a imagem do produto selecionado, a `bounding_box`, criar a máscara e a imagem "primed" (usando a saída do inpainting anterior como base para o próximo). Chamar `runInpaintingWithProduct`.
-                *   A imagem final após todos os inpaintings é a `finalRenderUrl`.
-                *   Salvar esta `finalRenderUrl` no objeto `DesignProject` no banco (`await storage.updateDesignProject(projectId, { generatedRenderUrl: finalRenderUrl, status: 'completed_render' });`).
-                *   Retornar a `finalRenderUrl` para o frontend.
-            *   O frontend então exibe esta imagem final.
-6.  **Refinamentos da UI/UX:**
-    *   Adicionar `Toast notifications` para todas as operações importantes.
-    *   Melhorar o feedback de carregamento/processamento.
+6.  **Revisar e Abordar Itens Pendentes de `TAREFAS_PONTOS_ATENCAO_ALDA.md` e `PROJECT_PLAN.md`.**
 
 ## 5. Banco de Dados Neon (Contexto para a Equipe)
 

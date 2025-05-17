@@ -8,6 +8,34 @@
 
 Este documento resume o progresso significativo, as decisões técnicas chave e o estado atual do projeto Ald-a, com foco especial nos avanços recentes na funcionalidade de "Design com IA" e na nova base para "Plantas Baixas Interativas". O objetivo é fornecer um panorama claro e detalhado para a equipe que dará continuidade ao projeto, destacando tanto os sucessos quanto os pontos que ainda requerem atenção.
 
+## Avanços Recentes (Maio de 2025) - Foco em Design com IA e Estabilização
+
+Nesta fase, o foco foi em refinar e estabilizar o fluxo ponta-a-ponta da funcionalidade de "Design com IA", desde a criação do projeto até a sugestão de produtos baseada em análise visual da imagem do cliente. Paralelamente, foram corrigidos diversos bugs críticos que impediam funcionalidades básicas como login e criação de projetos, e foi estabelecido um fluxo de trabalho mais robusto utilizando Git e GitHub para sincronização de código com o ambiente Replit.
+
+**Principais Destaques:**
+
+1.  **Estabilização do Fluxo de Criação e Listagem de Projetos de Design com IA:**
+    *   **Criação de Projetos (Frontend):** A interface em `client/src/pages/design-ai.tsx` agora permite a criação de novos projetos de design com IA, comunicando-se corretamente com o backend (`POST /api/ai-design-projects`). Inclui feedback ao usuário e redirecionamento.
+    *   **Listagem de Projetos (Frontend):** A mesma página (`client/src/pages/design-ai.tsx`) agora busca e exibe a lista de projetos reais do usuário a partir da API (`GET /api/ai-design-projects`), substituindo os dados mockados. Os cards de projeto foram melhorados para mostrar informações relevantes como thumbnail e data de criação.
+
+2.  **Aprimoramento Substancial das Sugestões de Produto (Backend):**
+    *   **Busca Visual por Região do Objeto:** O núcleo do `server/ai-design-processor.ts` foi refatorado. Agora, para cada objeto detectado pela IA (GPT-4o) que possui uma `bounding_box`:
+        *   A região do objeto é recortada da imagem original usando `sharp`.
+        *   Um embedding visual (CLIP) é gerado especificamente para este recorte (salvando-o temporariamente em arquivo para compatibilidade com o `CLIPService`).
+        *   Produtos do catálogo são buscados por similaridade visual com este embedding da região (`storage.findProductsByEmbedding` com `pgvector`).
+        *   Esses resultados visuais são priorizados como sugestões para o `DesignProjectItem`, com um fallback para a busca textual anterior se a busca por região falhar.
+    *   **Busca de Detalhes dos Produtos Sugeridos:** Para que o frontend possa exibir informações completas das sugestões (nome, imagem do produto), foi implementado:
+        *   Uma nova rota no backend `GET /api/products/batch` que retorna detalhes de múltiplos produtos dados seus IDs (utilizando `storage.getProductsDetails`).
+        *   Uma função `getProductsDetailsApi` no `client/src/lib/apiClient.ts`.
+        *   A página de visualização de um projeto (`client/src/pages/design-ai-project.tsx`) foi atualizada para usar essa função e popular dinamicamente os detalhes dos produtos sugeridos.
+
+3.  **Correção de Bugs Críticos e Melhorias de Infraestrutura:**
+    *   **Login e Autenticação:** Resolvido o problema fundamental que impedia o login, corrigindo as URLs das rotas de autenticação no frontend e garantindo que o `apiRouter` no backend processasse essas chamadas corretamente, evitando o fallback do Vite.
+    *   **Criação de Projetos (Payload):** Corrigido o payload enviado pelo frontend na criação de projetos (de `title` para `name`), alinhando com a expectativa do backend.
+    *   **Upload de Imagem do Projeto:** O botão "Carregar Imagem Base" na página do projeto foi corrigido utilizando `useRef` para acionar programaticamente o input de arquivo escondido.
+    *   **Estrutura de Rotas do Backend:** A função `registerRoutes` foi refatorada para modularidade, recebendo um `ExpressRouter` e removendo prefixos `/api` internos.
+    *   **Sincronização com GitHub:** O projeto foi configurado para usar um repositório GitHub, estabelecendo um fluxo de `commit & push` para o GitHub, seguido de `pull` no Replit, visando maior consistência do código no ambiente de execução.
+
 ## Principais Sucessos e Funcionalidades Implementadas
 
 O desenvolvimento recente concentrou-se em tornar a funcionalidade de "Design com IA" robusta e interativa, e em construir a fundação para o processamento de plantas baixas.
