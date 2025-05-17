@@ -624,31 +624,43 @@ Se NENHUM MÓVEL for identificável, retorne um array JSON vazio []. Evite frase
       console.error("[AI Design Processor] Resposta da API Vision vazia ou inválida.");
       visionAnalysisFailed = true; 
     } else {
-      console.log("[AI Design Processor] Resposta da API Vision recebida.");
+      console.log("[AI Design Processor] Resposta da API Vision recebida:");
       try {
         const parsedJsonResponse = JSON.parse(visionContent);
+
         if (Array.isArray(parsedJsonResponse)) {
+          // Caso 1: A IA retornou um array de objetos (comportamento esperado)
           detectedObjects = parsedJsonResponse.map((item: any) => ({
               name: item.name,
               description: item.description,
               bbox: item.bbox,
               originalName: item.name 
           }));
-          console.log(`[AI Design Processor] ${detectedObjects.length} objetos detectados e parseados da visão.`);
+          console.log(`[AI Design Processor] ${detectedObjects.length} objetos detectados e parseados da visão (formato array).`);
+        } else if (typeof parsedJsonResponse === 'object' && parsedJsonResponse !== null && parsedJsonResponse.name && parsedJsonResponse.bbox) {
+          // Caso 2: A IA retornou um ÚNICO objeto (como no log) - vamos envolvê-lo em um array
+          console.log("[AI Design Processor] A IA Vision retornou um único objeto, envolvendo em array.");
+          detectedObjects = [{
+              name: parsedJsonResponse.name,
+              description: parsedJsonResponse.description,
+              bbox: parsedJsonResponse.bbox,
+              originalName: parsedJsonResponse.name 
+          }];
+          console.log(`[AI Design Processor] 1 objeto detectado e parseado da visão (formato objeto único).`);
+        } else if (parsedJsonResponse && parsedJsonResponse.identified_furniture && Array.isArray(parsedJsonResponse.identified_furniture)) {
+          // Caso 3: Fallback para o formato legado com a chave "identified_furniture"
+          console.warn("[AI Design Processor] Formato JSON não é array nem objeto único esperado, tentando parse legado com 'identified_furniture':", visionContent);
+          detectedObjects = parsedJsonResponse.identified_furniture.map((item: any) => ({
+              name: item.name,
+              description: item.description,
+              bbox: item.bounding_box || item.bbox, 
+              originalName: item.name
+          }));
+          console.log(`[AI Design Processor] ${detectedObjects.length} objetos detectados (formato legado) e parseados da visão.`);
         } else {
-          console.warn("[AI Design Processor] Formato JSON inesperado da API Vision (não é um array), tentando parse legado:", visionContent);
-          if (parsedJsonResponse && parsedJsonResponse.identified_furniture && Array.isArray(parsedJsonResponse.identified_furniture)) {
-               detectedObjects = parsedJsonResponse.identified_furniture.map((item: any) => ({
-                  name: item.name,
-                  description: item.description,
-                  bbox: item.bounding_box || item.bbox, 
-                  originalName: item.name
-              }));
-              console.log(`[AI Design Processor] ${detectedObjects.length} objetos detectados (formato legado) e parseados da visão.`);
-          } else {
-              visionAnalysisFailed = true;
-              console.warn("[AI Design Processor] Falha ao parsear JSON da visão, mesmo com fallback para formato legado. Conteúdo:", visionContent);
-          }
+          // Caso 4: Formato completamente inesperado
+          visionAnalysisFailed = true;
+          console.warn("[AI Design Processor] Falha ao parsear JSON da visão. Formato inesperado não é array, nem objeto único, nem formato legado. Conteúdo:", visionContent);
         }
       } catch (parseError) {
         console.error("[AI Design Processor] Erro CRÍTICO ao parsear JSON da API Vision:", parseError, "Conteúdo:", visionContent);
