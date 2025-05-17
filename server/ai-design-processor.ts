@@ -737,19 +737,18 @@ export async function processDesignProjectImage(projectId: number, imageUrlToPro
         }
 
         // 3. BUSCA TEXTUAL FTS (Prioridade Baixa / Complementar)
-        // Tenta buscar por FTS se não temos pelo menos 2 sugestões visuais filtradas (região ou global)
         const currentFilteredVisualCount = collectedSuggestions.filter(s => s.source.endsWith('_filtered')).length;
-        if (currentFilteredVisualCount < 2) {
-          console.log(`[AI Proc] Poucas sugestões visuais filtradas (${currentFilteredVisualCount}). Recorrendo à FTS para "${furniture.name}".`);
-          // Para FTS, usar uma descrição mais concisa: nome do móvel + primeiras palavras da descrição.
-          const ftsSearchText = `${furniture.name} ${furniture.description.split(' ').slice(0, 5).join(' ')}`;
-          const textualResults = await storage.findRelevantProducts(project.userId, ftsSearchText);
+        if (currentFilteredVisualCount < 2) { 
+          // MODIFICADO: Usar nome + descrição completa para a busca FTS. A tokenização ocorre em searchProducts.
+          const ftsSearchInput = `${furniture.name} ${furniture.description}`;
+          console.log(`[AI Proc] Poucas sugestões visuais filtradas (${currentFilteredVisualCount}). Recorrendo à FTS para "${furniture.name}" com input: "${ftsSearchInput.substring(0, 100)}...".`);
+          const textualResults = await storage.findRelevantProducts(project.userId, ftsSearchInput);
           if (textualResults.length > 0) {
-            console.log(`[AI Proc] FTS para "${furniture.name}" (texto: "${ftsSearchText}"): ${textualResults.length} resultados.`);
+            console.log(`[AI Proc] FTS para "${furniture.name}" encontrou ${textualResults.length} resultados.`);
             textualResults.forEach(p_text => {
               if (!collectedSuggestions.find(ex => ex.id === p_text.id)) {
                 collectedSuggestions.push({ ...p_text, source: 'textual_fts' });
-                }
+              }
             });
           }
         }
@@ -1033,6 +1032,7 @@ async function performSingleInpaintingStep(baseImageUrl: string, item: DesignPro
   let rectX: number, rectY: number, rectWidth: number, rectHeight: number;
   let maskBuffer: Buffer;
   let primedImageBase64: string;
+  let inpaintingPrompt: string;
 
   if (!product.imageUrl) {
     console.error(`[Inpainting Step] Produto ${product.id} não possui imagem.`);
@@ -1130,10 +1130,9 @@ async function performSingleInpaintingStep(baseImageUrl: string, item: DesignPro
     primedImageBase64 = `data:image/png;base64,${primedBuffer.toString('base64')}`; // Atribuição
     console.log(`[Inpainting Step] Imagem Primed preparada para item ${item.id}. Produto redimensionado para ${resizedInfo.width}x${resizedInfo.height}, posicionado em ${offsetX},${offsetY}.`);
 
-    // Adicionar logs para o prompt e para a imagem primed (ou seu tamanho)
-    const inpaintingPrompt = `A photo of a ${product.name}, ${product.description || 'high quality'}.`; // Este já existe
+    // Definir o prompt AQUI, depois que product.name e product.description são conhecidos e antes de ser usado
+    inpaintingPrompt = `A photo of a ${product.name}, ${product.description || 'high quality'}.`;
     console.log(`[Inpainting Step] Prompt para Replicate item ${item.id}: "${inpaintingPrompt}"`);
-    // console.log(`[Inpainting Step] Primed image base64 (primeiros 100 chars) para item ${item.id}: ${primedImageBase64.substring(0,100)}...`);
     console.log(`[Inpainting Step] Primed image base64 (length) para item ${item.id}: ${primedImageBase64?.length || 'N/A'}`);
 
   } catch (imagePrepError) {
@@ -1143,7 +1142,7 @@ async function performSingleInpaintingStep(baseImageUrl: string, item: DesignPro
   
   // Etapa 4: Chamar Replicate 
   try {
-    // O prompt já foi definido e logado acima
+    // Agora inpaintingPrompt está acessível aqui
     const replicateApiKey = process.env.REPLICATE_API_TOKEN;
     if (!replicateApiKey) {
       console.error("[Inpainting Step] REPLICATE_API_TOKEN não configurado.");
