@@ -697,16 +697,24 @@ export async function processDesignProjectImage(projectId: number, imageUrlToPro
                 if (visualRegionResults.length > 0) {
                   console.log(`[AI Design Processor] Busca visual por REGIÃO para "${furniture.name}" encontrou ${visualRegionResults.length} produtos.`);
                   const normalizedFurnitureName = normalizeText(furniture.name);
-                  suggestedProductsForItem = visualRegionResults.filter(p => 
+                  // Primeiro, tentamos filtrar os resultados visuais da região por nome/categoria
+                  const filteredVisualRegionResults = visualRegionResults.filter(p => 
                     (p.name && normalizeText(p.name).includes(normalizedFurnitureName)) ||
                     (p.category && normalizeText(p.category).includes(normalizedFurnitureName)) ||
                     (p.description && normalizeText(p.description).includes(normalizedFurnitureName))
                   );
-                  if(suggestedProductsForItem.length === 0 && visualRegionResults.length > 0) {
-                     suggestedProductsForItem = [visualRegionResults[0]];
-                     console.log(`[AI Design Processor] Filtro por nome/cat para "${furniture.name}" zerou. Usando o top 1 visual da região.`);
+
+                  if (filteredVisualRegionResults.length > 0) {
+                    suggestedProductsForItem = filteredVisualRegionResults;
+                    suggestionSource = 'visual_region_filtered'; // Atualizado para refletir a origem
+                    console.log(`[AI Design Processor] Filtro por nome/cat para "${furniture.name}" encontrou ${suggestedProductsForItem.length} produto(s) na busca visual da região.`);
+                  } else {
+                    // Se o filtro não encontrou nada relevante DENTRO dos resultados visuais da região,
+                    // não usamos o top 1 visual. Deixamos suggestedProductsForItem vazio por enquanto
+                    // para que o fallback para busca textual geral seja acionado.
+                    console.log(`[AI Design Processor] Filtro por nome/cat para "${furniture.name}" zerou nos resultados visuais da região. Buscando textual como fallback.`);
+                    // suggestionSource não é definido aqui, será 'textual_fallback' se o próximo if for verdadeiro
                   }
-                  suggestionSource = 'visual_region';
                 } else {
                    console.log(`[AI Design Processor] Busca visual por REGIÃO para "${furniture.name}" não retornou produtos.`);
                 }
