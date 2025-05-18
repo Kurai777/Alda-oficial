@@ -762,18 +762,21 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getProductsDetails(productIds: number[]): Promise<Record<number, Product>> {
-    console.log(`getProductsDetails chamado com productIds: ${productIds}`);
-    // Implementação básica: Retorna objeto vazio. TODO: Implementar lógica de busca.
-    if (!productIds || productIds.length === 0) return {};
+    console.log(`[Storage getProductsDetails] Solicitado para productIds: ${JSON.stringify(productIds)}`);
+    if (!productIds || productIds.length === 0) {
+      console.log("[Storage getProductsDetails] Nenhum productId fornecido, retornando objeto vazio.");
+      return {};
+    }
     try {
       const result = await db.select().from(products).where(inArray(products.id, productIds));
       const productsMap: Record<number, Product> = {};
       result.forEach(product => {
         productsMap[product.id] = product;
       });
+      console.log(`[Storage getProductsDetails] Encontrados ${result.length} produtos. Retornando productsMap:`, JSON.stringify(productsMap, null, 2));
       return productsMap;
     } catch (error) {
-      console.error('Error in getProductsDetails:', error);
+      console.error('[Storage getProductsDetails] Erro ao buscar detalhes dos produtos:', error);
       return {};
     }
   }

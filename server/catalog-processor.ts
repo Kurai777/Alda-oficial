@@ -1,12 +1,19 @@
 import { storage } from './storage';
+// @ts-ignore
 import { processExcelWithAI, verifyImageMatchWithVision, describeImageWithVision } from './ai-excel-processor.js';
+// @ts-ignore
 import { uploadBufferToS3, downloadFileFromS3 } from './s3-service';
 import fs from 'fs';
 import path from 'path';
 import XLSX from 'xlsx'; // Importar XLSX para ler o arquivo
 import { spawn } from 'child_process'; // Importar spawn
-import { Product } from '@shared/schema'; // Importar tipo Product
-import { getClipEmbeddingFromImageUrl } from './clip-service'; // Importar a função de embedding
+import { Product, InsertProduct } from '@shared/schema'; // Importar tipo Product e InsertProduct
+// import { getClipEmbeddingFromImageUrl } from './clip-service'; // Não vamos mais usar CLIP para embedding de produto aqui
+
+// Adicionar imports para OpenAI e o modelo de embedding
+import OpenAI from "openai";
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const EMBEDDING_MODEL = 'text-embedding-3-small'; // Mesmo modelo usado em ai-design-processor
 
 // Interface para dados do Python (linha + base64 + sheet_name)
 interface ExtractedImageData {
@@ -215,11 +222,32 @@ export async function processCatalogInBackground(data: CatalogJobData): Promise<
 
         // --- Salvar Produtos no Banco (PG) ---
         console.log(`[BG Proc ${catalogId}] Salvando ${productsData.length} produtos no DB...`);
-        savedLocalProducts = []; // Zerar antes de preencher
+        savedLocalProducts = []; 
         const localUserIdNum = typeof userId === 'number' ? userId : parseInt(userId.toString());
+        
         for (const productData of productsData) {
           try {
-            const productToSaveLocal: Omit<Product, 'id' | 'createdAt' | 'updatedAt'> & { updatedAt?: Date } = { 
+            let embeddingVector: number[] | null = null;
+            const textForEmbedding = (`${productData.name || ''} ${productData.category || ''} ${productData.description || ''} ` +
+                                      `${productData.manufacturer || ''} ${(productData.colors || []).join(' ')} ` +
+                                      `${(productData.materials || []).join(' ')}`).replace(/\s+/g, ' ').trim();
+            if (textForEmbedding && textForEmbedding.length > 5) {
+                try {
+                    const embeddingResponse = await openai.embeddings.create({
+                        model: EMBEDDING_MODEL,
+                        input: textForEmbedding,
+                        dimensions: 1536 
+                    });
+                    if (embeddingResponse.data && embeddingResponse.data.length > 0) {
+                        embeddingVector = embeddingResponse.data[0].embedding;
+                    }
+                } catch (embeddingError) {
+                    console.error(`[Embedding Gen ${catalogId}] Erro ao gerar embedding para "${productData.name}":`, embeddingError);
+                }
+            }
+
+            // 1. Crie o objeto base com os campos definidos em InsertProduct, omitindo os problemáticos para o linter
+            const productBase: Omit<InsertProduct, 'embedding' | 'search_tsv'> = {
               userId: localUserIdNum,
               catalogId: catalogId,
               name: productData.name || 'Nome Indisponível',
@@ -228,25 +256,39 @@ export async function processCatalogInBackground(data: CatalogJobData): Promise<
               price: Math.round((typeof productData.price === 'number' ? productData.price : 0) * 100),
               category: productData.category || null,
               manufacturer: productData.manufacturer || null,
-              imageUrl: null,
-              colors: productData.colors || null,
-              materials: productData.materials || null,
-              sizes: productData.sizes || null,
+              imageUrl: null, 
+              colors: productData.colors || [], 
+              materials: productData.materials || [], 
+              sizes: productData.sizes || [], 
               location: productData.location || null,
               stock: productData.stock || null,
               excelRowNumber: productData.excelRowNumber,
-              embedding: null,
-              firestoreId: productData.firestoreId || null,
-              firebaseUserId: productData.firebaseUserId || null,
-              isEdited: false
+              isEdited: false,
+              // createdAt e updatedAt são omitidos
             };
-            const savedProduct = await storage.createProduct(productToSaveLocal as unknown as Product);
+
+            // 2. Crie um novo objeto que inclua embedding e search_tsv, e faça a asserção de tipo.
+            const productToSave = {
+                ...productBase,
+                embedding: embeddingVector,      // Pode ser number[] ou null
+                search_tsv: null                 // Definido como null para o trigger do banco lidar
+            } as InsertProduct; // Afirma que o objeto final corresponde a InsertProduct (confiando que Drizzle trata)
+            
+            // Remover chaves explicitamente undefined ANTES de passar para storage.createProduct
+            Object.keys(productToSave).forEach(key => {
+                const K = key as keyof InsertProduct;
+                if ((productToSave as any)[K] === undefined) { // Usar 'as any' para acesso genérico na checagem
+                     delete (productToSave as any)[K];
+                }
+            });
+            
+            const savedProduct = await storage.createProduct(productToSave);
             savedLocalProducts.push(savedProduct);
           } catch (dbError) {
             console.error(`[BG Proc ${catalogId}] Erro ao salvar produto (linha ${productData.excelRowNumber}) no PG:`, dbError);
           }
         }
-        console.log(`[BG Proc ${catalogId}] ${savedLocalProducts.length} produtos salvos no PG.`);
+        console.log(`[BG Proc ${catalogId}] ${savedLocalProducts.length} produtos salvos no PG com seus embeddings (ou null).`);
         if (savedLocalProducts.length === 0) {
              throw new Error("Nenhum produto pôde ser salvo no banco de dados.");
         }
@@ -254,7 +296,7 @@ export async function processCatalogInBackground(data: CatalogJobData): Promise<
         // --- Extrair e Fazer Upload de TODAS as Imagens (usar arquivo local) ---
         console.log(`[BG Proc ${catalogId}] Extraindo TODAS as imagens e suas âncoras via Python (usando ${localTempFilePath})...`);
         try {
-            const pythonResult = await runPythonImageRowExtractor(localTempFilePath);
+            const pythonResult = await runPythonImageRowExtractor(localTempFilePath!);
             const extractedRawImages: ExtractedImageData[] = pythonResult.images || [];
             console.log(`[BG Proc ${catalogId}] Python extraiu ${extractedRawImages.length} imagens com linha.`);
 
@@ -272,7 +314,6 @@ export async function processCatalogInBackground(data: CatalogJobData): Promise<
                         return null;
                     }
                 });
-
                 const results = await Promise.all(uploadPromises);
                 uploadedImages = results.filter(r => r !== null) as UploadedImageInfo[];
                 console.log(`---> ${uploadedImages.length} imagens enviadas com sucesso para S3.`);
@@ -360,25 +401,8 @@ export async function processCatalogInBackground(data: CatalogJobData): Promise<
                     associatedCount++;
                     const successLog = visionConfirmedMatch ? '[Assoc v5 SUCESSO (IA)]' : '[Assoc v5 SUCESSO (Fallback)]';
                     console.log(`${successLog}: Prod ID ${product.id} -> Imagem da linha ${associatedImage.anchorRow}, URL: ${associatedImage.imageUrl.substring(associatedImage.imageUrl.lastIndexOf('/') + 1)}`);
-
-                    // ***** NOVA LÓGICA PARA GERAR E SALVAR EMBEDDING *****
-                    console.log(`[Embedding] Tentando gerar embedding para Prod ID ${product.id} usando imagem: ${associatedImage.imageUrl}`);
-                    try {
-                      const embeddingVector = await getClipEmbeddingFromImageUrl(associatedImage.imageUrl, undefined);
-                      if (embeddingVector && embeddingVector.length > 0) {
-                        await storage.updateProduct(product.id, { embedding: embeddingVector as any }); // Drizzle pode precisar de `any` para tipo vector
-                        console.log(`[Embedding] Embedding gerado e salvo para Prod ID ${product.id}. Dimensões: ${embeddingVector.length}`);
-                      } else {
-                        console.warn(`[Embedding] Falha ao gerar embedding (vetor nulo ou vazio) para Prod ID ${product.id}`);
-                      }
-                    } catch (embeddingError) {
-                      console.error(`[Embedding] ERRO ao gerar/salvar embedding para Prod ID ${product.id}:`, embeddingError);
-                      // Não interromper o fluxo principal por falha no embedding de um produto
-                    }
-                    // ***** FIM DA NOVA LÓGICA DE EMBEDDING *****
-
                 } catch (updateError) {
-                    console.error(`[Assoc v5] ERRO DB ao atualizar Prod ID ${product.id}:`, updateError);
+                    console.error(`[Assoc v5] ERRO DB ao atualizar Imagem do Prod ID ${product.id}:`, updateError);
                 }
             } else {
                 // Logar falha

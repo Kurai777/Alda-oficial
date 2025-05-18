@@ -17,7 +17,11 @@ export type WebSocketEventType =
   | 'QUOTE_CREATED'
   | 'QUOTE_UPDATED'
   | 'DESIGN_PROJECT_UPDATED'
-  | 'CHAT_MESSAGE';
+  | 'CHAT_MESSAGE'
+  | 'AI_PROCESSING_STARTED'
+  | 'AI_PROCESSING_COMPLETE'
+  | 'AI_PROCESSING_ERROR'
+  | 'AI_PROCESSING_COMPLETE_NO_OBJECTS';
 
 // Estrutura de uma mensagem WebSocket
 export interface WebSocketMessage {

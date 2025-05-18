@@ -7,13 +7,14 @@ import { Upload, Image as ImageIcon, CheckCircle, XCircle, Clock, Eye, Sofa, Tab
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useToast } from "@/hooks/use-toast";
 import { callGenerateFinalRenderApi, getDesignProjectDetailsApi, updateDesignProjectItemApi, uploadProjectImageApi, getProductsDetailsApi } from "../lib/apiClient";
+import { useWebSocket, WebSocketEventType } from '@/lib/websocketService';
 
 // --- Mock Data --- 
 // (Simula os tipos que viriam do backend - @shared/schema)
 type MockDesignProject = {
   id: number;
   name: string;
-  status: 'new' | 'processing' | 'awaiting_selection' | 'processed_no_items' | 'completed' | 'failed' | 'rendering_final';
+  status: 'new' | 'processing' | 'awaiting_selection' | 'processed_no_items' | 'completed' | 'failed' | 'rendering_final' | 'suggestions_provided';
   clientRenderImageUrl: string | null;
   generatedRenderUrl?: string | null;
   items?: MockDesignProjectItem[]; // Adicionado para conter os itens
@@ -193,9 +194,30 @@ const DesignAiProjectPage: React.FC = () => {
 
   const { data: project, isLoading, isError, error, refetch: refetchProjectDetails } = useQuery<MockDesignProject | null, Error>({
     queryKey: ['designProject', projectId],
-    queryFn: () => getDesignProjectDetailsApi(projectId),
+    queryFn: async () => {
+      console.log(`[API Client] Buscando detalhes do projeto ID: ${projectId}`);
+      const data = await getDesignProjectDetailsApi(projectId);
+      console.log("[API Client] Dados combinados para projeto:", data);
+      return data;
+    },
     enabled: !!projectId,
   });
+
+  // WebSocket Handler para atualizações do projeto
+  const handleProjectUpdate = (payload: any) => {
+    console.log('[WebSocket] Mensagem de atualização do projeto recebida:', payload);
+    if (payload && payload.projectId === projectId) {
+      toast({ title: "Atualização do Projeto", description: `O projeto foi atualizado. Recarregando dados... (Evento: ${payload.type})` });
+      queryClient.invalidateQueries({ queryKey: ['designProject', projectId] });
+    }
+  };
+
+  // Inscrever-se nos eventos WebSocket relevantes para este projeto
+  useWebSocket(
+    ['AI_PROCESSING_COMPLETE', 'AI_PROCESSING_ERROR', 'AI_PROCESSING_COMPLETE_NO_OBJECTS', 'DESIGN_PROJECT_UPDATED'], 
+    handleProjectUpdate, 
+    projectId
+  );
 
   // Efeito para buscar detalhes dos produtos sugeridos quando o projeto ou seus itens mudam
   useEffect(() => {
@@ -281,6 +303,7 @@ const DesignAiProjectPage: React.FC = () => {
       case 'completed': return { text: 'Concluído', icon: CheckCircle, color: 'text-green-500', progress: 100 };
       case 'failed': return { text: 'Falha no Processamento', icon: XCircle, color: 'text-red-500', progress: 0 };
       case 'rendering_final': return { text: 'Gerando Render Final', icon: Loader2, color: 'text-purple-500', progress: 90 };
+      case 'suggestions_provided': return { text: 'Sugestões Fornecidas', icon: CheckCircle, color: 'text-green-500', progress: 100 };
       default: return { text: 'Desconhecido', icon: Clock, color: 'text-gray-500', progress: 0 };
     }
   };
@@ -449,21 +472,27 @@ const DesignAiProjectPage: React.FC = () => {
            {project.status === 'failed' && (
              <p className="text-red-500">Ocorreu um erro ao processar a imagem.</p>
           )}
-          {(project.status === 'awaiting_selection' || project.status === 'completed') && (!project.items || project.items.length === 0) && (
-             <p className="text-muted-foreground">A IA processou a imagem, mas não identificou móveis para sugerir substituições.</p>
+          {/* Modificada a condição abaixo para incluir 'suggestions_provided' */}
+          {( (project.status === 'awaiting_selection' || project.status === 'completed' || project.status === 'suggestions_provided') && 
+             (!processedItems || processedItems.length === 0) 
+          ) && (
+             <p className="text-muted-foreground">A IA processou a imagem, mas não identificou móveis ou não há sugestões disponíveis no momento.</p>
           )}
           
-          {(processedItems && processedItems.length > 0 && (project.status === 'awaiting_selection' || project.status === 'completed')) && (
+          {/* Modificada a condição abaixo para incluir 'suggestions_provided' */}
+          {(processedItems && processedItems.length > 0 && 
+            (project.status === 'awaiting_selection' || project.status === 'completed' || project.status === 'suggestions_provided')) && (
             processedItems.map((item) => {
-              // <<< Pegar seleção local para este item >>>
               const currentSelection = localSelections[item.id];
               const isSelecting = selectProductMutation.isPending && selectProductMutation.variables?.itemId === item.id;
+              // Adicionando logs para depuração da renderização do item
+              // console.log(`[DesignAiProjectPage] Renderizando item: ${item.id}`, item);
 
               return (
                 <Card key={item.id} className={currentSelection ? 'border-primary' : ''}>
                   <CardHeader>
                     <CardTitle>Item Detectado: {item.detectedObjectName || 'Móvel'}</CardTitle>
-                    <CardDescription>{item.detectedObjectDescription}</CardDescription>
+                    <CardDescription>{item.detectedObjectDescription || 'Sem descrição'}</CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-4">
                     {item.generatedInpaintedImageUrl ? (
@@ -494,61 +523,49 @@ const DesignAiProjectPage: React.FC = () => {
                       <> 
                         <h4 className="font-semibold">Sugestões do Catálogo:</h4>
                         {[ 
-                          { details: item.suggestedProduct1Details, score: item.matchScore1 },
-                          { details: item.suggestedProduct2Details, score: item.matchScore2 },
-                          { details: item.suggestedProduct3Details, score: item.matchScore3 },
+                          { details: item.suggestedProduct1Details, score: item.matchScore1, originalId: item.suggestedProductId1 },
+                          { details: item.suggestedProduct2Details, score: item.matchScore2, originalId: item.suggestedProductId2 },
+                          { details: item.suggestedProduct3Details, score: item.matchScore3, originalId: item.suggestedProductId3 },
                         ].map((suggestion, index) => {
-                          if (!suggestion.details) return null;
-                          const productId = suggestion.details.id;
-                          const isSelected = currentSelection === productId;
-                          const isThisOneLoading = selectProductMutation.isPending && selectProductMutation.variables?.itemId === item.id && selectProductMutation.variables?.selectedProductId === productId;
-
+                          // console.log(`[DesignAiProjectPage] Renderizando sugestão ${index} para item ${item.id}:`, suggestion.details);
+                          if (!suggestion.details || !suggestion.originalId) { // Checa se há detalhes E um ID original
+                            return null; // Não renderiza nada se não houver detalhes ou ID original da sugestão
+                          }
+                          const isSelected = currentSelection === suggestion.originalId;
+                          const isThisBeingSelected = isSelecting && selectProductMutation.variables?.selectedProductId === suggestion.originalId;
                           return (
-                            <div key={index} className={`flex items-center gap-4 p-3 border rounded-md ${isSelected ? 'bg-primary/10 border-primary/50' : 'bg-secondary/30'}`}>
-                              <div className="w-16 h-16 bg-muted rounded flex items-center justify-center overflow-hidden shrink-0">
-                                {suggestion.details.imageUrl ? (
-                                  <img src={suggestion.details.imageUrl} alt={suggestion.details.name} className="w-full h-full object-cover" />
-                                ) : (
-                                  item.detectedObjectDescription.toLowerCase().includes('sofá') || item.detectedObjectDescription.toLowerCase().includes('poltrona') ? 
-                                  <Sofa className="w-8 h-8 text-muted-foreground" /> : 
-                                  <Table className="w-8 h-8 text-muted-foreground" />
-                                )}
+                            <div 
+                              key={`${item.id}-sug-${index}-${suggestion.originalId}`}
+                              className={`border p-3 rounded-md flex flex-col sm:flex-row items-center gap-3 hover:shadow-md transition-shadow cursor-pointer 
+                                        ${isSelected ? 'border-primary ring-2 ring-primary' : 'border-border'}
+                                        ${isThisBeingSelected ? 'opacity-50' : ''}`}
+                              onClick={() => !isThisBeingSelected && selectProductMutation.mutate({ itemId: item.id, selectedProductId: suggestion.originalId })}
+                            >
+                              {suggestion.details.imageUrl ? (
+                                <img src={suggestion.details.imageUrl} alt={suggestion.details.name} className="w-20 h-20 object-cover rounded-md" />
+                              ) : (
+                                <div className="w-20 h-20 bg-muted rounded-md flex items-center justify-center">
+                                  <Sofa className="w-10 h-10 text-muted-foreground" />
+                                </div>
+                              )}
+                              <div className="flex-1">
+                                <h5 className="font-semibold">{suggestion.details.name}</h5>
+                                {suggestion.score && <p className="text-xs text-muted-foreground">Relevância: {(suggestion.score * 100).toFixed(0)}%</p>}
                               </div>
-                              <div className="flex-grow">
-                                <p className="font-medium">{suggestion.details.name}</p>
-                                <p className="text-sm text-muted-foreground">Similaridade: {suggestion.score ? `${(suggestion.score * 100).toFixed(0)}%` : 'N/A'}</p>
-                              </div>
-                              <div className="flex flex-col sm:flex-row gap-2 shrink-0">
-                                  <Button 
-                                    size="sm" 
-                                    variant={isSelected ? "default" : "secondary"}
-                                    disabled={selectProductMutation.isPending && selectProductMutation.variables?.itemId === item.id}
-                                    onClick={() => {
-                                      const newSelectedId = isSelected ? null : productId;
-                                      selectProductMutation.mutate({ itemId: item.id, selectedProductId: newSelectedId });
-                                    }}
-                                  >
-                                    {isThisOneLoading ? (
-                                      <Loader2 className="mr-1 h-4 w-4 animate-spin" />
-                                    ) : (
-                                      isSelected ? <CheckCircle className="mr-1 h-4 w-4 text-primary-foreground" /> : <CheckCircle className="mr-1 h-4 w-4" />
-                                    )}
-                                    {isThisOneLoading ? 'Salvando...' : (isSelected ? 'Selecionado' : 'Limpar')}
-                                  </Button>
-                              </div>
+                              {isThisBeingSelected ? (
+                                <Loader2 className="h-5 w-5 animate-spin text-primary" />
+                              ) : isSelected ? (
+                                <CheckCircle className="h-5 w-5 text-primary" />
+                              ) : null}
                             </div>
                           );
                         })}
-                        
-                        {!item.suggestedProductId1 && !item.suggestedProductId2 && !item.suggestedProductId3 && (
-                           <p className="text-sm text-muted-foreground italic">Nenhuma sugestão encontrada para este item.</p>
+                        {(!item.suggestedProduct1Details && !item.suggestedProduct2Details && !item.suggestedProduct3Details) && (
+                          <p className="text-sm text-muted-foreground">Nenhuma sugestão de produto disponível para este item.</p>
                         )}
                       </>
                     )}
                   </CardContent>
-                   <CardFooter className="flex justify-end">
-                     {/* TODO: Adicionar feedback 👍👎 ou outras ações */}
-                   </CardFooter>
                 </Card>
               );
             })
