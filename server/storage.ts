@@ -666,7 +666,7 @@ export class DatabaseStorage implements IStorage {
       
       // Normalização e tokenização inicial
       let normalizedSearchText = searchText.toLowerCase()
-        .normalize("NFD").replace(/[\u0300-\u036f]/g, "") 
+        .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
         .replace(/[^a-z0-9\s.-]/g, ' ') // Manter . e - para casos como "2.5m" ou "mesa-de-canto", mas substituir outros não alfanuméricos por espaço
         .trim();
       console.log(`[FTS Storage] Texto Normalizado: "${normalizedSearchText}"`);
@@ -684,8 +684,8 @@ export class DatabaseStorage implements IStorage {
             console.log(`[FTS Storage] Nenhuma keyword após filtro, usando texto normalizado como keyword única: [${normalizedSearchText}]`);
         } else {
             console.log("[FTS Storage] Nenhuma palavra-chave válida após tokenização e fallback.");
-            return [];
-        }
+        return [];
+      }
       }
       
       // Tentativa 1: websearch_to_tsquery (robusto para input de usuário)
@@ -710,23 +710,23 @@ export class DatabaseStorage implements IStorage {
 
       // Tentativa 2: plainto_tsquery (AND mais estrito) se websearch não retornou muitos resultados
       if (results.length < 5 && keywords.length > 0) { // Se poucos resultados, tenta plainto
-        const ftsQueryStringPlain = keywords.join(' '); 
+      const ftsQueryStringPlain = keywords.join(' '); 
         console.log(`[FTS Storage] websearch_to_tsquery retornou poucos (${results.length}). Tentando com plainto_tsquery: "${ftsQueryStringPlain}"`);
-        const queryPlain = sql`plainto_tsquery('portuguese', ${ftsQueryStringPlain})`;
-        
+      const queryPlain = sql`plainto_tsquery('portuguese', ${ftsQueryStringPlain})`;
+      
         results = await db.select({
-            ...(getTableColumns(products)), 
-            relevance: sql<number>`ts_rank_cd(products.search_tsv, ${queryPlain})`.as('relevance')
-          })
-          .from(products)
-          .where(and(
-            eq(products.userId, parsedUserId),
-            isNotNull(products.search_tsv),
-            sql`products.search_tsv @@ ${queryPlain}` 
-          ))
-          .orderBy(desc(sql`relevance`)) 
+          ...(getTableColumns(products)), 
+          relevance: sql<number>`ts_rank_cd(products.search_tsv, ${queryPlain})`.as('relevance')
+        })
+        .from(products)
+        .where(and(
+          eq(products.userId, parsedUserId),
+          isNotNull(products.search_tsv),
+          sql`products.search_tsv @@ ${queryPlain}` 
+        ))
+        .orderBy(desc(sql`relevance`)) 
           .limit(15); 
-        console.log(`[FTS Storage] plainto_tsquery encontrou ${results.length} resultados.`);
+      console.log(`[FTS Storage] plainto_tsquery encontrou ${results.length} resultados.`);
       }
 
       // Tentativa 3: to_tsquery com OR (mais abrangente) se os anteriores falharem ou retornarem poucos

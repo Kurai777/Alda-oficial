@@ -40,75 +40,75 @@ class WebSocketService {
   private maxReconnectAttempts = 5;
   private reconnectTimeout: NodeJS.Timeout | null = null;
   private isConnecting = false;
-  private projectId?: string;
+  private currentConnectedProjectId?: string;
 
-  // Inicializa a conexão WebSocket
-  connect(projectId?: string | number) {
-    if (this.isConnecting || this.socket?.readyState === WebSocket.OPEN) {
-      console.log("[WebSocket] Já conectado ou conectando. Ignorando solicitação.");
+  connect(newProjectId?: string | number) {
+    const newProjectIdStr = newProjectId ? newProjectId.toString() : undefined;
+
+    if (this.socket?.readyState === WebSocket.OPEN && this.currentConnectedProjectId === newProjectIdStr) {
+      console.log(`[WebSocket Service] Já conectado ao projeto ${newProjectIdStr}. Ignorando.`);
+      return;
+    }
+    if (this.isConnecting && this.currentConnectedProjectId === newProjectIdStr) {
+      console.log(`[WebSocket Service] Conexão já em progresso para o projeto ${newProjectIdStr}. Ignorando.`);
       return;
     }
 
+    if (this.socket) {
+      console.log(`[WebSocket Service] Mudança de projeto ou reconexão solicitada. Fechando socket existente (se houver) para ${this.currentConnectedProjectId}.`);
+      this.disconnect();
+    }
+    
     this.isConnecting = true;
-    this.projectId = projectId ? projectId.toString() : undefined;
+    this.currentConnectedProjectId = newProjectIdStr;
 
     try {
-      // Determinar o protocolo correto (ws/wss)
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      // Construir a URL do WebSocket
       let wsUrl = `${protocol}//${window.location.host}/ws`;
       
-      // Adicionar projectId como query parameter se fornecido
-      if (this.projectId) {
-        wsUrl += `?projectId=${this.projectId}`;
+      if (this.currentConnectedProjectId) {
+        wsUrl += `?projectId=${this.currentConnectedProjectId}`;
       }
 
-      console.log(`[WebSocket] Conectando a: ${wsUrl}`);
+      console.log(`[WebSocket Service] Tentando conectar a: ${wsUrl} (ID do Projeto para esta conexão: ${this.currentConnectedProjectId || 'Nenhum'})`);
+      
       this.socket = new WebSocket(wsUrl);
-
-      // Configurar handlers de eventos
       this.socket.onopen = this.handleOpen.bind(this);
       this.socket.onmessage = this.handleMessage.bind(this);
       this.socket.onclose = this.handleClose.bind(this);
       this.socket.onerror = this.handleError.bind(this);
     } catch (error) {
-      console.error('[WebSocket] Erro ao inicializar conexão:', error);
+      console.error('[WebSocket Service] Erro ao inicializar conexão:', error);
       this.isConnecting = false;
       this.scheduleReconnect();
     }
   }
 
-  // Verifica se o WebSocket está conectado
   isConnected(): boolean {
     return this.socket !== null && this.socket.readyState === WebSocket.OPEN;
   }
   
-  // Desconecta o WebSocket
   disconnect() {
     if (this.reconnectTimeout) {
       clearTimeout(this.reconnectTimeout);
       this.reconnectTimeout = null;
     }
+    this.isConnecting = false;
 
     if (this.socket) {
-      console.log('[WebSocket] Fechando conexão...');
-      // Remover todos os event handlers para evitar memory leaks
+      console.log(`[WebSocket Service] Fechando conexão para projeto ${this.currentConnectedProjectId || 'geral'}...`);
       this.socket.onopen = null;
       this.socket.onmessage = null;
       this.socket.onclose = null;
       this.socket.onerror = null;
-      
-      // Fechar a conexão se ainda estiver aberta
       if (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING) {
-        this.socket.close();
+        this.socket.close(1000, "Desconexão solicitada pelo cliente");
       }
       this.socket = null;
     }
     this.reconnectAttempts = 0;
-    this.isConnecting = false;
   }
 
-  // Envia uma mensagem para o servidor
   send(type: string, payload: any) {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
       console.warn('[WebSocket] Tentativa de enviar mensagem com websocket fechado.');
@@ -129,45 +129,38 @@ class WebSocketService {
     }
   }
 
-  // Inscreve-se para receber notificações de um tipo específico de evento
   subscribe(eventType: WebSocketEventType, callback: EventCallback) {
     if (!this.eventListeners.has(eventType)) {
       this.eventListeners.set(eventType, new Set());
     }
     this.eventListeners.get(eventType)?.add(callback);
     
-    // Conectar automaticamente se ainda não estiver conectado
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
-      this.connect(this.projectId);
+      this.connect(this.currentConnectedProjectId);
     }
   }
 
-  // Cancela a inscrição de um callback para um tipo de evento
   unsubscribe(eventType: WebSocketEventType, callback: EventCallback) {
     if (this.eventListeners.has(eventType)) {
       this.eventListeners.get(eventType)?.delete(callback);
     }
   }
 
-  // Handler para quando a conexão é estabelecida
   private handleOpen(event: Event) {
     console.log('[WebSocket] Conexão estabelecida!');
     this.isConnecting = false;
     this.reconnectAttempts = 0;
     
-    // Notificar que estamos conectados
-    if (this.projectId) {
-      console.log(`[WebSocket] Conectado ao projeto ${this.projectId}`);
+    if (this.currentConnectedProjectId) {
+      console.log(`[WebSocket] Conectado ao projeto ${this.currentConnectedProjectId}`);
     }
   }
 
-  // Handler para quando mensagens são recebidas
   private handleMessage(event: MessageEvent) {
     try {
       const message = JSON.parse(event.data) as WebSocketMessage;
       
       if (message && message.type) {
-        // Notificar todos os callbacks registrados para este tipo de evento
         const listeners = this.eventListeners.get(message.type);
         if (listeners) {
           listeners.forEach(callback => {
@@ -184,46 +177,37 @@ class WebSocketService {
     }
   }
 
-  // Handler para quando a conexão é fechada
   private handleClose(event: CloseEvent) {
-    console.log(`[WebSocket] Conexão fechada. Código: ${event.code}, Razão: "${event.reason}"`);
+    console.log(`[WebSocket Service] Conexão fechada para projeto ${this.currentConnectedProjectId || 'geral'}. Código: ${event.code}, Razão: "${event.reason}"`);
     this.socket = null;
     this.isConnecting = false;
-    
-    // Tentar reconectar se não foi um fechamento limpo
     if (event.code !== 1000 && event.code !== 1001) {
       this.scheduleReconnect();
     }
   }
 
-  // Handler para erros na conexão
   private handleError(event: Event) {
-    console.error('[WebSocket] Erro na conexão:', event);
+    console.error(`[WebSocket Service] Erro na conexão para projeto ${this.currentConnectedProjectId || 'geral'}:`, event);
     this.isConnecting = false;
-    // WebSocket vai chamar onclose automaticamente após um erro
   }
 
-  // Agenda uma tentativa de reconexão
   private scheduleReconnect() {
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      console.log('[WebSocket] Número máximo de tentativas de reconexão atingido.');
+      console.log('[WebSocket Service] Número máximo de tentativas de reconexão atingido.');
       return;
     }
-
     const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
-    console.log(`[WebSocket] Tentando reconectar em ${delay}ms (tentativa ${this.reconnectAttempts + 1}/${this.maxReconnectAttempts})...`);
+    console.log(`[WebSocket Service] Tentando reconectar para projeto ${this.currentConnectedProjectId || 'geral'} em ${delay}ms (tentativa ${this.reconnectAttempts + 1}/${this.maxReconnectAttempts})...`);
     
     this.reconnectTimeout = setTimeout(() => {
       this.reconnectAttempts++;
-      this.connect(this.projectId);
+      this.connect(this.currentConnectedProjectId);
     }, delay);
   }
 }
 
-// Exportar uma instância singleton do serviço
 export const webSocketService = new WebSocketService();
 
-// Hook para usar o WebSocket em componentes React
 import { useEffect } from 'react';
 
 export function useWebSocket(
@@ -232,18 +216,14 @@ export function useWebSocket(
   projectId?: string | number
 ) {
   useEffect(() => {
-    // Se eventType for um array, assinar todos os eventos
     const eventTypes = Array.isArray(eventType) ? eventType : [eventType];
     
-    // Conectar ao WebSocket com o projectId fornecido
     webSocketService.connect(projectId);
     
-    // Assinar aos eventos
     eventTypes.forEach(type => {
       webSocketService.subscribe(type, callback);
     });
     
-    // Ao desmontar o componente, cancelar inscrições
     return () => {
       eventTypes.forEach(type => {
         webSocketService.unsubscribe(type, callback);

@@ -707,7 +707,7 @@ export async function processDesignProjectImage(projectId: number, imageUrlToPro
 
   try {
     project = await storage.getDesignProject(projectId); 
-    if (!project) { 
+    if (!project) {
       console.error(`[AI Design Processor] Projeto ${projectId} não encontrado.`);
       await storage.createAiDesignChatMessage({
         projectId,
@@ -715,7 +715,7 @@ export async function processDesignProjectImage(projectId: number, imageUrlToPro
         content: `Erro: Não consegui encontrar os detalhes do projeto (ID: ${projectId}). Por favor, tente novamente ou contate o suporte.`,
       });
       broadcastToProject(projectId.toString(), { type: 'ai_processing_error', error: 'Project not found' });
-      return;
+      return; 
     }
 
     if (imageUrlToProcess === project.clientRenderImageUrl) {
@@ -729,8 +729,8 @@ export async function processDesignProjectImage(projectId: number, imageUrlToPro
 
     try {
       visionResponse = await openai.chat.completions.create({
-        model: "gpt-4o",
-        messages: [
+      model: "gpt-4o", 
+      messages: [
           {
             role: "system",
             content: `Você é um especialista em design de interiores. Sua tarefa é analisar a imagem fornecida e identificar OS MÓVEIS PRINCIPAIS.
@@ -741,15 +741,15 @@ Para cada móvel identificado:
 
 SEMPRE retorne a resposta em formato JSON válido. Pode ser um array de objetos (se múltiplos móveis) ou um único objeto JSON (se apenas um móvel) ou um objeto JSON contendo uma chave "furniture" cujo valor é um array de objetos. Se NENHUM MÓVEL for identificável, retorne um array JSON vazio []. Evite frases como "não foram encontrados móveis", apenas retorne [].`
           },
-          {
-            role: "user",
-            content: [
-              {
-                type: "text",
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
                 text: `Analise a imagem e identifique os móveis conforme as instruções. Mensagem do usuário (pode estar vazia): "${userMessageText || ''}"`
-              },
-              {
-                type: "image_url",
+            },
+            {
+              type: "image_url",
                 image_url: {
                   url: imageUrlToProcess,
                 }
@@ -757,7 +757,7 @@ SEMPRE retorne a resposta em formato JSON válido. Pode ser um array de objetos 
             ]
           }
         ],
-        response_format: { type: "json_object" },
+      response_format: { type: "json_object" }, 
         max_tokens: 3000,
       });
 
@@ -785,44 +785,44 @@ SEMPRE retorne a resposta em formato JSON válido. Pode ser um array de objetos 
 
         if (Array.isArray(parsedJsonResponse)) {
           detectedObjects = parsedJsonResponse.map((item: any) => ({
-              name: item.name,
-              description: item.description,
-              bbox: item.bbox,
-              originalName: item.name 
+              name: item.nome || item.name,
+              description: item.descrição || item.description,
+              bbox: item.bbox || item.bounding_box,
+              originalName: item.nome || item.name 
           }));
           console.log(`[AI Design Processor] ${detectedObjects.length} objetos detectados (formato array).`);
         } else if (typeof parsedJsonResponse === 'object' && parsedJsonResponse !== null && parsedJsonResponse.furniture && Array.isArray(parsedJsonResponse.furniture)) {
           console.log("[AI Design Processor] Detectado formato objeto com chave 'furniture' contendo array.");
           detectedObjects = parsedJsonResponse.furniture.map((item: any) => ({
-              name: item.name,
-              description: item.description,
-              bbox: item.bbox,
-              originalName: item.name 
+              name: item.nome || item.name,
+              description: item.descrição || item.description,
+              bbox: item.bbox || item.bounding_box,
+              originalName: item.nome || item.name 
           }));
           console.log(`[AI Design Processor] ${detectedObjects.length} objetos detectados (formato objeto com chave 'furniture').`);
-        } else if (typeof parsedJsonResponse === 'object' && parsedJsonResponse !== null && parsedJsonResponse.name && parsedJsonResponse.bbox) {
+        } else if (typeof parsedJsonResponse === 'object' && parsedJsonResponse !== null && (parsedJsonResponse.nome || parsedJsonResponse.name) && (parsedJsonResponse.bbox || parsedJsonResponse.bounding_box)) {
           console.log("[AI Design Processor] Detectado formato objeto único, envolvendo em array.");
           detectedObjects = [{
-              name: parsedJsonResponse.name,
-              description: parsedJsonResponse.description,
-              bbox: parsedJsonResponse.bbox,
-              originalName: parsedJsonResponse.name 
+              name: parsedJsonResponse.nome || parsedJsonResponse.name,
+              description: parsedJsonResponse.descrição || parsedJsonResponse.description,
+              bbox: parsedJsonResponse.bbox || parsedJsonResponse.bounding_box,
+              originalName: parsedJsonResponse.nome || parsedJsonResponse.name 
           }];
           console.log(`[AI Design Processor] 1 objeto detectado (formato objeto único).`);
         } else if (parsedJsonResponse && parsedJsonResponse.identified_furniture && Array.isArray(parsedJsonResponse.identified_furniture)) {
           console.warn("[AI Design Processor] Tentando parse legado com 'identified_furniture':");
           detectedObjects = parsedJsonResponse.identified_furniture.map((item: any) => ({
-              name: item.name,
-              description: item.description,
+              name: item.nome || item.name,
+              description: item.descrição || item.description,
               bbox: item.bounding_box || item.bbox, 
-              originalName: item.name
+              originalName: item.nome || item.name
           }));
           console.log(`[AI Design Processor] ${detectedObjects.length} objetos detectados (formato legado).`);
-        } else {
+      } else {
           visionAnalysisFailed = true;
           console.warn("[AI Design Processor] Falha no parse. Formato JSON inesperado. Conteúdo:", visionContent.substring(0,500) + "...");
-        }
-      } catch (parseError) {
+      }
+    } catch (parseError) {
         console.error("[AI Design Processor] Erro CRÍTICO ao parsear JSON da API Vision:", parseError, "Conteúdo:", visionContent.substring(0,500) + "...");
         visionAnalysisFailed = true;
       }
@@ -914,7 +914,7 @@ SEMPRE retorne a resposta em formato JSON válido. Pode ser um array de objetos 
              if (otherItems.length > 0) {
                  chatResponseContent += `\nTambém identifiquei outros itens (${otherItems.map(i => i.detectedObjectName).join(', ')}). Se quiser sugestões para eles, me diga!`;
              }
-        } else {
+            } else {
              chatResponseContent += `Não encontrei especificamente um "${mainKeyword}" claro na imagem. `;
              focusedProcessing = false; 
         }
@@ -953,7 +953,7 @@ SEMPRE retorne a resposta em formato JSON válido. Pode ser um array de objetos 
         await storage.createAiDesignChatMessage({ projectId, role: 'assistant', content: chatResponseContent });
     } else if (visionAnalysisFailed) { // Somente envia mensagem de falha se nenhuma outra resposta foi construída
          await storage.createAiDesignChatMessage({ projectId, role: 'assistant', content: "Houve uma falha na análise da imagem. Por favor, tente novamente." });
-    } else {
+        } else {
         console.log("[AI Design Processor] Nenhuma nova mensagem de chat para enviar.");
     }
     
@@ -985,7 +985,7 @@ SEMPRE retorne a resposta em formato JSON válido. Pode ser um array de objetos 
     }
     
     try {
-        await storage.createAiDesignChatMessage({
+      await storage.createAiDesignChatMessage({
             projectId,
             role: 'assistant',
             content: errorMessage,

@@ -25,7 +25,7 @@ import { storage } from "./storage";
 import { initializeClipModel } from './clip-service';
 
 // Importar serviço WebSocket aprimorado
-import { webSocketManager } from './websocket-service';
+import { webSocketManager, WebSocketEventType } from './websocket-service';
 
 // Importe para rotas de PDF simples (corrigindo o erro de require)
 import { pdfRouterSimple } from './pdf-routes-simple';
@@ -33,79 +33,66 @@ import { pdfRouterSimple } from './pdf-routes-simple';
 const app = express();
 const httpServer = createServer(app); // Criar httpServer no escopo superior
 
-// Manter o activeConnections para compatibilidade
-const activeConnections = new Map<string, Set<WebSocket>>();
+// REMOVER o Map local activeConnections, pois webSocketManager cuidará disso
+// const activeConnections = new Map<string, Set<WebSocket>>();
 
 // Exportar wss para que outros módulos possam usá-lo para enviar mensagens
 export const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
 
-// Inicializar o gerenciador WebSocket com o servidor WebSocket
-webSocketManager.initialize(wss);
+webSocketManager.initialize(wss); // Isso já configura o wss.on('connection', webSocketManager.handleConnection)
 
-// Conectar eventos do WebSocket para gerenciar conexões
-wss.on('connection', (socket, request) => {
-    console.log('[WebSocket] Nova conexão recebida');
+// A lógica de wss.on('connection') que manipulava 'activeConnections' diretamente aqui PODE SER REMOVIDA,
+// pois webSocketManager.handleConnection (definido em websocket-service.ts) agora é o principal
+// manipulador de conexões e já associa sockets a projectIds internamente.
+// Se você tiver alguma lógica específica no on('connection') em index.ts que NÃO está no manager, mantenha-a.
+// Por enquanto, vou assumir que o manager é suficiente.
+
+/* REMOVER OU COMENTAR ESTE BLOCO:
+_wss.on('connection', (socket, request) => {_
+_    console.log('[WebSocket] Nova conexão recebida (em index.ts - será removido se o manager cobrir)');_
+_    const url = new URL(request.url || '/', `http://${request.headers.host}`);_
+_    const projectId = url.searchParams.get('projectId');_
     
-    // Processar a URL da solicitação para obter o ID do projeto
-    const url = new URL(request.url || '/', `http://${request.headers.host}`);
-    const projectId = url.searchParams.get('projectId');
+_    if (projectId) {_
+_        if (!activeConnections.has(projectId)) {_
+_            activeConnections.set(projectId, new Set());_
+_        }_
+_        activeConnections.get(projectId)?.add(socket);_
+_        console.log(`[WebSocket] Cliente conectado ao projeto ${projectId} (gerenciado por index.ts)`);_
+_    }_
     
-    if (projectId) {
-        // Adicionar a conexão ao mapa de conexões ativas para compatibilidade com código legado
-        if (!activeConnections.has(projectId)) {
-            activeConnections.set(projectId, new Set());
-        }
-        activeConnections.get(projectId)?.add(socket);
-        console.log(`[WebSocket] Cliente conectado ao projeto ${projectId}`);
-    }
-    
-    // Definir handlers para eventos de socket
-    socket.on('close', () => {
-        console.log('[WebSocket] Conexão fechada');
-        
-        // Remover do mapa de conexões ativas (para compatibilidade)
-        if (projectId) {
-            const connections = activeConnections.get(projectId);
-            if (connections) {
-                connections.delete(socket);
-                if (connections.size === 0) {
-                    activeConnections.delete(projectId);
-                }
-            }
-        }
-    });
-    
-    socket.on('error', (error) => {
-        console.error('[WebSocket] Erro na conexão:', error);
-    });
-});
+_    socket.on('close', () => {_
+_        console.log('[WebSocket] Conexão fechada (em index.ts)');_
+_        if (projectId) {_
+_            const connections = activeConnections.get(projectId);_
+_            if (connections) {_
+_                connections.delete(socket);_
+_                if (connections.size === 0) {_
+_                    activeConnections.delete(projectId);_
+_                }_
+_            }_
+_        }_
+_    });_
+_    socket.on('error', (error) => {_
+_        console.error('[WebSocket] Erro na conexão (em index.ts):', error);_
+_    });_
+_});_ 
+*/
 
 // Função para enviar mensagens para todos os clientes de um projeto específico
-// Agora usando o gerenciador WebSocket aprimorado, mas mantendo a API antiga
-export function broadcastToProject(projectId: string, message: object) {
-    // Log para rastreamento
-    console.log(`[WebSocket Backend] Tentando broadcast para projeto ID: '${projectId}' (tipo: ${typeof projectId})`);
+export function broadcastToProject(projectId: string, message: { type: string, [key: string]: any }) {
+    console.log(`[WebSocket Backend] broadcastToProject - Projeto: '${projectId}', Tipo Mensagem: '${message.type}'`);
     
-    // Usar o novo gerenciador WebSocket com o tipo correto importado
-    const sentCount = webSocketManager.broadcastToProject(projectId, 'PROJECT_UPDATE', message);
-    console.log(`[WebSocket Backend] Mensagem enviada para ${sentCount} clientes`);
-    
-    // Também usar o mecanismo antigo para compatibilidade
-    console.log('[WebSocket Backend] Conexões ativas no Map (chaves dos projetos):', Array.from(activeConnections.keys()));
+    const eventType = message.type as WebSocketEventType; 
+    const payload = message; 
 
-    const connections = activeConnections.get(projectId);
-    if (connections) {
-        console.log(`[WebSocket Backend] Encontradas ${connections.size} conexões para o projeto ${projectId}. Fazendo broadcast...`);
-        const messageString = JSON.stringify(message);
-        connections.forEach(client => {
-            if (client.readyState === WebSocket.OPEN) {
-                client.send(messageString);
-            } else {
-                console.warn(`[WebSocket Backend] Cliente para projeto ${projectId} não está com readyState OPEN.`);
-            }
-        });
+    const sentCount = webSocketManager.broadcastToProject(projectId, eventType, payload);
+    
+    if (sentCount > 0) {
+        console.log(`[WebSocket Backend] Mensagem do tipo '${eventType}' enviada para ${sentCount} clientes do projeto ${projectId} via WebSocketManager.`);
     } else {
-        console.log(`[WebSocket Backend] Nenhuma conexão WebSocket ativa encontrada para o projeto ${projectId} no Map.`);
+        // O log de "Nenhum cliente conectado" já acontece dentro de webSocketManager.broadcastToProject
+        // console.log(`[WebSocket Backend] Nenhuma conexão WebSocket ativa encontrada para o projeto ${projectId} via WebSocketManager para o evento ${eventType}.`);
     }
 }
 

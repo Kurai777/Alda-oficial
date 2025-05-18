@@ -19,7 +19,12 @@ export type WebSocketEventType =
   | 'QUOTE_UPDATED'
   | 'DESIGN_PROJECT_UPDATED'
   | 'CHAT_MESSAGE'
-  | 'PROJECT_UPDATE';
+  // | 'PROJECT_UPDATE' // Pode ser removido se DESIGN_PROJECT_UPDATED for mais genérico ou usarmos os tipos específicos abaixo
+  // Novos tipos de evento para o processamento de design com IA (espelhando o cliente)
+  | 'AI_PROCESSING_STARTED'
+  | 'AI_PROCESSING_COMPLETE'
+  | 'AI_PROCESSING_ERROR'
+  | 'AI_PROCESSING_COMPLETE_NO_OBJECTS';
 
 // Estrutura de uma mensagem WebSocket
 export interface WebSocketMessage {
