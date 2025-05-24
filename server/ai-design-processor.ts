@@ -10,11 +10,13 @@ import Anthropic from "@anthropic-ai/sdk";
 import * as fs from 'fs';
 import * as path from 'path';
 import { storage } from './storage';
-import { type Product, type DesignProject, type NewDesignProjectItem, type DesignProjectItem, type AiDesignChatMessage } from '@shared/schema';
-import { getClipEmbeddingFromImageUrl } from './clip-service';
+import { db } from './db'; // Instância do Drizzle
+import { sql, and, isNotNull, eq } from 'drizzle-orm'; // Funções do Drizzle ORM
+import { products, type Product, type DesignProject, type NewDesignProjectItem, type DesignProjectItem, type AiDesignChatMessage } from '@shared/schema';
+import { getClipEmbeddingFromImageUrl, getClipEmbeddingFromImageBuffer } from './clip-service'; // Adicionada getClipEmbeddingFromImageBuffer
 import { broadcastToProject } from './index';
 import sharp from 'sharp';
-import { runReplicateModel } from './replicate-service';
+import { getSegmentationMaskSAM } from './replicate-service'; // Importar getSegmentationMaskSAM
 
 // Inicializar clientes de IA
 // Use o mais recente modelo do OpenAI: gpt-4o que foi lançado em 13 de maio de 2024
@@ -60,195 +62,297 @@ interface ImageAnalysisResult {
   generalObservations: string;
 }
 
-// PLACEHOLDER FUNCTIONS MOVED TO MODULE SCOPE
-// Estas funções precisam ser implementadas corretamente.
+// Esta é a função findSuggestionsForItem que prioriza o visual e tenta usar SAM.
 async function findSuggestionsForItem(
     item: DesignProjectItem, 
     userId: number, 
-    imageUrl: string, // Imagem original que foi analisada, para contexto se necessário
-    // keyword?: string | null // O keyword do usuário não é usado diretamente aqui, mas sim o texto do item detectado
+    imageUrlToProcess: string, // Imagem original do projeto/chat 
+    segmentationMaskUrl?: string | null // URL da máscara de segmentação (do SAM), se disponível
 ): Promise<{product: Product, source: string, matchScore: number, visualSimilarity?: number, textSimilarity?: number, combinedScore?: number}[]> {
-    console.log(`[findSuggestionsForItem] Iniciando para item: "${item.detectedObjectName}" (ID: ${item.id}), UserID: ${userId}`);
+    console.log(`[findSuggestionsForItem V3.1-SAM_CLIP] Iniciando para item: "${item.detectedObjectName || 'sem nome'}", Mask URL: ${segmentationMaskUrl ? segmentationMaskUrl.substring(0,60)+"..." : "Nenhuma"}`);
 
     const detectedText = (`${item.detectedObjectName || ''} ${item.detectedObjectDescription || ''}`).trim();
-    if (!detectedText) {
-        console.log("[findSuggestionsForItem] Texto detectado vazio, retornando nenhuma sugestão.");
+    if (!detectedText && !item.detectedObjectBoundingBox) {
+        console.log("[findSuggestionsForItem V3.1-SAM_CLIP] Texto detectado e BBox estão vazios. Retornando nenhuma sugestão.");
         return [];
     }
 
     let textualSearchResults: (Product & { relevance?: number })[] = [];
-    let visualSearchResults: (Product & { distance?: number })[] = [];
-    let itemEmbedding: number[] | null = null;
-
-    try {
-        const embeddingResponse = await openai.embeddings.create({
-            model: EMBEDDING_MODEL,
-            input: detectedText,
-            dimensions: 1536
-        });
-        if (embeddingResponse.data && embeddingResponse.data.length > 0) {
-            itemEmbedding = embeddingResponse.data[0].embedding;
-        }
-    } catch (error) { console.error("[findSuggestionsForItem] Erro ao gerar embedding:", error); }
-
-    try {
-        textualSearchResults = await storage.searchProducts(userId, detectedText);
-        console.log(`[findSuggestionsForItem] FTS encontrou ${textualSearchResults.length} resultados.`);
-    } catch (error) { console.error("[findSuggestionsForItem] Erro FTS:", error); }
-
-    if (itemEmbedding) {
+    if (detectedText) {
         try {
-            visualSearchResults = await storage.findProductsByEmbedding(userId, itemEmbedding, 15);
-            console.log(`[findSuggestionsForItem] Embedding search encontrou ${visualSearchResults.length} resultados.`);
-        } catch (error) { console.error("[findSuggestionsForItem] Erro Embedding Search:", error); }
+            textualSearchResults = await storage.searchProducts(userId, detectedText);
+            // Filtrar produtos sem imagem JÁ AQUI para FTS
+            textualSearchResults = textualSearchResults.filter(p => p.imageUrl);
+            console.log(`[findSuggestionsForItem V3.1-SAM_CLIP] FTS encontrou ${textualSearchResults.length} resultados (com imagem) para "${detectedText}".`);
+        } catch (error) { console.error("[findSuggestionsForItem V3.1-SAM_CLIP] Erro FTS:", error); }
+    } else {
+        console.log("[findSuggestionsForItem V3.1-SAM_CLIP] Texto detectado vazio, pulando FTS.");
     }
 
-    const combinedSuggestions: Map<number, {product: Product, textScore: number, visualScore: number, sourceDetails: string[]}> = new Map();
-    
-    // Normalizar scores FTS (relevance pode variar, normalizamos para 0-1 baseado no max da leva atual)
-    const maxFtsRelevance = textualSearchResults.reduce((max, p) => Math.max(max, p.relevance || 0), 0);
+    let targetRoiClipEmbedding: number[] | null = null;
+    let roiExtractionMethod = "none";
+    let originalImageBuffer: Buffer | null = null;
+    let imageMetadata: sharp.Metadata | null = null;
 
-    for (const product of textualSearchResults) {
-        let ftsScore = 0;
-        if (maxFtsRelevance > 0) {
-            ftsScore = (product.relevance || 0) / maxFtsRelevance;
-        }
-        ftsScore = Math.max(0, Math.min(ftsScore, 1)); // Clamp 0-1
-
-        if (ftsScore > 0.01) { // Limiar mínimo para considerar relevância textual
-            const existing = combinedSuggestions.get(product.id);
-            if (existing) {
-                existing.textScore = Math.max(existing.textScore, ftsScore);
-                if (!existing.sourceDetails.includes('text')) existing.sourceDetails.push('text');
-            } else {
-                combinedSuggestions.set(product.id, { product, textScore: ftsScore, visualScore: 0, sourceDetails: ['text'] });
-            }
+    if (imageUrlToProcess) {
+        try {
+            originalImageBuffer = await fetchImageAsBuffer(imageUrlToProcess);
+            imageMetadata = await sharp(originalImageBuffer).metadata();
+        } catch (e) {
+            console.error(`[findSuggestionsForItem V3.1-SAM_CLIP] Erro ao carregar imagem original ${imageUrlToProcess}:`, e);
+            originalImageBuffer = null; 
         }
     }
 
-    const MAX_POSSIBLE_DISTANCE = 2; 
-    for (const productWithDist of visualSearchResults) {
-        const distance = productWithDist.distance;
-        let visualScore = 0;
-        if (typeof distance === 'number') {
-            if (distance >= 0 && distance <= MAX_POSSIBLE_DISTANCE) {
-                visualScore = (MAX_POSSIBLE_DISTANCE - distance) / MAX_POSSIBLE_DISTANCE;
-            } else if (distance < 0) {
-                visualScore = 1;
-            }
-            visualScore = Math.max(0, Math.min(visualScore, 1));
-            if (visualScore > 0.1) { 
-                const existing = combinedSuggestions.get(productWithDist.id);
-                if (existing) {
-                    existing.visualScore = Math.max(existing.visualScore, visualScore);
-                    if (!existing.sourceDetails.includes('visual')) existing.sourceDetails.push('visual');
+    if (originalImageBuffer && imageMetadata && imageMetadata.width && imageMetadata.height) {
+        if (segmentationMaskUrl) {
+            try {
+                console.log(`[findSuggestionsForItem V3.1-SAM_CLIP] Tentando usar MÁSCARA SAM para ROI: "${item.detectedObjectName || 'sem nome'}"`);
+                const maskImageBuffer = await fetchImageAsBuffer(segmentationMaskUrl);
+                
+                const maskedRoiBuffer = await sharp(originalImageBuffer)
+                    .composite([{ input: maskImageBuffer, blend: 'in' }]) 
+                    .png()
+                    .toBuffer();
+                
+                const pixelBbox = await calculatePixelBbox(item.detectedObjectBoundingBox, imageMetadata.width, imageMetadata.height);
+                if (pixelBbox && pixelBbox.w > 0 && pixelBbox.h > 0) {
+                    targetRoiClipEmbedding = await getClipEmbeddingFromImageBuffer( // Assumindo que esta função existe no clip-service
+                        maskedRoiBuffer, 
+                        pixelBbox.w, 
+                        pixelBbox.h,
+                        `roi_sam_${item.id}_${item.detectedObjectName || 'sem_nome'}`
+                    );
+                    if (targetRoiClipEmbedding) {
+                        console.log(`[findSuggestionsForItem V3.1-SAM_CLIP] Embedding CLIP da ROI MASCARADA (SAM) gerado.`);
+                        roiExtractionMethod = "sam_mask";
+                    } else {
+                        console.warn(`[findSuggestionsForItem V3.1-SAM_CLIP] Falha ao gerar embedding CLIP da ROI MASCARADA (SAM).`);
+                    }
                 } else {
-                    combinedSuggestions.set(productWithDist.id, { product: productWithDist, textScore: 0, visualScore: visualScore, sourceDetails: ['visual'] });
+                     console.warn(`[findSuggestionsForItem V3.1-SAM_CLIP] BBox inválida para item ao tentar usar máscara SAM.`);
+                }
+            } catch (samProcessingError) {
+                console.error(`[findSuggestionsForItem V3.1-SAM_CLIP] Erro ao processar ROI com MÁSCARA SAM:`, samProcessingError);
+            }
+        }
+
+        if (!targetRoiClipEmbedding && item.detectedObjectBoundingBox) {
+            try {
+                console.log(`[findSuggestionsForItem V3.1-SAM_CLIP] Usando FALLBACK para BBOX para ROI: "${item.detectedObjectName || 'sem nome'}"`);
+                const pixelBbox = await calculatePixelBbox(item.detectedObjectBoundingBox, imageMetadata.width, imageMetadata.height);
+                if (pixelBbox && pixelBbox.w > 0 && pixelBbox.h > 0) {
+                    const roiBuffer = await sharp(originalImageBuffer)
+                        .extract({ left: pixelBbox.x, top: pixelBbox.y, width: pixelBbox.w, height: pixelBbox.h })
+                        .png()
+                        .toBuffer();
+                    targetRoiClipEmbedding = await getClipEmbeddingFromImageBuffer( // Assumindo que esta função existe no clip-service
+                        roiBuffer, pixelBbox.w, pixelBbox.h, `roi_bbox_${item.id}_${item.detectedObjectName || 'sem_nome'}`
+                    );
+                    if (targetRoiClipEmbedding) {
+                        console.log(`[findSuggestionsForItem V3.1-SAM_CLIP] Embedding CLIP da ROI por BBOX (fallback) gerado.`);
+                        roiExtractionMethod = "bbox_fallback";
+                    } else {
+                        console.warn(`[findSuggestionsForItem V3.1-SAM_CLIP] Falha ao gerar embedding CLIP da ROI por BBOX (fallback).`);
+                    }
+                } else {
+                    console.warn(`[findSuggestionsForItem V3.1-SAM_CLIP] BBox inválida ou com dimensões zero (fallback).`);
+                }
+            } catch (bboxError) {
+                console.error(`[findSuggestionsForItem V3.1-SAM_CLIP] Erro ao processar ROI por BBOX (fallback):`, bboxError);
+            }
+        }
+    } else if (imageUrlToProcess) {
+        console.warn(`[findSuggestionsForItem V3.1-SAM_CLIP] Não foi possível carregar imagem original ou seus metadados. Pulando toda a extração de ROI CLIP.`);
+    }
+    
+    const combinedSuggestions: Map<number, {product: Product, textScore: number, visualScore: number, sourceDetails: string[]}> = new Map();
+    const maxFtsRelevance = textualSearchResults.reduce((max, p) => Math.max(max, p.relevance || 0), 0);
+    
+    for (const product of textualSearchResults) { // textualSearchResults já filtrado por imageUrl
+        let ftsScore = 0;
+        if (maxFtsRelevance > 0) ftsScore = (product.relevance || 0) / maxFtsRelevance;
+        ftsScore = Math.max(0, Math.min(ftsScore, 1));
+        if (ftsScore > 0.01) { // Limiar FTS
+            combinedSuggestions.set(product.id, { product, textScore: ftsScore, visualScore: 0, sourceDetails: ['text_fts'] });
+        }
+    }
+
+    if (targetRoiClipEmbedding) {
+        console.log(`[findSuggestionsForItem V3.1-SAM_CLIP] Buscando produtos no DB com clipEmbedding para similaridade visual (ROI extraída via: ${roiExtractionMethod}).`);
+        let visuallySimilarProductsDb: (Product & { distance?: number })[] = [];
+        try {
+            const embeddingStringForDb = `[${targetRoiClipEmbedding.join(',')}]`;
+            // Certifique-se que 'db' e 'products' e 'sql' estão corretamente importados e disponíveis.
+            // Presume-se que db seja uma instância do Drizzle e products o schema da tabela.
+            // import { db, products, sql, and, isNotNull } from \'./db\'; // Ou de onde vierem
+            visuallySimilarProductsDb = await db
+                .select({
+                    id: products.id, userId: products.userId, catalogId: products.catalogId, name: products.name,
+                    code: products.code, description: products.description, price: products.price, category: products.category,
+                    manufacturer: products.manufacturer, imageUrl: products.imageUrl, colors: products.colors, materials: products.materials,
+                    sizes: products.sizes, location: products.location, stock: products.stock, excelRowNumber: products.excelRowNumber,
+                    embedding: products.embedding, clipEmbedding: products.clipEmbedding, search_tsv: products.search_tsv, // Colunas do schema Product
+                    createdAt: products.createdAt, firestoreId: products.firestoreId, firebaseUserId: products.firebaseUserId, isEdited: products.isEdited, // Mais colunas
+                    distance: sql<number>`${products.clipEmbedding} <-> ${embeddingStringForDb}`.mapWith(Number)
+                })
+                .from(products)
+                .where(and(isNotNull(products.clipEmbedding), isNotNull(products.imageUrl))) // Apenas com clipEmbedding e imagem
+                .orderBy(sql`${products.clipEmbedding} <-> ${embeddingStringForDb}`)
+                .limit(40); 
+
+            console.log(`[findSuggestionsForItem V3.1-SAM_CLIP] Busca vetorial CLIP no DB retornou ${visuallySimilarProductsDb.length} produtos.`);
+
+        } catch (dbVectorError) {
+            console.error("[findSuggestionsForItem V3.1-SAM_CLIP] Erro na busca vetorial CLIP no DB:", dbVectorError);
+        }
+        
+        const visualClipThreshold = 0.135; 
+
+        for (const product of visuallySimilarProductsDb) {
+            let currentVisualClipScore = 0;
+            if (typeof product.distance === 'number') {
+                // console.log(`[findSuggestionsForItem V3.1-SAM_CLIP] Produto ID ${product.id} ("${product.name}") - Distância L2 do DB: ${product.distance.toFixed(4)}`);
+                currentVisualClipScore = 1 / (1 + product.distance); 
+                currentVisualClipScore = Math.max(0, Math.min(currentVisualClipScore, 1));
+                // console.log(`[findSuggestionsForItem V3.1-SAM_CLIP] Produto ID ${product.id} - Score Visual CLIP Calculado: ${currentVisualClipScore.toFixed(4)}`);
+            }
+
+            if (currentVisualClipScore >= visualClipThreshold) { // Usar >= para incluir o limiar
+                const existing = combinedSuggestions.get(product.id);
+                if (existing) {
+                    existing.visualScore = Math.max(existing.visualScore, currentVisualClipScore);
+                    if (!existing.sourceDetails.includes('visual_clip_db')) existing.sourceDetails.push('visual_clip_db');
+                } else {
+                    combinedSuggestions.set(product.id, { product, textScore: 0, visualScore: currentVisualClipScore, sourceDetails: ['visual_clip_db'] });
                 }
             }
         }
     }
     
-    // Calcular score combinado e formatar
     let processedSuggestions = Array.from(combinedSuggestions.values()).map(sugg => {
-        const textWeight = 0.5; 
-        const visualWeight = 0.5; 
-        const combinedScore = (sugg.textScore * textWeight) + (sugg.visualScore * visualWeight);
+        const textWeight = 0.01; 
+        const visualWeight = 0.99; 
+        
+        let combinedScore = 0;
+        if (sugg.visualScore > 0 && sugg.textScore > 0) {
+            combinedScore = (sugg.textScore * textWeight) + (sugg.visualScore * visualWeight);
+        } else if (sugg.visualScore > 0) {
+            combinedScore = sugg.visualScore * visualWeight; // Aplicar peso mesmo se for só visual
+        } else if (sugg.textScore > 0) { 
+            combinedScore = sugg.textScore * textWeight; // Aplicar peso mesmo se for só textual
+        }
+        
         return {
             product: sugg.product,
             source: sugg.sourceDetails.join('+') || 'none',
-            matchScore: combinedScore, 
+            matchScore: combinedScore,
             textSimilarity: sugg.textScore, 
-            visualSimilarity: sugg.visualScore,
+            visualSimilarity: sugg.visualScore, 
             combinedScore: combinedScore 
         };
     });
+    
+    // Filtrar sugestões com score combinado muito baixo (considerando os novos pesos)
+    processedSuggestions = processedSuggestions.filter(s => s.combinedScore > 0.10); 
 
-    processedSuggestions.sort((a, b) => b.matchScore - a.matchScore);
+    processedSuggestions.sort((a, b) => b.combinedScore - a.combinedScore);
 
-    console.log(`[findSuggestionsForItem] Sugestões ANTES do filtro de categoria para "${item.detectedObjectName}": ${processedSuggestions.length}`);
+    console.log(`[findSuggestionsForItem V3.1-SAM_CLIP] Sugestões ANTES do filtro de categoria para "${item.detectedObjectName || 'sem nome'}": ${processedSuggestions.length}`);
     processedSuggestions.slice(0, 10).forEach(s_log => { 
-        console.log(`  -> PRE-FILTER: ID: ${s_log.product.id}, Cat: ${s_log.product.category}, Nome: ${s_log.product.name.substring(0,30)}, Score: ${s_log.matchScore.toFixed(4)} (T: ${s_log.textSimilarity?.toFixed(4)}, V: ${s_log.visualSimilarity?.toFixed(4)}) Src: ${s_log.source}`);
+        console.log(`  -> PRE-FILTER V3.1: ID: ${s_log.product.id}, Cat: ${s_log.product.category}, Nome: ${s_log.product.name.substring(0,30)}, Score: ${s_log.combinedScore.toFixed(4)} (T_FTS: ${s_log.textSimilarity?.toFixed(4)}, V_CLIP: ${s_log.visualSimilarity?.toFixed(4)}) Src: ${s_log.source}`);
     });
 
-    // 5. Filtragem Estrita por Categoria (MELHORADA)
     const itemDetectedObjectNameNormalized = normalizeText(item.detectedObjectName);
-    
     const categoryFilteredSuggestions = processedSuggestions.filter(sugg => {
-        if (!item.detectedObjectName) return true; // Se não há nome de objeto detectado, não podemos filtrar por categoria
+        if (!sugg.product.imageUrl) { // Dupla checagem, mas importante.
+             console.log(`[findSuggestionsForItem V3.1-SAM_CLIP] Filtrando: Produto \"${sugg.product.name}\" (ID: ${sugg.product.id}) sem imagem -> REJEITADO`);
+            return false;
+        }
+
+        if (!item.detectedObjectName) return true; 
         
-        // Se a categoria do produto sugerido é nula ou vazia, REJEITA, 
-        // a menos que o próprio item detectado seja algo extremamente genérico (improvável aqui).
         if (!sugg.product.category || sugg.product.category.trim() === '') {
-            console.log(`[findSuggestionsForItem] Filtrando por categoria: Produto "${sugg.product.name}" (ID: ${sugg.product.id}) tem categoria NULA/vazia -> REJEITADO para item "${itemDetectedObjectNameNormalized}"`);
+            console.log(`[findSuggestionsForItem V3.1-SAM_CLIP] Filtrando: Produto \"${sugg.product.name}\" (ID: ${sugg.product.id}) categoria NULA -> REJEITADO para \"${itemDetectedObjectNameNormalized}\"`);
             return false;
         }
         const productCategoryNormalized = normalizeText(sugg.product.category);
 
-        // Tentativa de match exato ou parcial entre nome detectado e categoria do produto
         if (itemDetectedObjectNameNormalized === productCategoryNormalized) return true;
-        if (productCategoryNormalized.includes(itemDetectedObjectNameNormalized)) return true;
-        // Considerar também se o nome do item detectado contém a categoria do produto, 
-        // útil se a IA detectar "mesa de centro redonda" e a categoria for só "mesa de centro".
-        if (itemDetectedObjectNameNormalized.includes(productCategoryNormalized)) return true; 
 
-        // Casos específicos de sinônimos ou tipos relacionados
         const mappings: Record<string, string[]> = {
-            'sofa': ['sofa', 'estofado'],
-            'poltrona': ['poltrona', 'cadeira'], // Poltrona pode ser uma cadeira mais robusta
-            'cadeira': ['cadeira', 'poltrona', 'banqueta', 'banco'],
+            'sofa': ['sofa', 'estofado'], 
+            'poltrona': ['poltrona', 'cadeira', 'cadeira de jantar'],
+            'cadeira': ['cadeira', 'cadeira de jantar', 'poltrona', 'banqueta', 'banco'],
+            'cadeira de jantar': ['cadeira de jantar', 'cadeira'],
             'mesa': ['mesa', 'mesa de centro', 'mesa lateral', 'mesa de apoio', 'mesa de jantar', 'escrivaninha'],
+            'mesa de jantar': ['mesa de jantar', 'mesa'],
             'mesa de centro': ['mesa de centro', 'mesa'],
             'mesa lateral': ['mesa lateral', 'mesa de apoio', 'mesa'],
-            'mesa de apoio': ['mesa de apoio', 'mesa lateral', 'mesa'],
-            'rack': ['rack', 'movel para tv'],
-            'estante': ['estante', 'livreiro'],
+            'mesa de apoio': ['mesa de apoio', 'mesa lateral', 'mesa'], 
+            'rack': ['rack', 'movel para tv', 'móvel para tv'],
+            'estante': ['estante', 'livreiro'], 
             'luminaria': ['luminaria', 'luminaria de chao', 'luminaria de mesa', 'abajur'],
-            'luminaria de chao': ['luminaria de chao', 'luminaria'],
+            'luminaria de chao': ['luminaria de chao', 'luminaria'], 
             'armario': ['armario', 'roupeiro', 'guarda-roupa'],
-            'buffet': ['buffet', 'aparador', 'balcao'],
-            'aparador': ['aparador', 'buffet', 'console']
+            'buffet': ['buffet', 'aparador', 'balcao'], 
+            'aparador': ['aparador', 'buffet', 'console', 'balcao']
         };
 
-        const equivalentCategories = mappings[itemDetectedObjectNameNormalized] || [itemDetectedObjectNameNormalized];
-        if (equivalentCategories.some(equivCat => productCategoryNormalized.includes(equivCat))) {
+        if (mappings[itemDetectedObjectNameNormalized] && mappings[itemDetectedObjectNameNormalized].includes(productCategoryNormalized)) {
             return true;
         }
-        // Checagem inversa: se a categoria do produto mapeia para o item detectado
-        for (const key in mappings) {
-            if (productCategoryNormalized.includes(key) && mappings[key].includes(itemDetectedObjectNameNormalized)) {
-                return true;
-            }
+        if (mappings[productCategoryNormalized] && mappings[productCategoryNormalized].includes(itemDetectedObjectNameNormalized)) {
+            return true;
         }
+        
+        // Fallback mais permissivo (usar com cautela)
+        // if (productCategoryNormalized.includes(itemDetectedObjectNameNormalized)) return true;
+        // if (itemDetectedObjectNameNormalized.includes(productCategoryNormalized)) return true; 
 
-        console.log(`[findSuggestionsForItem] Filtrando por categoria: Item "${itemDetectedObjectNameNormalized}" (equivalentes: ${equivalentCategories.join('|')}) vs ProdCat "${productCategoryNormalized}" -> REJEITADO`);
+        console.log(`[findSuggestionsForItem V3.1-SAM_CLIP] Filtrando por categoria: Item \"${itemDetectedObjectNameNormalized}\" vs ProdCat \"${productCategoryNormalized}\" -> REJEITADO`);
         return false;
     });
 
-    console.log(`[findSuggestionsForItem] Top sugestões PÓS-FILTRO de categoria para "${item.detectedObjectName}": ${categoryFilteredSuggestions.length}`);
+    console.log(`[findSuggestionsForItem V3.1-SAM_CLIP] Top sugestões PÓS-FILTRO de categoria para \"${item.detectedObjectName || 'sem nome'}\": ${categoryFilteredSuggestions.length}`);
     categoryFilteredSuggestions.slice(0, 5).forEach(s_log => { 
-        console.log(`  - ID: ${s_log.product.id}, Cat: ${s_log.product.category}, Nome: ${s_log.product.name.substring(0,30)}, Score Final: ${s_log.matchScore.toFixed(4)}, Text: ${s_log.textSimilarity?.toFixed(4)}, Visual: ${s_log.visualSimilarity?.toFixed(4)}, Source: ${s_log.source}`);
+        console.log(`  - V3.1 FINAL: ID: ${s_log.product.id}, Cat: ${s_log.product.category}, Nome: ${s_log.product.name.substring(0,30)}, Score Final: ${s_log.combinedScore.toFixed(4)}, T_FTS: ${s_log.textSimilarity?.toFixed(4)}, V_CLIP: ${s_log.visualSimilarity?.toFixed(4)}, Source: ${s_log.source}`);
     });
 
-    return categoryFilteredSuggestions.slice(0, 3);
+    return categoryFilteredSuggestions.slice(0, 5);
 }
 
-function formatSuggestionsForChatItem(item: DesignProjectItem, suggestedProducts: Product[]): string {
-    console.warn(`[Placeholder] formatSuggestionsForChatItem chamada para item: ${item.detectedObjectName}. Implementação real necessária.`);
-    if (!item.detectedObjectName) return ''; // Não tentar formatar se não há nome de objeto
-    if (!suggestedProducts || suggestedProducts.length === 0) {
-      return `  - **${item.detectedObjectName}** (Original: *${item.detectedObjectDescription || 'N/A'}*): Nenhuma sugestão encontrada por enquanto.\n`;
+// Ajustar formatSuggestionsForChatItem para usar os scores corretos e garantir que product exista
+interface SuggestionForChat {
+    product: Product; // product é obrigatório aqui após a filtragem interna
+    matchScore: number;
+    source: string;
+    combinedScore: number;
+    textSimilarity?: number;
+    visualSimilarity?: number;
+}
+
+function formatSuggestionsForChatItem(item: DesignProjectItem, suggestions: SuggestionForChat[]): string {
+    if (!item.detectedObjectName) {
+        console.warn("[formatSuggestions V3.2] Item sem detectedObjectName, retornando string vazia.");
+        return '';
     }
-    let response = `  - **${item.detectedObjectName}** (Original: *${item.detectedObjectDescription || 'N/A'}*):\n`;
-    suggestedProducts.forEach(p => {
-        response += `    - Sugestão: ${p.name} (${p.category || 'N/A'}) - Preço: ${p.price ? p.price / 100 : 'N/A'}\n`;
-        if (p.imageUrl) {
-            response += `      ![Produto](${p.imageUrl}?w=100&h=100)\n`;
+    // Não precisa mais de validSuggestions.filter aqui se o tipo de entrada já for o correto.
+    if (!suggestions || suggestions.length === 0) {
+      return `  - **${item.detectedObjectName}** (Original: *${item.detectedObjectDescription || 'N/A'}*): Nenhuma sugestão encontrada com os critérios atuais.\\n`;
+    }
+    let response = `  - **${item.detectedObjectName}** (Original: *${item.detectedObjectDescription || 'N/A'}*):\\n`;
+    
+    suggestions.slice(0, 3).forEach((sugg, index) => {
+        // Agora 'sugg.product' e 'sugg.combinedScore' são garantidos pelo tipo SuggestionForChat
+        response += `    ${index + 1}. **${sugg.product.name}** (Relevância: ${(sugg.combinedScore * 100).toFixed(0)}%, Cat: ${sugg.product.category || 'N/A'})\\n`;
+        if (sugg.product.imageUrl) {
+            response += `       ![Produto](${sugg.product.imageUrl}?w=100&h=100)\\n`;
         }
+        response += `       (Detalhes: Cód: ${sugg.product.code || 'N/A'}, Preço: R$ ${sugg.product.price ? (sugg.product.price / 100).toFixed(2) : 'N/A' })\\n`;
     });
     return response;
 }
-// FIM DOS PLACEHOLDERS
 
 /**
  * Analisa uma imagem de planta baixa para identificar cômodos e móveis
@@ -733,13 +837,7 @@ export async function processDesignProjectImage(projectId: number, imageUrlToPro
       messages: [
           {
             role: "system",
-            content: `Você é um especialista em design de interiores. Sua tarefa é analisar a imagem fornecida e identificar OS MÓVEIS PRINCIPAIS.
-Para cada móvel identificado:
-1.  Fale o nome do móvel (ex: "sofá", "mesa de centro", "luminária de chão"). **Seja preciso: uma "poltrona" é diferente de uma "cadeira de jantar". Uma "estante alta" é diferente de um "rack baixo".**
-2.  Forneça uma descrição CURTA e CONCISA (máximo 20 palavras) do estilo, cor, material **e quaisquer características distintivas** do móvel na imagem. Ex: "Sofá de 3 lugares, linho bege, estilo moderno." ou "Mesa de jantar redonda, madeira escura, pés de metal finos." **ou "Poltrona individual, couro marrom, com braços largos, aspecto robusto."**
-3.  Forneça as coordenadas da bounding box para CADA móvel, em formato JSON: { "x_min": %, "y_min": %, "x_max": %, "y_max": % } (valores de 0.0 a 1.0 relativos à dimensão da imagem). **A BBOX DEVE SER PRECISA E ENVOLVER COMPLETAMENTE APENAS O MÓVEL VISÍVEL, sem ser excessivamente pequena nem incluir muitos elementos ao redor. Certifique-se que a BBox cubra a maior parte do objeto.**
-
-SEMPRE retorne a resposta em formato JSON válido. Pode ser um array de objetos (se múltiplos móveis) ou um único objeto JSON (se apenas um móvel) ou um objeto JSON contendo uma chave "furniture" cujo valor é um array de objetos. Se NENHUM MÓVEL for identificável, retorne um array JSON vazio []. Evite frases como "não foram encontrados móveis", apenas retorne [].`
+            content: `Você é um especialista em design de interiores com formação avançada (nível doutorado) e ampla experiência na análise de renders de ambientes. Sua tarefa é analisar a imagem fornecida e identificar APENAS OS MÓVEIS PRINCIPAIS presentes no ambiente (excluindo itens decorativos, plantas, cortinas, objetos pequenos e estruturas fixas).\n\nPara CADA MÓVEL INDIVIDUALMENTE IDENTIFICADO (liste cada instância separadamente, mesmo que sejam do mesmo tipo, como múltiplas cadeiras idênticas), responda com:\n\n1.  **NOME DO MÓVEL:** Forneça o nome mais preciso e técnico possível (ex: "Cadeira de jantar Estilo Eames", "Sofá Chesterfield 3 lugares", "Mesa lateral redonda tripé").\n    *   **CADEIRA vs. POLTRONA:**\n        *   **Poltrona:** Estofada, com braços, aspecto robusto, geralmente voltada ao conforto.\n        *   **Cadeira de jantar:** Usada com mesa de jantar. Pode ser estofada, mas mais leve.\n        *   **Cadeira de escritório:** Com rodízios e ajuste de altura.\n        *   **Cadeira (genérica):** Assento simples individual, sem características claras das anteriores.\n        *   ⚠️ **Nunca confunda** uma poltrona com uma cadeira estofada leve.\n    *   Use nomes técnicos como: "mesa lateral", "rack baixo", "estante alta", "banco", "banqueta", "mesa de cabeceira", "sofá modular", etc.\n\n2.  **DESCRIÇÃO CURTA:** Máximo 20 palavras, descrevendo estilo, cor principal, material predominante e uma característica marcante.\n    *   Exemplo:\n        *   "Sofá de 3 lugares, veludo verde-escuro, encosto baixo, pés dourados, estilo moderno."\n        *   "Mesa lateral redonda, madeira clara, estilo escandinavo, base de três pés."\n\n3.  **BOUNDING BOX (bbox):** Forneça as coordenadas da bounding box para CADA móvel, em formato JSON: { "x_min": %, "y_min": %, "x_max": %, "y_max": % } (valores de 0.0 a 1.0 relativos à dimensão da imagem). **A BBOX DEVE SER PRECISA E ENVOLVER COMPLETAMENTE APENAS O MÓVEL VISÍVEL, sem ser excessivamente pequena nem incluir muitos elementos ao redor. Certifique-se que a BBox cubra a maior parte do objeto.**\n\nRESPONDA SEMPRE em formato JSON válido. O JSON deve ser um objeto contendo uma chave "furniture" que é um array de objetos. Cada objeto representa um móvel. Se NENHUM MÓVEL for identificável, retorne { "furniture": [] }. Evite frases como "não foram encontrados móveis", apenas retorne o JSON especificado.`
           },
         {
           role: "user",

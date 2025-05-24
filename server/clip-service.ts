@@ -1,4 +1,5 @@
 import { CLIPVisionModelWithProjection, AutoProcessor, RawImage } from '@xenova/transformers';
+import sharp from 'sharp';
 
 let vision_model: CLIPVisionModelWithProjection | null = null;
 let processor: AutoProcessor | null = null;
@@ -83,6 +84,72 @@ export async function getClipEmbeddingFromImageUrl(
 
   } catch (error: any) {
     console.error(`[CLIP Service] Erro ao gerar embedding para ${imageUrl}:`, error.message || error);
+    if(error.stack) console.error(error.stack);
+    return null;
+  }
+}
+
+export async function getClipEmbeddingFromImageBuffer(
+  imageBuffer: Buffer,
+  // width e height não são mais necessários como params diretos,
+  // pois sharp irá extraí-los do buffer.
+  sourceHint: string = "buffer" // Para logs
+): Promise<number[] | null> {
+  if (!imageBuffer || imageBuffer.length === 0) {
+    console.error('[CLIP Service] Buffer de imagem não fornecido ou vazio.');
+    return null;
+  }
+
+  if (!vision_model || !processor) {
+    if (isLoading && loadPromise) {
+      await loadPromise;
+    } else {
+      await initializeClipModel();
+    }
+  }
+
+  if (!vision_model || !processor) {
+    console.error('[CLIP Service] Modelo/Processador CLIP local não carregado para processar buffer.');
+    return null;
+  }
+
+  try {
+    // Usar sharp para decodificar o buffer e obter dados brutos de pixel e metadados
+    const sharpImage = sharp(imageBuffer);
+    const metadata = await sharpImage.metadata();
+    
+    if (!metadata.width || !metadata.height || !metadata.channels) {
+        console.error(`[CLIP Service] Metadados inválidos da imagem do buffer (${sourceHint}). Width: ${metadata.width}, Height: ${metadata.height}, Channels: ${metadata.channels}`);
+        return null;
+    }
+
+    // Garantir que a imagem esteja em um formato que RawImage entenda (ex: RGBA)
+    // O construtor de RawImage espera Uint8ClampedArray ou Uint8Array
+    // Sharp pode nos dar um buffer com os pixels brutos. Precisamos garantir o formato correto.
+    // Ex: .toFormat('rgba') ou .raw() se já estiver decodificado
+    const pixelBuffer = await sharpImage.ensureAlpha().raw().toBuffer(); // ensureAlpha para RGBA, raw para pixels brutos
+    
+    const image = new RawImage(Uint8ClampedArray.from(pixelBuffer), metadata.width, metadata.height, 4); // Assumindo 4 canais (RGBA)
+
+    const inputs = await (processor as any)(image);
+    const output = await vision_model(inputs);
+    const image_embeds = output.image_embeds ?? output.pooler_output;
+
+    if (!image_embeds || !image_embeds.data) {
+      console.error(`[CLIP Service] Não foi possível extrair embeddings do buffer (${sourceHint}) do output do modelo.`);
+      return null;
+    }
+
+    const embeddingVector = Array.from(image_embeds.data as Float32Array);
+
+    if (embeddingVector.length === 0) {
+      console.error(`[CLIP Service] Embedding gerado para buffer (${sourceHint}) está vazio.`);
+      return null;
+    }
+    return embeddingVector;
+
+  } catch (error: any) {
+    console.error(`[CLIP Service] Erro ao gerar embedding para buffer (${sourceHint}):`, error.message || error);
     if(error.stack) console.error(error.stack);
     return null;
   }
