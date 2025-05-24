@@ -30,6 +30,11 @@ import { webSocketManager, WebSocketEventType } from './websocket-service';
 // Importe para rotas de PDF simples (corrigindo o erro de require)
 import { pdfRouterSimple } from './pdf-routes-simple';
 
+// ES Module-friendly way to get directory path
+import { fileURLToPath } from 'url';
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 const app = express();
 const httpServer = createServer(app); // Criar httpServer no escopo superior
 
@@ -193,24 +198,38 @@ let upload = multer({
 
   // Configuração S3 e definição do middleware de Upload GLOBAL
   console.log("Configurando middleware de upload...");
+  let s3Operational = false; // Flag para controlar se S3 está ok
   try {
     const s3Config = await checkS3Configuration();
     if (s3Config.status === 'success') {
       console.log(`✅ Amazon S3 conectado com sucesso - Bucket: ${s3Config.bucket}, Região: ${s3Config.region}`);
       // @ts-ignore
       if (typeof getS3UploadMiddleware === 'function') {
-        // A rota de upload de catálogo em server/routes.ts usará esta instância `upload` exportada.
-        // Se outras rotas precisarem de configurações de upload diferentes, elas podem definir seus próprios middlewares multer.
         upload = getS3UploadMiddleware('catalogs'); 
         console.log('Upload de arquivos principal configurado para usar Amazon S3 para catálogos.');
+        s3Operational = true; // S3 está configurado e middleware carregado
       } else {
-        console.warn('getS3UploadMiddleware não é uma função. Usando localStorage para uploads.');
+        console.warn('getS3UploadMiddleware não é uma função. Uploads usarão localStorage.');
+        // S3 não operacional, configurar fallback para servir localmente
       }
     } else {
       console.warn(`AVISO: Não foi possível conectar ao S3: ${s3Config.message}. Uploads usarão localStorage.`);
+      // S3 não operacional, configurar fallback para servir localmente
     }
   } catch (error: any) {
     console.warn(`AVISO: Erro durante a configuração do S3: ${error.message}. Uploads usarão localStorage.`);
+    // S3 não operacional, configurar fallback para servir localmente
+  }
+
+  // Configurar express.static como fallback SE S3 não estiver operacional
+  if (!s3Operational) {
+    const uploadsDir = path.resolve(__dirname, '..', 'uploads');
+    if (!fs.existsSync(uploadsDir)) {
+      fs.mkdirSync(uploadsDir, { recursive: true });
+      console.log(`[Static Serve Fallback] Pasta 'uploads' criada em: ${uploadsDir}`);
+    }
+    app.use('/uploads', express.static(uploadsDir));
+    console.log(`[Static Serve Fallback] Servindo arquivos estáticos de: ${uploadsDir} em /uploads (S3 não operacional).`);
   }
 
   // Adicionar rotas de imagem S3 diretamente ao `app` (se existirem e forem separadas)

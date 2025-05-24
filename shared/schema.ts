@@ -52,6 +52,7 @@ export const products = pgTable("products", {
   stock: integer("stock"), // Quantidade em estoque
   excelRowNumber: integer("excel_row_number"), // Número da linha original no Excel
   embedding: vector('embedding', { dimensions: 1536 }),
+  clipEmbedding: vector('clip_embedding', { dimensions: 512 }),
   search_tsv: tsvectorType('search_tsv'),
   createdAt: timestamp("created_at").defaultNow(),
   firestoreId: text("firestore_id"), // ID do produto no Firestore

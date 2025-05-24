@@ -688,10 +688,17 @@ export async function registerRoutes(router: ExpressRouter, upload: multer.Multe
       const userId = req.session.userId!;
       const projectId = parseInt(projectIdParam);
       if (isNaN(projectId)) return res.status(400).json({ message: "ID de projeto deve ser um número." });
+      
       const project = await storage.getDesignProject(projectId);
+      
       if (!project) return res.status(404).json({ message: "Projeto de design não encontrado." });
       if (project.userId !== userId) return res.status(403).json({ message: "Acesso negado." });
-      return res.status(200).json(project);
+      
+      // Buscar os itens do projeto
+      const items = await storage.getDesignProjectItems(projectId);
+      
+      // Adicionar os itens ao objeto do projeto
+      return res.status(200).json({ ...project, items });
     } catch (error) {
       console.error("Erro ao buscar projeto de design:", error);
       const message = error instanceof Error ? error.message : "Erro interno.";

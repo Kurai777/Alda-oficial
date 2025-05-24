@@ -7,6 +7,7 @@
 
 import axios from 'axios';
 import { setTimeout } from 'timers/promises';
+import Replicate from "replicate"; // Adicionar import do cliente Replicate
 
 interface ReplicateModelInput {
   [key: string]: any;
@@ -199,4 +200,59 @@ export async function extractTextFromImage(
     { image: imageUrl },
     apiToken
   );
+}
+
+// ATUALIZADA para usar schananas/grounded_sam com prompt de texto
+export async function getSegmentationMaskSAM(
+  imageUrl: string,
+  promptText: string, 
+  modelIdentifier: string = "schananas/grounded_sam"
+): Promise<string | null> { 
+  if (!process.env.REPLICATE_API_TOKEN) {
+    console.error("[DEBUG SAM SVC] REPLICATE_API_TOKEN não está configurado.");
+    return null;
+  }
+  if (!promptText || promptText.trim() === "") {
+    console.error("[DEBUG SAM SVC] Prompt de texto para Grounded SAM não fornecido ou vazio.");
+    return null;
+  }
+
+  const replicate = new Replicate({
+    auth: process.env.REPLICATE_API_TOKEN,
+  });
+  
+  const input = {
+    image: imageUrl,
+    mask_prompt: promptText, 
+    box_threshold: 0.3, 
+    text_threshold: 0.25 
+  };
+
+  console.log(`[DEBUG SAM SVC] Chamando Replicate.run com: Model: ${modelIdentifier}, Input: ${JSON.stringify(input)}`);
+
+  try {
+    const output = await replicate.run(modelIdentifier as `${string}/${string}:${string}`, { input }) as unknown;
+    console.log("[DEBUG SAM SVC] Output BRUTO do Replicate (Grounded SAM):", JSON.stringify(output));
+
+    if (Array.isArray(output) && output.length > 0 && typeof output[0] === 'string') {
+      console.log(`[DEBUG SAM SVC] Máscara(s) recebida(s) de Grounded SAM. Usando a primeira: ${output[0]}`);
+      return output[0]; 
+    } else if (typeof output === 'string') { 
+        console.log(`[DEBUG SAM SVC] Máscara única (string) recebida de Grounded SAM: ${output}`);
+        return output;
+    }
+    console.warn("[DEBUG SAM SVC] Output do Replicate (Grounded SAM) não é um array de strings esperado ou está vazio.", output);
+    return null;
+  } catch (error: any) {
+    console.error("[DEBUG SAM SVC] Erro ao chamar API do Grounded SAM no Replicate:", error.message);
+    if (error.response) { 
+        console.error("[DEBUG SAM SVC] Replicate Error Status:", error.response.status);
+        let errorDataString = "No error data in response";
+        if (error.response.data) {
+            errorDataString = typeof error.response.data === 'string' ? error.response.data : JSON.stringify(error.response.data);
+        }
+        console.error("[DEBUG SAM SVC] Replicate Error Data:", errorDataString.substring(0, 500));
+    }
+    return null;
+  }
 }
