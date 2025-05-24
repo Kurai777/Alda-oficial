@@ -221,7 +221,6 @@ async function findSuggestionsForItem(
             let visuallySimilarProductsDb: (Product & { distance?: number })[] = [];
             try {
                 const embeddingStringForDb = `[${targetRoiClipEmbedding.join(',')}]`;
-                // Tentativa de correção da query SQL para usar .mapWith(Number) diretamente
                 const distanceExpression = sql`${products.clipEmbedding} <-> ${embeddingStringForDb}`;
                 
                 visuallySimilarProductsDb = await db
@@ -232,11 +231,11 @@ async function findSuggestionsForItem(
                         sizes: products.sizes, location: products.location, stock: products.stock, excelRowNumber: products.excelRowNumber,
                         embedding: products.embedding, clipEmbedding: products.clipEmbedding, search_tsv: products.search_tsv,
                         createdAt: products.createdAt, firestoreId: products.firestoreId, firebaseUserId: products.firebaseUserId, isEdited: products.isEdited,
-                        distance: distanceExpression.mapWith(Number) // Correto: .mapWith(Number) aplicado à SQL tag
+                        distance: distanceExpression.mapWith(Number) 
                     })
                     .from(products)
                     .where(and(isNotNull(products.clipEmbedding), isNotNull(products.imageUrl)))
-                    .orderBy(distanceExpression) // Reutiliza a expressão SQL
+                    .orderBy(distanceExpression)
                     .limit(40); 
                 console.log(`[findSuggestionsForItem V3.3.4-SAM_CLIP] Busca vetorial CLIP no DB retornou ${visuallySimilarProductsDb.length} produtos.`);
             } catch (dbVectorError) { 
@@ -244,7 +243,7 @@ async function findSuggestionsForItem(
                 visuallySimilarProductsDb = []; 
             }
             
-            const visualClipThreshold = 0.135; 
+            const visualClipThreshold = 0.10;
             for (const product of visuallySimilarProductsDb) {
                 let currentVisualClipScore = typeof product.distance === 'number' ? (1 / (1 + product.distance)) : 0;
                 currentVisualClipScore = Math.max(0, Math.min(currentVisualClipScore, 1));
@@ -281,7 +280,7 @@ async function findSuggestionsForItem(
             };
         });
         
-        processedSuggestions = processedSuggestions.filter(s => s.combinedScore > 0.10); 
+        processedSuggestions = processedSuggestions.filter(s => s.combinedScore > 0.05);
         processedSuggestions.sort((a, b) => b.combinedScore - a.combinedScore);
 
         console.log(`[findSuggestionsForItem V3.3.2-SAM_CLIP] Sugestões ANTES do filtro de categoria para "${item.detectedObjectName || 'sem nome'}": ${processedSuggestions.length}`);
@@ -289,36 +288,75 @@ async function findSuggestionsForItem(
             console.log(`  -> PRE-FILTER V3.3.2: ID: ${s_log.product.id}, Cat: ${s_log.product.category}, Nome: ${s_log.product.name.substring(0,30)}, Score: ${s_log.combinedScore.toFixed(4)} (T_FTS: ${s_log.textSimilarity?.toFixed(4)}, V_CLIP: ${s_log.visualSimilarity?.toFixed(4)}) Src: ${s_log.source}`);
         });
 
+        // Adicionar este bloco para debug detalhado de scores:
+        const currentItemNameForLog = item.detectedObjectName?.toLowerCase() || "desconhecido";
+        console.log(`[DEBUG SCORES ANTES CAT FILTRO] Para item: \"${item.detectedObjectName}\" (ID: ${item.id})`);
+        processedSuggestions.forEach(s_log_debug => {
+            const prodCatLower = s_log_debug.product.category?.toLowerCase() || "sem_categoria";
+            // Logar todos para análise inicial, ou filtrar se ficar muito verboso:
+            // if (currentItemNameForLog.includes("mesa") && prodCatLower.includes("mesa")) { // Exemplo de filtro para mesa
+                console.log(`  -> CANDIDATO: ID: ${s_log_debug.product.id}, Nome: ${s_log_debug.product.name.substring(0,35)}, Cat: ${s_log_debug.product.category}, Score Combinado: ${s_log_debug.combinedScore.toFixed(4)}, Visual: ${s_log_debug.visualSimilarity?.toFixed(4)}, Text: ${s_log_debug.textSimilarity?.toFixed(4)}, Source: ${s_log_debug.source}`);
+            // }
+        });
+        // Agora começa a filtragem por categoria
         const itemDetectedObjectNameNormalized = normalizeText(item.detectedObjectName);
         const categoryFilteredSuggestions = processedSuggestions.filter(sugg => {
             if (!sugg.product.imageUrl) {
-                 console.log(`[findSuggestionsForItem V3.3.2-SAM_CLIP] Filtrando: Produto "${sugg.product.name}" (ID: ${sugg.product.id}) sem imagem -> REJEITADO`);
+                 console.log(`[findSuggestionsForItem V3.3.4] Filtrando: Produto \"${sugg.product.name}\" (ID: ${sugg.product.id}) sem imagem -> REJEITADO`);
                 return false;
             }
             if (!item.detectedObjectName) return true; 
             const productCategoryNormalized = normalizeText(sugg.product.category);
             if (!productCategoryNormalized) {
-                console.log(`[findSuggestionsForItem V3.3.2-SAM_CLIP] Filtrando: Produto "${sugg.product.name}" (ID: ${sugg.product.id}) tem categoria normalizada VAZIA -> REJEITADO`);
+                console.log(`[findSuggestionsForItem V3.3.4] Filtrando: Produto \"${sugg.product.name}\" (ID: ${sugg.product.id}) tem categoria normalizada VAZIA -> REJEITADO`);
                 return false; 
             }
-            if (itemDetectedObjectNameNormalized === productCategoryNormalized) return true;
+
+            // Usar uma cópia do itemDetectedObjectNameNormalized para modificações locais no filtro
+            let currentItemNameNormalized = itemDetectedObjectNameNormalized;
+
+            // Simplificação para casos como "sofá de 3 lugares" -> "sofa"
+            if (currentItemNameNormalized.includes("sofa de") && currentItemNameNormalized.includes("lugares")) {
+                currentItemNameNormalized = "sofa";
+            }
+            // Adicionar outras simplificações se necessário, ex: "cadeira de jantar" -> "cadeira"
+            if (currentItemNameNormalized.includes("cadeira de jantar")) {
+                // Isso já deve ser tratado pelo mappings, mas uma verificação explícita não prejudica
+                // Se quisermos ser mais restritos, podemos fazer currentItemNameNormalized = "cadeira"; aqui.
+            }
+
+            if (currentItemNameNormalized === productCategoryNormalized) return true;
+            
             const mappings: Record<string, string[]> = {
-                'sofa': ['sofa', 'estofado'], 'poltrona': ['poltrona', 'cadeira', 'cadeira de jantar'],
+                'sofa': ['sofa', 'estofado'], 
+                'poltrona': ['poltrona', 'cadeira', 'cadeira de jantar'],
                 'cadeira': ['cadeira', 'cadeira de jantar', 'poltrona', 'banqueta', 'banco'],
-                'cadeira de jantar': ['cadeira de jantar', 'cadeira'],
+                'cadeira de jantar': ['cadeira de jantar', 'cadeira'], // Já deve permitir match com "cadeira"
                 'mesa': ['mesa', 'mesa de centro', 'mesa lateral', 'mesa de apoio', 'mesa de jantar', 'escrivaninha'],
-                'mesa de jantar': ['mesa de jantar', 'mesa'], 'mesa de centro': ['mesa de centro', 'mesa'],
-                'mesa lateral': ['mesa lateral', 'mesa de apoio', 'mesa'],
+                'mesa de jantar': ['mesa de jantar', 'mesa', 'mesa de jantar redonda'], // Adicionado "mesa de jantar redonda"
+                'mesa de jantar redonda': ['mesa de jantar redonda', 'mesa de jantar', 'mesa'], // Adicionado para o caso específico
+                'mesa de centro': ['mesa de centro', 'mesa'],
+                'mesa lateral': ['mesa lateral', 'mesa de apoio', 'mesa', 'mesa lateral redonda'],
+                'mesa lateral redonda': ['mesa lateral redonda', 'mesa lateral', 'mesa de apoio', 'mesa'],
                 'mesa de apoio': ['mesa de apoio', 'mesa lateral', 'mesa'], 
-                'rack': ['rack', 'movel para tv', 'móvel para tv'], 'estante': ['estante', 'livreiro'], 
+                'rack': ['rack', 'movel para tv', 'móvel para tv', 'rack baixo para tv'],
+                'rack baixo para tv': ['rack baixo para tv', 'rack', 'movel para tv', 'móvel para tv'],
+                'estante': ['estante', 'livreiro'], 
                 'luminaria': ['luminaria', 'luminaria de chao', 'luminaria de mesa', 'abajur'],
                 'luminaria de chao': ['luminaria de chao', 'luminaria'], 
                 'armario': ['armario', 'roupeiro', 'guarda-roupa'],
-                'buffet': ['buffet', 'aparador', 'balcao'], 'aparador': ['aparador', 'buffet', 'console', 'balcao']
+                'buffet': ['buffet', 'aparador', 'balcao'], 
+                'aparador': ['aparador', 'buffet', 'console', 'balcao']
             };
-            if (mappings[itemDetectedObjectNameNormalized]?.includes(productCategoryNormalized)) return true;
-            if (mappings[productCategoryNormalized]?.includes(itemDetectedObjectNameNormalized)) return true;
-            console.log(`[findSuggestionsForItem V3.3.2-SAM_CLIP] Filtrando por categoria: Item "${itemDetectedObjectNameNormalized}" vs ProdCat "${productCategoryNormalized}" -> REJEITADO`);
+
+            // Usar currentItemNameNormalized para o mapeamento
+            if (mappings[currentItemNameNormalized]?.includes(productCategoryNormalized)) return true;
+            if (mappings[productCategoryNormalized]?.includes(currentItemNameNormalized)) return true;
+
+            // Fallback para nomes mais longos (ex: "cadeira de jantar com braços" deve bater com categoria "cadeira de jantar" ou "cadeira")
+            if (currentItemNameNormalized.startsWith(productCategoryNormalized) || productCategoryNormalized.startsWith(currentItemNameNormalized)) return true;
+
+            console.log(`[findSuggestionsForItem V3.3.4] Filtrando por categoria: Item \"${itemDetectedObjectNameNormalized}\" (usando como base \"${currentItemNameNormalized}\") vs ProdCat \"${productCategoryNormalized}\" -> REJEITADO`);
             return false;
         });
 
@@ -564,15 +602,40 @@ RESPONDA SEMPRE em formato JSON válido. O JSON deve ser um objeto contendo uma 
     const itemsWithSuggestions: {item: DesignProjectItem, suggestions: SuggestionForChat[], segmentationMaskForRoiUrl: string | null}[] = [];
     for (const DRAFT_item of createdDesignProjectItems) {
         let segmentationMaskForRoiUrl: string | null = null;
-        if (DRAFT_item.detectedObjectBoundingBox && typeof DRAFT_item.detectedObjectBoundingBox === 'object' && Object.keys(DRAFT_item.detectedObjectBoundingBox).length > 0 && imageUrlToProcess && project && DRAFT_item.detectedObjectName && DRAFT_item.detectedObjectName.trim() !== "") {
-            console.log(`[PROCESS_SAM_DEBUG V3.3.2] Condições para SAM OK. Nome: "${DRAFT_item.detectedObjectName}". Chamando getSegmentationMaskSAM.`);
+        const detectedObjectNameLower = DRAFT_item.detectedObjectName?.toLowerCase() || "";
+        let samPromptText = DRAFT_item.detectedObjectName || ""; // Default to full name
+
+        // Simplificar o prompt para o SAM
+        if (detectedObjectNameLower.includes("mesa")) {
+            samPromptText = "mesa";
+        } else if (detectedObjectNameLower.includes("cadeira")) {
+            samPromptText = "cadeira";
+        } else if (detectedObjectNameLower.includes("sofa")) {
+            samPromptText = "sofa";
+        } else if (detectedObjectNameLower.includes("poltrona")) {
+            samPromptText = "poltrona";
+        } else if (detectedObjectNameLower.includes("aparador")) {
+            samPromptText = "aparador";
+        } else if (detectedObjectNameLower.includes("buffet")) {
+            samPromptText = "buffet";
+        } else if (detectedObjectNameLower.includes("rack")) {
+            samPromptText = "rack";
+        } else if (detectedObjectNameLower.includes("estante")) {
+            samPromptText = "estante";
+        }
+        // Adicionar mais simplificações conforme necessário para outros tipos de móveis comuns
+
+        console.log(`[PROCESS_SAM_DEBUG V3.3.2] Item: "${DRAFT_item.detectedObjectName}", SAM Prompt a ser usado: "${samPromptText}"`);
+
+        if (DRAFT_item.detectedObjectBoundingBox && typeof DRAFT_item.detectedObjectBoundingBox === 'object' && Object.keys(DRAFT_item.detectedObjectBoundingBox).length > 0 && imageUrlToProcess && project && samPromptText.trim() !== "") {
+            console.log(`[PROCESS_SAM_DEBUG V3.3.2] Condições para SAM OK. Chamando getSegmentationMaskSAM.`);
             try {
-                segmentationMaskForRoiUrl = await getSegmentationMaskSAM(imageUrlToProcess, DRAFT_item.detectedObjectName); 
+                segmentationMaskForRoiUrl = await getSegmentationMaskSAM(imageUrlToProcess, samPromptText); 
                 if (segmentationMaskForRoiUrl) console.log(`[PROCESS_SAM_DEBUG V3.3.2] Máscara SAM OBTIDA: ${segmentationMaskForRoiUrl.substring(0,70)}...`);
-                else console.warn(`[PROCESS_SAM_DEBUG V3.3.2] getSegmentationMaskSAM retornou NULL.`);
+                else console.warn(`[PROCESS_SAM_DEBUG V3.3.2] getSegmentationMaskSAM retornou NULL para prompt: "${samPromptText}".`);
             } catch (samError) { console.error(`[PROCESS_SAM_DEBUG V3.3.2] Erro SAM:`, samError); }
         } else {
-          console.warn(`[PROCESS_SAM_DEBUG V3.3.2] Condições para SAM NÃO SATISFEITAS. Nome: "${DRAFT_item.detectedObjectName || 'NULO'}", BBox: ${DRAFT_item.detectedObjectBoundingBox ? 'Presente' : 'Ausente'}`);
+          console.warn(`[PROCESS_SAM_DEBUG V3.3.2] Condições para SAM NÃO SATISFEITAS. Nome Original: "${DRAFT_item.detectedObjectName || 'NULO'}", Prompt SAM: "${samPromptText}", BBox: ${DRAFT_item.detectedObjectBoundingBox ? 'Presente' : 'Ausente'}`);
         }
         if (project && typeof project.userId === 'number') {
             const suggestionsFromFind = await findSuggestionsForItem(DRAFT_item, project.userId, imageUrlToProcess, segmentationMaskForRoiUrl);

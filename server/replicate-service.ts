@@ -202,12 +202,11 @@ export async function extractTextFromImage(
   );
 }
 
-// ATUALIZADA para usar andreasjansson/grounded-sam
+// ATUALIZADA para usar schananas/grounded_sam com o hash de versão e input corretos
 export async function getSegmentationMaskSAM(
   imageUrl: string,
-  promptText: string, // Este será o input para o campo "text"
-  // Novo modelIdentifier para andreasjansson/grounded-sam com hash de versão
-  modelIdentifier: string = "andreasjansson/grounded-sam:b8c7f97f29af1f56e372cddf7c60f55a8b5f91b67892b6d3dfc2e6c79779bfc6"
+  promptText: string, 
+  modelIdentifier: string = "schananas/grounded_sam:ee871c19efb1941f55f66a3d7d960428c8a5afcb77449547fe8e5a3ab9ebc21c"
 ): Promise<string | null> { 
   if (!process.env.REPLICATE_API_TOKEN) {
     console.error("[DEBUG SAM SVC] REPLICATE_API_TOKEN não está configurado.");
@@ -218,7 +217,7 @@ export async function getSegmentationMaskSAM(
     return null;
   }
   if (!promptText || promptText.trim() === "") {
-    console.error("[DEBUG SAM SVC] Prompt de texto para Grounded SAM não fornecido ou vazio.");
+    console.error("[DEBUG SAM SVC] Prompt de texto (mask_prompt) para Grounded SAM não fornecido ou vazio.");
     return null;
   }
 
@@ -228,49 +227,32 @@ export async function getSegmentationMaskSAM(
   
   const input = {
     image: imageUrl,
-    text: promptText, // Usar o promptText aqui
-    box_threshold: 0.3, // Valor padrão do exemplo, pode precisar de ajuste
-    text_threshold: 0.25 // Valor padrão do exemplo, pode precisar de ajuste
+    mask_prompt: promptText,
+    box_threshold: 0.3,
+    text_threshold: 0.25
   };
 
   console.log(`[DEBUG SAM SVC] Chamando Replicate.run com: Model: ${modelIdentifier}, Input: ${JSON.stringify(input)}`);
 
   try {
-    // O output deste modelo provavelmente será uma URL direta para a máscara do objeto detectado via texto.
-    const output = await replicate.run(modelIdentifier as `${string}/${string}:${string}`, { input }) as unknown;
+    const output: unknown = await replicate.run(modelIdentifier as `${string}/${string}:${string}`, { input });
     
-    console.log("[DEBUG SAM SVC] Output BRUTO do Replicate (andreasjansson/grounded-sam):", JSON.stringify(output));
+    console.log("[DEBUG SAM SVC] Output BRUTO do Replicate (schananas/grounded_sam):", JSON.stringify(output));
 
-    // Tentar extrair a URL da máscara. 
-    // Modelos SAM frequentemente retornam a URL da imagem da máscara diretamente ou dentro de um array/objeto simples.
-    if (typeof output === 'string' && output.startsWith('http')) {
+    if (Array.isArray(output) && output.length > 0 && typeof output[0] === 'string' && output[0].startsWith('http')) {
+      console.log(`[DEBUG SAM SVC] Máscara(s) recebida(s). Usando a primeira: ${output[0]}`);
+      return output[0]; 
+    } else if (typeof output === 'string' && output.startsWith('http')) {
       console.log(`[DEBUG SAM SVC] Máscara recebida (string direta): ${output}`);
       return output;
-    } 
-    // Se for um array, pegar o primeiro elemento se for uma URL
-    else if (Array.isArray(output) && output.length > 0 && typeof output[0] === 'string' && output[0].startsWith('http')) {
-      console.log(`[DEBUG SAM SVC] Máscara recebida (primeiro item do array): ${output[0]}`);
-      return output[0];
-    } 
-    // Alguns modelos podem aninhar a URL em um objeto, ex: { image_url: "..." } ou { mask: "..." }
-    else if (typeof output === 'object' && output !== null) {
-        const possibleKeys = ['mask', 'mask_url', 'image', 'image_url', 'output', 'url'];
-        for (const key of possibleKeys) {
-            if (typeof (output as any)[key] === 'string' && (output as any)[key].startsWith('http')) {
-                console.log(`[DEBUG SAM SVC] Máscara recebida (chave '${key}' do objeto): ${(output as any)[key]}`);
-                return (output as any)[key];
-            }
-        }
     }
 
-    console.warn("[DEBUG SAM SVC] Output do Replicate (andreasjansson/grounded-sam) não continha uma URL de máscara esperada.", output);
+    console.warn("[DEBUG SAM SVC] Output do Replicate (schananas/grounded_sam) não é um array de URLs de máscara esperado ou uma URL de string direta, ou está vazio.", output);
     return null;
   } catch (error: any) {
-    console.error("[DEBUG SAM SVC] Erro ao chamar API do andreasjansson/grounded-sam no Replicate:", error.message);
+    console.error("[DEBUG SAM SVC] Erro ao chamar API do schananas/grounded_sam no Replicate:", error.message);
     if (error.response?.status) {
         console.error("[DEBUG SAM SVC] Replicate Error Status:", error.response.status);
-        // Não logar error.response.data completo por padrão para evitar verbosidade excessiva e potenciais dados sensíveis.
-        // Mas é útil saber se há um payload de erro específico.
         if (error.response.data?.detail) {
             console.error("[DEBUG SAM SVC] Replicate Error Detail:", error.response.data.detail);
         } else if (error.response.data) {
