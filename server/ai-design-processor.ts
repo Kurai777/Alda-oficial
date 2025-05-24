@@ -221,7 +221,7 @@ async function findSuggestionsForItem(
             let visuallySimilarProductsDb: (Product & { distance?: number })[] = [];
             try {
                 const embeddingStringForDb = `[${targetRoiClipEmbedding.join(',')}]`;
-                // Tentativa de correção da query SQL, removendo aspas simples extras ao redor de embeddingStringForDb
+                // Tentativa de correção da query SQL para usar .mapWith(Number) diretamente
                 const distanceExpression = sql`${products.clipEmbedding} <-> ${embeddingStringForDb}`;
                 
                 visuallySimilarProductsDb = await db
@@ -232,16 +232,15 @@ async function findSuggestionsForItem(
                         sizes: products.sizes, location: products.location, stock: products.stock, excelRowNumber: products.excelRowNumber,
                         embedding: products.embedding, clipEmbedding: products.clipEmbedding, search_tsv: products.search_tsv,
                         createdAt: products.createdAt, firestoreId: products.firestoreId, firebaseUserId: products.firebaseUserId, isEdited: products.isEdited,
-                        distance: distanceExpression.mapWith(Number) // Usar mapWith aqui
+                        distance: distanceExpression.mapWith(Number) // Correto: .mapWith(Number) aplicado à SQL tag
                     })
                     .from(products)
                     .where(and(isNotNull(products.clipEmbedding), isNotNull(products.imageUrl)))
-                    .orderBy(distanceExpression)
+                    .orderBy(distanceExpression) // Reutiliza a expressão SQL
                     .limit(40); 
-                console.log(`[findSuggestionsForItem V3.3.2-SAM_CLIP] Busca vetorial CLIP no DB retornou ${visuallySimilarProductsDb.length} produtos.`);
+                console.log(`[findSuggestionsForItem V3.3.4-SAM_CLIP] Busca vetorial CLIP no DB retornou ${visuallySimilarProductsDb.length} produtos.`);
             } catch (dbVectorError) { 
-                console.error("[findSuggestionsForItem V3.3.3-SAM_CLIP] Erro na busca vetorial CLIP no DB:", dbVectorError);
-                // Definir visuallySimilarProductsDb como array vazio para evitar erros subsequentes se a query falhar
+                console.error("[findSuggestionsForItem V3.3.4-SAM_CLIP] Erro na busca vetorial CLIP no DB:", dbVectorError);
                 visuallySimilarProductsDb = []; 
             }
             
