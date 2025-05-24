@@ -208,8 +208,8 @@ export async function getSegmentationMaskSAM(
   // promptText não é usado diretamente como input para cjwbw/semantic-segment-anything,
   // mas pode ser usado para selecionar a máscara correta do output se ele retornar múltiplas máscaras com etiquetas.
   promptText: string, 
-  // Novo modelIdentifier para cjwbw/semantic-segment-anything com hash de versão
-  modelIdentifier: string = "cjwbw/semantic-segment-anything:3c1e3d401ae19046cde20ad78941c3e87b6de60b3c3b45aaee18e714a017b50e"
+  // ATUALIZADO o hash da versão para o mais recente sugerido pelo ChatGPT
+  modelIdentifier: string = "cjwbw/semantic-segment-anything:947b2da7a7f17c3edafc85f72fdc16210c507a4b7bcec6579ef49b85db58311d"
 ): Promise<string | null> { 
   if (!process.env.REPLICATE_API_TOKEN) {
     console.error("[DEBUG SAM SVC] REPLICATE_API_TOKEN não está configurado.");
@@ -232,53 +232,35 @@ export async function getSegmentationMaskSAM(
   console.log(`[DEBUG SAM SVC] Chamando Replicate.run com: Model: ${modelIdentifier}, Input: ${JSON.stringify(input)}`);
 
   try {
-    // O output deste modelo pode ser diferente. Precisamos inspecioná-lo.
-    // Exemplo de output esperado (HIPOTÉTICO - PRECISA VERIFICAR O REAL):
-    // { masks: [ { label: "chair", mask_url: "url1" }, { label: "table", mask_url: "url2" } ] }
-    // ou apenas uma URL de uma imagem de máscara combinada, ou um objeto com várias URLs de máscaras.
-    const output = await replicate.run(modelIdentifier as `${string}/${string}:${string}`, { input }) as any; // Usar 'any' por enquanto até sabermos o formato exato
+    const output = await replicate.run(modelIdentifier as `${string}/${string}:${string}`, { input }) as any; 
     
     console.log("[DEBUG SAM SVC] Output BRUTO do Replicate (cjwbw/semantic-segment-anything):", JSON.stringify(output));
 
-    // LÓGICA PARA EXTRAIR A MÁSCARA CORRETA (PRECISA SER AJUSTADA BASEADO NO OUTPUT REAL)
     if (output) {
-      // Cenário 1: Se o output for diretamente uma URL de string (máscara única/combinada)
       if (typeof output === 'string') {
-        console.log(`[DEBUG SAM SVC] Output é uma string (URL de máscara?): ${output}`);
-        // Se for uma máscara combinada, não podemos usá-la diretamente para um objeto específico facilmente.
-        // Por ora, vamos retornar se for uma URL, mas idealmente queremos máscaras por objeto.
         if (output.startsWith('http')) return output;
-        return null; // Não é uma URL válida
+        return null; 
       }
-
-      // Cenário 2: Se o output for um objeto com uma propriedade contendo a URL da máscara (ex: output.mask_url ou output.image)
-      // Isso é comum para modelos que retornam uma única imagem processada.
       if (typeof output === 'object' && output !== null) {
         const possibleMaskKeys = ['mask', 'mask_url', 'image', 'output', 'combined_mask', 'segmentation_map'];
         for (const key of possibleMaskKeys) {
           if (typeof output[key] === 'string' && output[key].startsWith('http')) {
-            console.log(`[DEBUG SAM SVC] Encontrada URL de máscara na chave '${key}': ${output[key]}`);
-            // Novamente, se for uma máscara única, não é ideal para objeto específico, mas retornamos por enquanto.
             return output[key];
           }
         }
-
-        // Cenário 3: Se o output for uma estrutura com múltiplas máscaras e etiquetas (IDEAL)
-        // Exemplo: output.segments = [{label: "chair", mask_url: "..."}, {label: "table", mask_url: "..."}]
-        // ou output.masks = [...] ou output.predictions = [...] etc.
         let segments: {label?: string, class?: string, category?: string, name?: string, mask_url?: string, mask?: string}[] = [];
         if (Array.isArray(output.segments)) segments = output.segments;
         else if (Array.isArray(output.masks)) segments = output.masks;
         else if (Array.isArray(output.predictions)) segments = output.predictions;
         else if (Array.isArray(output.outputs)) segments = output.outputs;
-        else if (Array.isArray(output)) segments = output; // Se o output for diretamente um array de segmentos
+        else if (Array.isArray(output)) segments = output; 
 
         if (segments.length > 0) {
             console.log(`[DEBUG SAM SVC] Encontrados ${segments.length} segmentos/máscaras no output.`);
             const normalizedPromptText = promptText.toLowerCase().trim();
             for (const seg of segments) {
                 const label = seg.label || seg.class || seg.category || seg.name;
-                const maskUrl = seg.mask_url || seg.mask; // Alguns modelos podem usar 'mask' para a URL
+                const maskUrl = seg.mask_url || seg.mask; 
                 if (label && typeof label === 'string' && maskUrl && typeof maskUrl === 'string' && maskUrl.startsWith('http')) {
                     if (label.toLowerCase().includes(normalizedPromptText)) {
                         console.log(`[DEBUG SAM SVC] Máscara correspondente encontrada para "${promptText}" com etiqueta "${label}": ${maskUrl}`);
@@ -287,8 +269,6 @@ export async function getSegmentationMaskSAM(
                 }
             }
             console.warn(`[DEBUG SAM SVC] Nenhum segmento com etiqueta correspondente a "${promptText}" encontrado nas máscaras retornadas.`);
-            // Se nenhum match exato, mas temos um promptText e só uma máscara principal, talvez retornar ela?
-            // Ou, se houver apenas uma máscara no array, retorná-la?
             if (segments.length === 1 && (segments[0].mask_url || segments[0].mask) && typeof (segments[0].mask_url || segments[0].mask) === 'string'){
                 const singleMaskUrl = segments[0].mask_url || segments[0].mask;
                  if(singleMaskUrl && singleMaskUrl.startsWith('http')){
@@ -299,12 +279,10 @@ export async function getSegmentationMaskSAM(
         }
       }
     }
-
     console.warn("[DEBUG SAM SVC] Output do Replicate (cjwbw/semantic-segment-anything) não continha uma URL de máscara utilizável ou correspondente.", output);
     return null;
   } catch (error: any) {
     console.error("[DEBUG SAM SVC] Erro ao chamar API do cjwbw/semantic-segment-anything no Replicate:", error.message);
-    // Não logar error.response completo aqui, pode ser muito grande ou já logado por runReplicateModel
     if (error.response?.status) console.error("[DEBUG SAM SVC] Replicate Error Status:", error.response.status);
     return null;
   }
