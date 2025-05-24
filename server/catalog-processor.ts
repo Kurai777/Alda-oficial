@@ -12,6 +12,11 @@ import { Product, InsertProduct } from '@shared/schema'; // Importar tipo Produc
 
 // Adicionar imports para OpenAI e o modelo de embedding
 import OpenAI from "openai";
+// @ts-ignore
+import { processPricingFile, ExtractedPriceItem } from './pricing-file-processor.js'; // Importando a nova função
+// @ts-ignore
+import { fuseCatalogData } from './catalog-fusion-service.js'; // Importando a função de fusão
+
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const EMBEDDING_MODEL = 'text-embedding-3-small'; // Mesmo modelo usado em ai-design-processor
 
@@ -147,6 +152,7 @@ export async function processCatalogInBackground(data: CatalogJobData): Promise<
   let savedLocalProducts: Product[] = []; // Definir tipo Product
   let uploadedImages: UploadedImageInfo[] = []; // Lista de imagens após upload
   let extractionInfo = `Iniciando processamento para ${fileType}`;
+  let pricingDataResult: ExtractedPriceItem[] | null = null; // Para armazenar dados do arquivo de preços
 
   try {
     // 0. Log de início e dados recebidos
@@ -410,14 +416,58 @@ export async function processCatalogInBackground(data: CatalogJobData): Promise<
             }
         }
         console.log(`---> Associação v5 (IA Vision + Fallback) concluída. ${associatedCount} produtos atualizados com imagens.`);
+    } else if (fileType === 'pdf') {
+      console.warn(`[BG Proc ${catalogId}] Processamento de ARQUIVO ARTÍSTICO PDF (extração de produtos/imagens) ainda não implementado. Pulando esta etapa e prosseguindo para o processamento de arquivo de preços (se houver).`);
+      extractionInfo = "Processamento de PDF artístico pendente.";
+      // savedLocalProducts permanecerá vazio por enquanto para PDFs artísticos
+      // No futuro, aqui entraria a lógica de chamar GPT-4o Vision para extrair dados do PDF artístico
     } else {
-      // CORRIGIDO: Fechar template literal
-      throw new Error(`Tipo de arquivo não suportado para processamento de imagem: ${fileType}`);
+      // Para outros tipos de arquivo (jpg, png etc. como arquivo artístico)
+      console.warn(`[BG Proc ${catalogId}] Processamento de ARQUIVO ARTÍSTICO do tipo '${fileType}' (extração de produtos/imagens) ainda não implementado. Pulando esta etapa e prosseguindo para o processamento de arquivo de preços (se houver).`);
+      extractionInfo = `Processamento de arquivo artístico '${fileType}' pendente.`;
+      // savedLocalProducts permanecerá vazio por enquanto
     }
 
-    // Se chegou aqui sem erro, marca como completo
+    // Processamento do arquivo de preços (ocorre independentemente do tipo do arquivo artístico)
+    console.log(`[BG Proc ${catalogId}] Tentando processar arquivo de preços associado...`);
+    try {
+      pricingDataResult = await processPricingFile(catalogId);
+      if (pricingDataResult && pricingDataResult.length > 0) {
+        console.log(`[BG Proc ${catalogId}] Processamento do arquivo de preços CONCLUÍDO. Encontrados ${pricingDataResult.length} itens de preço.`);
+        extractionInfo += ` | Preços extraídos: ${pricingDataResult.length} itens.`;
+      } else if (pricingDataResult === null) {
+        console.log(`[BG Proc ${catalogId}] Processamento do arquivo de preços FALHOU ou arquivo não aplicável.`);
+        extractionInfo += ` | Falha/Não aplicável processamento de preços.`;
+      } else { 
+        console.log(`[BG Proc ${catalogId}] Arquivo de preços processado, mas NENHUM item de preço foi extraído.`);
+        extractionInfo += ` | Nenhum item de preço extraído.`;
+      }
+    } catch (priceProcessingError) {
+      console.error(`[BG Proc ${catalogId}] ERRO CRÍTICO ao chamar processPricingFile:`, priceProcessingError);
+      extractionInfo += ` | Erro crítico no processamento de preços.`;
+    }
+
+    // Fusão de dados (ocorre independentemente do tipo do arquivo artístico)
+    // Se savedLocalProducts estiver vazio (ex: PDF artístico ainda não processado), a fusão não terá produtos artísticos para atualizar,
+    // mas a função fuseCatalogData é chamada para registrar que tentou (e os matchDetails refletirão isso).
+    console.log(`[BG Proc ${catalogId}] Iniciando fusão de dados com ${savedLocalProducts.length} produtos artísticos e ${pricingDataResult?.length || 0} itens de preço.`);
+    try {
+      const fusionResult = await fuseCatalogData(catalogId, savedLocalProducts, pricingDataResult);
+      console.log(`[BG Proc ${catalogId}] Resultado da Fusão: ${fusionResult.productsUpdatedWithPrice} produtos atualizados com preço.`);
+      extractionInfo += ` | Fusão: ${fusionResult.productsUpdatedWithPrice} produtos com preço atualizado.`;
+      if (savedLocalProducts.length === 0 && (pricingDataResult?.length || 0) > 0) {
+        extractionInfo += ` (Nota: Havia itens de preço mas nenhum produto do arquivo artístico para mesclar).`;
+      }
+    } catch (fusionError) {
+      console.error(`[BG Proc ${catalogId}] ERRO CRÍTICO durante a fusão de dados:`, fusionError);
+      extractionInfo += ` | Erro crítico na fusão de dados.`;
+    }
+
+    // Se chegou aqui, consideramos o processamento geral do catálogo como concluído,
+    // mesmo que partes específicas (como extração de PDF artístico) estejam pendentes.
+    // O status 'failed' seria para erros inesperados que impedem o fluxo.
     await storage.updateCatalogStatus(catalogId, 'completed');
-    console.log(`[BG Proc ${catalogId}] Processamento concluído com sucesso. Status: completed. Info: ${extractionInfo}`);
+    console.log(`[BG Proc ${catalogId}] Processamento concluído (com etapas possivelmente pendentes). Status: completed. Info: ${extractionInfo}`);
 
   } catch (error) {
     console.error(`[BG Proc ${catalogId}] ERRO GERAL no processamento background:`, error);

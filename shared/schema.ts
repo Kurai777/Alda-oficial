@@ -83,19 +83,25 @@ export const insertProductSchema = createInsertSchema(products).pick({
 
 export const catalogs = pgTable("catalogs", {
   id: serial("id").primaryKey(),
-  userId: integer("user_id").notNull(),
-  fileName: text("file_name").notNull(),
-  fileUrl: text("file_url").notNull(),
-  processedStatus: text("processed_status").default("pending"),
+  userId: integer("user_id")
+    .references(() => users.id, { onDelete: "cascade" })
+    .notNull(),
+  artisticFileName: text("artistic_file_name").notNull(),
+  artisticFileUrl: text("artistic_file_url").notNull(),
+  pricingFileName: text("pricing_file_name"),
+  pricingFileUrl: text("pricing_file_url"),
+  processedStatus: text("processed_status").default("pending").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
   firestoreCatalogId: text("firestore_catalog_id"),
-  firebaseUserId: text("firebase_user_id"), // ID do usuário no Firebase
-  createdAt: timestamp("created_at").defaultNow(),
+  firebaseUserId: text("firebase_user_id"),
 });
 
 export const insertCatalogSchema = createInsertSchema(catalogs).pick({
   userId: true,
-  fileName: true,
-  fileUrl: true,
+  artisticFileName: true,
+  artisticFileUrl: true,
+  pricingFileName: true,
+  pricingFileUrl: true,
   processedStatus: true,
   firestoreCatalogId: true,
   firebaseUserId: true,

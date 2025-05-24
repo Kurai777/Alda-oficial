@@ -385,14 +385,14 @@ export async function registerRoutes(router: ExpressRouter, upload: multer.Multe
           try {
             const result = await fixProductImages(userId, catalog.id);
             results.push({
-              catalogId: catalog.id, catalogName: catalog.fileName, status: result.success ? "completed" : "error",
+              catalogId: catalog.id, catalogName: catalog.artisticFileName, status: result.success ? "completed" : "error",
               updatedCount: result.updated, message: result.message
             });
             if(result.success) totalUpdated += result.updated;
           } catch (catalogError) {
              const message = catalogError instanceof Error ? catalogError.message : String(catalogError);
             results.push({
-              catalogId: catalog.id, catalogName: catalog.fileName, status: "error", updatedCount: 0, message: message
+              catalogId: catalog.id, catalogName: catalog.artisticFileName, status: "error", updatedCount: 0, message: message
             });
           }
         }
@@ -585,54 +585,72 @@ export async function registerRoutes(router: ExpressRouter, upload: multer.Multe
     }
   });
 
-  router.post("/catalogs/upload", requireAuth, upload.single("file"), handleMulterError, async (req: Request, res: Response) => {
+  router.post("/catalogs/upload", requireAuth, upload.fields([
+    { name: 'artisticFile', maxCount: 1 },
+    { name: 'pricingFile', maxCount: 1 }
+  ]), handleMulterError, async (req: Request, res: Response) => {
     try {
       const userId = req.session.userId!;
       const localUser = await storage.getUser(userId);
       if (!localUser) {
          return res.status(500).json({ message: "Erro interno: dados do usuário inconsistentes." });
       }
-      if (!req.file) {
-        return res.status(400).json({ message: "Nenhum arquivo enviado" });
+
+      const files = req.files as { [fieldname: string]: Express.Multer.File[] };
+
+      const artisticFile = files?.artisticFile?.[0];
+      const pricingFile = files?.pricingFile?.[0];
+
+      if (!artisticFile) {
+        return res.status(400).json({ message: "Nenhum arquivo artístico enviado (campo 'artisticFile')." });
       }
-      const { originalname, size } = req.file as any;
-      const location = (req.file as any).location || req.file.path;
-      const s3Bucket = (req.file as any).bucket;
-      const s3Key = (req.file as any).key;
-      const s3Etag = (req.file as any).etag;
 
-      const catalogData = {
+      const artisticOriginalName = artisticFile.originalname;
+      const artisticLocation = (artisticFile as any).location || artisticFile.path;
+      const artisticS3Key = (artisticFile as any).key;
+      const artisticFileType = artisticOriginalName.split('.').pop()?.toLowerCase() || '';
+      // const artisticFileSize = artisticFile.size; // Not directly used in catalogData for createCatalog
+
+      const catalogDataToCreate = {
         userId: localUser.id,
-        fileName: originalname,
-        fileUrl: location,
-        fileType: originalname.split('.').pop()?.toLowerCase() || '',
-        fileSize: size,
-        s3Bucket: s3Bucket,
-        s3Key: s3Key,
-        s3Url: location,
-        s3Etag: s3Etag,
+        artisticFileName: artisticOriginalName,
+        artisticFileUrl: artisticLocation,
         processedStatus: 'queued' as 'queued',
+        pricingFileName: pricingFile ? pricingFile.originalname : null,
+        pricingFileUrl: pricingFile ? ((pricingFile as any).location || pricingFile.path) : null,
       };
-      const catalog = await storage.createCatalog(catalogData);
 
-      const processingFilePath = s3Key || req.file.path;
+      const catalog = await storage.createCatalog(catalogDataToCreate);
+
+      // Para processCatalogInBackground, vamos focar no arquivo artístico por enquanto
+      const processingFilePath = artisticS3Key || artisticFile.path; // Path para o arquivo artístico
 
       const jobData = {
-        catalogId: catalog.id, userId: localUser.id, 
-        s3Key: s3Key,
+        catalogId: catalog.id, 
+        userId: localUser.id, 
+        s3Key: artisticS3Key,
         processingFilePath: processingFilePath,
-        fileName: originalname, fileType: catalogData.fileType,
-        isS3Upload: !!s3Key
+        fileName: artisticOriginalName,
+        fileType: artisticFileType,
+        isS3Upload: !!artisticS3Key
       };
       await processCatalogInBackground(jobData);
+      
+      let message = `Catálogo "${artisticOriginalName}" enviado e na fila para processamento.`;
+      if (pricingFile) {
+        message += ` Arquivo de preços "${pricingFile.originalname}" também recebido.`;
+      }
+
       return res.status(201).json({
-        message: `Catálogo "${originalname}" enviado e na fila para processamento.`,
-        catalogId: catalog.id, s3Url: location
+        message: message,
+        catalogId: catalog.id,
+        artisticFileUrl: artisticLocation,
+        pricingFileUrl: pricingFile ? catalogDataToCreate.pricingFileUrl : undefined
       });
     } catch (error) {
-      console.error("Erro GERAL na rota de upload:", error);
+      console.error("Erro GERAL na rota de upload de catálogos:", error);
       return res.status(500).json({
-        message: `Erro interno ao processar upload: ${error instanceof Error ? error.message : String(error)}`
+        message: `Erro interno ao processar upload de catálogos: ${error instanceof Error ? error.message : String(error)}`
       });
     }
   });

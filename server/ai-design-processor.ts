@@ -17,7 +17,7 @@ import { products, type Product, type DesignProject, type NewDesignProjectItem, 
 import { getClipEmbeddingFromImageUrl, getClipEmbeddingFromImageBuffer } from './clip-service'; 
 import { broadcastToProject } from './index';
 import sharp from 'sharp';
-import { getSegmentationDataRAM, type RamSamSegment } from './replicate-service'; 
+import { getSegmentationMaskSAM } from './replicate-service'; 
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -120,9 +120,9 @@ async function findSuggestionsForItem(
     item: DesignProjectItem, 
     userId: number, 
     imageUrlToProcess: string, 
-    _segmentationMaskUrl_IGNORED?: string | null 
+    segmentationMaskUrl?: string | null
 ): Promise<SuggestionForChat[]> {
-    console.log(`[findSuggestionsForItem V3.5.1] DEBUG: Iniciando para item: ${item.detectedObjectName}`);
+    console.log(`[findSuggestionsForItem V3.6] Item: "${item.detectedObjectName}", Mask URL: ${segmentationMaskUrl ? "Presente" : "Ausente"}`);
     try {
         const detectedText = (`${item.detectedObjectName || ''} ${item.detectedObjectDescription || ''}`).trim();
         if (!detectedText && !item.detectedObjectBoundingBox) return [];
@@ -131,7 +131,7 @@ async function findSuggestionsForItem(
             try {
                 textualSearchResults = await storage.searchProducts(userId, detectedText);
                 textualSearchResults = textualSearchResults.filter(p => p.imageUrl);
-            } catch (error) { console.error("[findSuggestionsForItem V3.5.1] Erro FTS:", error); }
+            } catch (error) { console.error("[findSuggestionsForItem V3.6] Erro FTS:", error); }
         }
         let targetRoiClipEmbedding: number[] | null = null;
         let originalImageBuffer: Buffer | null = null;
@@ -142,14 +142,28 @@ async function findSuggestionsForItem(
                 if (originalImageBuffer) imageMetadata = await sharp(originalImageBuffer).metadata();
             } catch (e) { originalImageBuffer = null; }
         }
-        if (originalImageBuffer && imageMetadata?.width && imageMetadata?.height && item.detectedObjectBoundingBox) {
-            try {
-                const pixelBbox = await calculatePixelBbox(item.detectedObjectBoundingBox, imageMetadata.width, imageMetadata.height);
-                if (pixelBbox && pixelBbox.w > 0 && pixelBbox.h > 0) {
-                    const roiBuffer = await sharp(originalImageBuffer).extract({ left: pixelBbox.x, top: pixelBbox.y, width: pixelBbox.w, height: pixelBbox.h }).png().toBuffer();
-                    targetRoiClipEmbedding = await getClipEmbeddingFromImageBuffer(roiBuffer, `roi_bbox_${item.id}_${item.detectedObjectName || 'sem_nome'}`);
-                }
-            } catch (bboxError) { console.error(`[findSuggestionsForItem V3.5.1] Erro BBOX:`, bboxError); }
+        if (originalImageBuffer && imageMetadata?.width && imageMetadata?.height) {
+            if (segmentationMaskUrl) {
+                try {
+                    const maskImageBuffer = await fetchImageAsBuffer(segmentationMaskUrl);
+                    const maskedRoiBuffer = await sharp(originalImageBuffer).composite([{ input: maskImageBuffer, blend: 'in' }]).png().toBuffer();
+                    const pixelBbox = await calculatePixelBbox(item.detectedObjectBoundingBox, imageMetadata.width, imageMetadata.height);
+                    if (pixelBbox && pixelBbox.w > 0 && pixelBbox.h > 0) {
+                        targetRoiClipEmbedding = await getClipEmbeddingFromImageBuffer(maskedRoiBuffer, `roi_sam_${item.id}`);
+                        if (targetRoiClipEmbedding) console.log("[findSuggestionsForItem V3.6] Embedding CLIP da ROI MASCARADA (SAM) gerado.");
+                    }
+                } catch (samProcessingError) { console.error(`[findSuggestionsForItem V3.6] Erro SAM Mask Proc:`, samProcessingError);}
+            }
+            if (!targetRoiClipEmbedding && item.detectedObjectBoundingBox) {
+                try {
+                    const pixelBbox = await calculatePixelBbox(item.detectedObjectBoundingBox, imageMetadata.width, imageMetadata.height);
+                    if (pixelBbox && pixelBbox.w > 0 && pixelBbox.h > 0) {
+                        const roiBuffer = await sharp(originalImageBuffer).extract({ left: pixelBbox.x, top: pixelBbox.y, width: pixelBbox.w, height: pixelBbox.h }).png().toBuffer();
+                        targetRoiClipEmbedding = await getClipEmbeddingFromImageBuffer(roiBuffer, `roi_bbox_${item.id}`);
+                         if (targetRoiClipEmbedding) console.log("[findSuggestionsForItem V3.6] Embedding CLIP da ROI por BBOX (fallback) gerado.");
+                    }
+                } catch (bboxError) {console.error(`[findSuggestionsForItem V3.6] Erro BBOX Fallback:`, bboxError); }
+            }
         }
         const combinedSuggestionsMap: Map<number, {product: Product, textScore: number, visualScore: number, sourceDetails: string[]}> = new Map();
         const maxFtsRelevance = textualSearchResults.reduce((max, p) => Math.max(max, p.relevance || 0), 0);
@@ -158,67 +172,13 @@ async function findSuggestionsForItem(
             ftsScore = Math.max(0, Math.min(ftsScore, 1));
             if (ftsScore > 0.01) combinedSuggestionsMap.set(product.id, { product, textScore: ftsScore, visualScore: 0, sourceDetails: ['text_fts'] });
         }
-        if (textualSearchResults.length > 0) {
-            console.log(`[findSuggestionsForItem V3.5.1] DEBUG: Top ${Math.min(15, textualSearchResults.length)} resultados FTS:`);
-            textualSearchResults.slice(0, 15).forEach(p => {
-                let ftsScore = maxFtsRelevance > 0 ? (p.relevance || 0) / maxFtsRelevance : 0;
-                ftsScore = Math.max(0, Math.min(ftsScore, 1));
-                console.log(`  -> FTS Raw: ID ${p.id} (${p.name.substring(0,20)}), Cat: ${p.category}, Relevance: ${p.relevance?.toFixed(4)}, Calc FTS Score: ${ftsScore.toFixed(4)}`);
-                if (p.id === 28738) console.log(`    ----> ASPEN ALTA (28738) encontrada na FTS! Relevance: ${p.relevance}, Score FTS: ${ftsScore}`);
-            });
-        }
         if (targetRoiClipEmbedding) {
             let visuallySimilarProductsDb: (Product & { distance?: number })[] = [];
             try {
                 const embeddingStringForDb = `[${targetRoiClipEmbedding.join(',')}]`;
                 const distanceExpression = sql`${products.clipEmbedding} <-> ${embeddingStringForDb}`;
-                
-                visuallySimilarProductsDb = await db
-                    .select({
-                        id: products.id,
-                        userId: products.userId,
-                        catalogId: products.catalogId,
-                        name: products.name,
-                        code: products.code,
-                        description: products.description,
-                        price: products.price,
-                        category: products.category,
-                        manufacturer: products.manufacturer,
-                        imageUrl: products.imageUrl,
-                        colors: products.colors,
-                        materials: products.materials,
-                        sizes: products.sizes,
-                        location: products.location,
-                        stock: products.stock,
-                        excelRowNumber: products.excelRowNumber,
-                        embedding: products.embedding,
-                        clipEmbedding: products.clipEmbedding,
-                        search_tsv: products.search_tsv,
-                        createdAt: products.createdAt,
-                        firestoreId: products.firestoreId,
-                        firebaseUserId: products.firebaseUserId,
-                        isEdited: products.isEdited,
-                        distance: distanceExpression.mapWith(Number) 
-                    })
-                    .from(products)
-                    .where(and(isNotNull(products.clipEmbedding), isNotNull(products.imageUrl)))
-                    .orderBy(distanceExpression)
-                    .limit(40);
-                console.log(`[findSuggestionsForItem V3.5.1] Busca vetorial CLIP no DB retornou ${visuallySimilarProductsDb.length} produtos.`);
-
-            } catch (dbVectorError) { 
-                console.error("[findSuggestionsForItem V3.5.1] Erro na busca vetorial CLIP no DB:", dbVectorError);
-                visuallySimilarProductsDb = []; 
-            }
-            if (visuallySimilarProductsDb && visuallySimilarProductsDb.length > 0) {
-                console.log(`[findSuggestionsForItem V3.5.1] DEBUG: Top ${Math.min(15, visuallySimilarProductsDb.length)} resultados da Busca Visual:`);
-                visuallySimilarProductsDb.slice(0, 15).forEach(p => {
-                    let visualScore = typeof p.distance === 'number' ? (1 / (1 + p.distance)) : 0;
-                    visualScore = Math.max(0, Math.min(visualScore, 1));
-                    console.log(`  -> Visual Raw: ID ${p.id} (${p.name.substring(0,20)}), Cat: ${p.category}, Distance: ${p.distance?.toFixed(4)}, Calc Visual Score: ${visualScore.toFixed(4)}`);
-                    if (p.id === 28738) console.log(`    ----> ASPEN ALTA (28738) encontrada na Busca Visual! Dist: ${p.distance}, Score Visual: ${visualScore}`);
-                });
-            }
+                visuallySimilarProductsDb = await db.select({id: products.id, userId: products.userId, catalogId: products.catalogId, name: products.name, code: products.code, description: products.description, price: products.price, category: products.category, manufacturer: products.manufacturer, imageUrl: products.imageUrl, colors: products.colors, materials: products.materials, sizes: products.sizes, location: products.location, stock: products.stock, excelRowNumber: products.excelRowNumber, embedding: products.embedding, clipEmbedding: products.clipEmbedding, search_tsv: products.search_tsv, createdAt: products.createdAt, firestoreId: products.firestoreId, firebaseUserId: products.firebaseUserId, isEdited: products.isEdited, distance: distanceExpression.mapWith(Number) }).from(products).where(and(isNotNull(products.clipEmbedding), isNotNull(products.imageUrl))).orderBy(distanceExpression).limit(40);
+            } catch (dbVectorError) { console.error("[findSuggestionsForItem V3.6] Erro DB vector:", dbVectorError); visuallySimilarProductsDb = [];}
             const visualClipThreshold = 0.10; 
             for (const product of visuallySimilarProductsDb) {
                 let currentVisualClipScore = typeof product.distance === 'number' ? (1 / (1 + product.distance)) : 0;
@@ -264,10 +224,16 @@ async function findSuggestionsForItem(
             if (currentItemNameNormalized.startsWith(productCategoryNormalized) || productCategoryNormalized.startsWith(currentItemNameNormalized)) return true;
             return false;
         });
-        console.log(`[findSuggestionsForItem V3.5.1] PÓS-FILTRO categoria: ${categoryFilteredSuggestions.length} para "${item.detectedObjectName}".`);
+        const currentItemNameForLog = item.detectedObjectName?.toLowerCase() || "desconhecido";
+        console.log(`[DEBUG SCORES ANTES CAT FILTRO V3.6] Para item: "${item.detectedObjectName}" (ID: ${item.id})`);
+        processedSuggestions.forEach(s_log_debug => {
+            const prodCatLower = s_log_debug.product.category?.toLowerCase() || "sem_categoria";
+            console.log(`  -> CANDIDATO: ID: ${s_log_debug.product.id}, Nome: ${s_log_debug.product.name.substring(0,35)}, Cat: ${s_log_debug.product.category}, Score Combinado: ${s_log_debug.combinedScore.toFixed(4)}, Visual: ${s_log_debug.visualSimilarity?.toFixed(4)}, Text: ${s_log_debug.textSimilarity?.toFixed(4)}, Source: ${s_log_debug.source}`);
+        });
+        console.log(`[findSuggestionsForItem V3.6] PÓS-FILTRO categoria: ${categoryFilteredSuggestions.length} para "${item.detectedObjectName}".`);
         return categoryFilteredSuggestions.slice(0, 5);
     } catch (error) {
-        console.error(`[findSuggestionsForItem V3.5.1] Erro GERAL item ${item.id}:`, error);
+        console.error(`[findSuggestionsForItem V3.6] Erro GERAL item ${item.id}:`, error);
         return [];
     }
 }
@@ -371,7 +337,7 @@ export async function processAiDesignProject(projectId: number): Promise<DesignP
 }
 
 export async function processDesignProjectImage(projectId: number, imageUrlToProcess: string, userMessageText?: string): Promise<void> {
-  console.log(`[AI Design Processor V3.5.1] Iniciando para projeto ${projectId}`);
+  console.log(`[AI Design Processor V3.6] Iniciando para projeto ${projectId}`);
   const initialUserMessageForChat = userMessageText ? 
     `Analisando a imagem que você enviou com a mensagem: "${userMessageText}"...` :
     `Analisando a imagem que você enviou...`;
@@ -381,7 +347,6 @@ export async function processDesignProjectImage(projectId: number, imageUrlToPro
   let detectedObjectsFromVision: { name: string; description: string; bbox: any; }[] = [];
   let visionAnalysisFailed = false;
   let project: DesignProject | undefined | null = null; 
-  let allSamSegments: RamSamSegment[] | null = null; 
 
   let originalImageBuffer: Buffer | null = null;
   let imageMetadata: sharp.Metadata | null = null;
@@ -393,25 +358,25 @@ export async function processDesignProjectImage(projectId: number, imageUrlToPro
               imageMetadata = await sharp(originalImageBuffer).metadata();
           }
       } catch (e) {
-          console.error("[AI Design Processor V3.5.1] Erro ao buscar imagem:", e);
+          console.error("[AI Design Processor V3.6] Erro ao buscar imagem:", e);
           return; 
       }
   }
   if (!originalImageBuffer || !imageMetadata?.width || !imageMetadata?.height) {
-      console.error("[AI Design Processor V3.5.1] Imagem ou metadados inválidos.");
+      console.error("[AI Design Processor V3.6] Imagem ou metadados inválidos.");
       return; 
   }
 
   try {
     project = await storage.getDesignProject(projectId);
     if (!project) {
-      console.error(`[AI Design Processor V3.5.1] Projeto ${projectId} não encontrado.`);
+      console.error(`[AI Design Processor V3.6] Projeto ${projectId} não encontrado.`);
       await storage.createAiDesignChatMessage({ projectId, role: "assistant", content: `Erro: Não consegui encontrar os detalhes do projeto (ID: ${projectId}).` });
       broadcastToProject(projectId.toString(), { type: 'ai_processing_error', error: 'Project not found' });
       return; 
     }
 
-    console.log(`[AI Design Processor V3.5.1] Enviando imagem para análise de visão GPT-4o...`);
+    console.log(`[AI Design Processor V3.6] Enviando imagem para análise de visão GPT-4o...`);
     let visionContent: string | null | undefined = null;
     try {
       const visionResponse = await openai.chat.completions.create({
@@ -419,20 +384,27 @@ export async function processDesignProjectImage(projectId: number, imageUrlToPro
         messages: [
             {
               role: "system",
-              content: `Você é um especialista em design de interiores... (SEU PROMPT COMPLETO AQUI)... RESPONDA SEMPRE em formato JSON válido. O JSON deve ser um objeto contendo uma chave "furniture" que é um array de objetos. Cada objeto representa um móvel. Se NENHUM MÓVEL for identificável, retorne { "furniture": [] }.`
+              content: `Você é um especialista em design de interiores com formação avançada (nível doutorado) e ampla experiência na análise de renders de ambientes. Sua tarefa é analisar a imagem fornecida e identificar APENAS OS MÓVEIS PRINCIPAIS presentes no ambiente (excluindo itens decorativos, plantas, cortinas, objetos pequenos e estruturas fixas).\n\nPara CADA MÓVEL INDIVIDUALMENTE IDENTIFICADO (liste cada instância separadamente, mesmo que sejam do mesmo tipo, como múltiplas cadeiras idênticas), responda com:\n\n1.  **NOME DO MÓVEL:** Forneça o nome mais preciso e técnico possível (ex: "Cadeira de jantar Estilo Eames", "Sofá Chesterfield 3 lugares", "Mesa lateral redonda tripé").\n    *   **CADEIRA vs. POLTRONA:**\n        *   **Poltrona:** Estofada, com braços, aspecto robusto, geralmente voltada ao conforto.\n        *   **Cadeira de jantar:** Usada com mesa de jantar. Pode ser estofada, mas mais leve.\n        *   **Cadeira de escritório:** Com rodízios e ajuste de altura.\n        *   **Cadeira (genérica):** Assento simples individual, sem características claras das anteriores.\n        *   ⚠️ **Nunca confunda** uma poltrona com uma cadeira estofada leve.\n    *   Use nomes técnicos como: "mesa lateral", "rack baixo", "estante alta", "banco", "banqueta", "mesa de cabeceira", "sofá modular", etc.\n\n2.  **DESCRIÇÃO CURTA:** Máximo 20 palavras, descrevendo estilo, cor principal, material predominante e uma característica marcante.\n    *   Exemplo:\n        *   "Sofá de 3 lugares, veludo verde-escuro, encosto baixo, pés dourados, estilo moderno."\n        *   "Mesa lateral redonda, madeira clara, estilo escandinavo, base de três pés."\n\n3.  **BOUNDING BOX (bbox):** Forneça as coordenadas da bounding box para CADA móvel, em formato JSON: { "x_min": %, "y_min": %, "x_max": %, "y_max": % } (valores de 0.0 a 1.0 relativos à dimensão da imagem). **A BBOX DEVE SER PRECISA E ENVOLVER COMPLETAMENTE APENAS O MÓVEL VISÍVEL, sem ser excessivamente pequena nem incluir muitos elementos ao redor. Certifique-se que a BBox cubra a maior parte do objeto.**\n\nRESPONDA SEMPRE em formato JSON válido. O JSON deve ser um objeto contendo uma chave "furniture" que é um array de objetos. Cada objeto representa um móvel. Se NENHUM MÓVEL for identificável, retorne { "furniture": [] }. Evite frases como "não foram encontrados móveis", apenas retorne o JSON especificado.`
             },
-          { role: "user", content: [{ type: "text", text: `Analise...` },{ type: "image_url", image_url: { url: imageUrlToProcess } }] }
+          { role: "user", content: [{ type: "text", text: `Analise a imagem e identifique os móveis conforme as instruções. Mensagem do usuário (pode estar vazia): "${userMessageText || ''}"` },{ type: "image_url", image_url: { url: imageUrlToProcess } }] }
           ],
         response_format: { type: "json_object" }, 
           max_tokens: 3000,
         });
+        console.log("[AI Design Processor V3.6] Resposta bruta da API Vision (choices[0]):", JSON.stringify(visionResponse.choices[0], null, 2));
         visionContent = visionResponse.choices[0]?.message?.content;
-    } catch (e) { visionAnalysisFailed = true; console.error("[AI Design Processor V3.5.1] Erro GPT-4o Vision", e); }
+    } catch (e: any) { 
+        visionAnalysisFailed = true; 
+        console.error("[AI Design Processor V3.6] Erro DIRETO na chamada da API OpenAI Vision:", e.message);
+        if (e.response) { console.error("[AI Design Processor V3.6] OpenAI Error Response:", e.response.data); }
+    }
 
     if (!visionAnalysisFailed && visionContent) {
+        console.log("[AI Design Processor V3.6] Conteúdo da API Vision recebido para parse:", visionContent.substring(0, 500) + "...");
         try {
             const parsedJsonResponse = JSON.parse(visionContent);
             let tempDetectedObjects: { name: string | undefined; description: string | undefined; bbox: any; }[] = [];
+
             if (parsedJsonResponse?.furniture && Array.isArray(parsedJsonResponse.furniture)) {
                  tempDetectedObjects = parsedJsonResponse.furniture.map((item: any) => ({
                     name: item["NOME DO MÓVEL"] || item.nome || item.name,
@@ -445,11 +417,23 @@ export async function processDesignProjectImage(projectId: number, imageUrlToPro
                     description: item["DESCRIÇÃO CURTA"] || item.descrição || item.description,
                     bbox: item["BOUNDING BOX (bbox)"] || item["BOUNDING BOX"] || item.bounding_box || item.bbox, 
                 }));
+            } else {
+                console.warn("[AI Design Processor V3.6] Formato JSON da Vision API inesperado ou sem a chave 'furniture'.", parsedJsonResponse);
+                // Considerar como falha se não tiver a chave furniture e não for um array vazio direto
+                if (!Array.isArray(parsedJsonResponse) || parsedJsonResponse.length > 0) {
+                     visionAnalysisFailed = true;
+                }
             }
             detectedObjectsFromVision = tempDetectedObjects.filter(obj => obj.name && obj.name.trim() !== "").map(obj => ({ name: obj.name!, description: obj.description || "", bbox: obj.bbox }));
-            console.log(`[AI Design Processor V3.5.1] ${detectedObjectsFromVision.length} objetos detectados pela IA de Visão.`);
-        } catch (parseError) { visionAnalysisFailed = true; console.error("[AI Design Processor V3.5.1] Erro parse JSON Vision", parseError);}
-    } 
+            console.log(`[AI Design Processor V3.6] ${detectedObjectsFromVision.length} objetos detectados pela IA de Visão.`);
+        } catch (parseError: any) { 
+            visionAnalysisFailed = true; 
+            console.error("[AI Design Processor V3.6] Erro CRÍTICO ao parsear JSON da API Vision:", parseError.message, "Conteúdo recebido:", visionContent.substring(0,500));
+        }
+    } else if (!visionAnalysisFailed && !visionContent) {
+         console.error("[AI Design Processor V3.6] Resposta da API Vision bem-sucedida, mas o conteúdo da mensagem está vazio ou nulo.");
+         visionAnalysisFailed = true; 
+    }
 
     if (visionAnalysisFailed || detectedObjectsFromVision.length === 0) {
         const errorMsg = visionAnalysisFailed ? "Falha na análise inicial da imagem pela IA." : "Nenhum móvel principal identificado na imagem.";
@@ -470,7 +454,7 @@ export async function processDesignProjectImage(projectId: number, imageUrlToPro
         const createdItem = await storage.createDesignProjectItem(newItemData);
         if (createdItem) createdDesignProjectItems.push(createdItem as DesignProjectItem);
     }
-    console.log(`[AI Design Processor V3.5.1] ${createdDesignProjectItems.length} DesignProjectItems criados a partir da IA de Visão.`);
+    console.log(`[AI Design Processor V3.6] ${createdDesignProjectItems.length} DesignProjectItems criados a partir da IA de Visão.`);
     
     let chatResponseContent = "";
     let focusedProcessing = false; 
@@ -486,42 +470,32 @@ export async function processDesignProjectImage(projectId: number, imageUrlToPro
                 mainKeyword = kw; normalizedMainKeyword = normalizedKw; break;
             }
         }
-        if(mainKeyword) console.log(`[AI Design Processor V3.5.1] Keyword de foco detectada: "${mainKeyword}"`);
+        if(mainKeyword) console.log(`[AI Design Processor V3.6] Keyword de foco detectada: "${mainKeyword}"`);
     }
     
     const itemsWithSuggestions: {item: DesignProjectItem, suggestions: SuggestionForChat[]}[] = [];
     for (const DRAFT_item of createdDesignProjectItems) {
-        let finalBboxToUse = DRAFT_item.detectedObjectBoundingBox;
-        const visionObjectNameNorm = normalizeText(DRAFT_item.detectedObjectName);
-
-        if (allSamSegments && visionObjectNameNorm && imageMetadata?.width && imageMetadata?.height) {
-            let bestSamSegment: RamSamSegment | null = null;
-            let highestScore = -1;
-            const segmentsToLoop: RamSamSegment[] = allSamSegments || [];
-            for (const samSegment of segmentsToLoop) {
-                const samLabelNorm = normalizeText(samSegment.label);
-                if (samLabelNorm.includes(visionObjectNameNorm) || visionObjectNameNorm.includes(samLabelNorm)) {
-                    if (samSegment.logit > highestScore) {
-                        highestScore = samSegment.logit;
-                        bestSamSegment = samSegment;
-                    }
-                }
-            }
-            if (bestSamSegment) {
-                console.log(`[AI Design Processor V3.5.1] Usando BBox do SAM para "${DRAFT_item.detectedObjectName}" (Label SAM: "${bestSamSegment.label}")`);
-                finalBboxToUse = { 
-                    x_min: bestSamSegment.box[0], y_min: bestSamSegment.box[1], 
-                    x_max: bestSamSegment.box[2], y_max: bestSamSegment.box[3] 
-                }; 
-            } else {
-                 console.log(`[AI Design Processor V3.5.1] Nenhum segmento SAM para "${DRAFT_item.detectedObjectName}". Usando BBox da Visão.`);
-            }
+        let segmentationMaskUrl: string | null = null;
+        const detectedObjectNameLower = DRAFT_item.detectedObjectName?.toLowerCase() || "";
+        let samPromptText = DRAFT_item.detectedObjectName || ""; 
+        if (detectedObjectNameLower.includes("mesa")) samPromptText = "mesa";
+        else if (detectedObjectNameLower.includes("cadeira")) samPromptText = "cadeira";
+        else if (detectedObjectNameLower.includes("sofa")) samPromptText = "sofa";
+        console.log(`[PROCESS_SAM V3.6] Item: "${DRAFT_item.detectedObjectName}", SAM Prompt: "${samPromptText}"`);
+        if (DRAFT_item.detectedObjectBoundingBox && samPromptText.trim() !== "") {
+            try {
+                segmentationMaskUrl = await getSegmentationMaskSAM(imageUrlToProcess, samPromptText); 
+                if (segmentationMaskUrl) console.log(`[PROCESS_SAM V3.6] Máscara SAM OBTIDA: ${segmentationMaskUrl}`);
+                else console.warn(`[PROCESS_SAM V3.6] getSegmentationMaskSAM retornou NULL para prompt: "${samPromptText}".`);
+            } catch (samError) { console.error(`[PROCESS_SAM V3.6] Erro SAM:`, samError); }
+        } else {
+          console.warn(`[PROCESS_SAM V3.6] Condições para SAM NÃO SATISFEITAS.`);
         }
         
-        const itemForSuggestions = { ...DRAFT_item, detectedObjectBoundingBox: finalBboxToUse };
+        const itemForSuggestions = { ...DRAFT_item, detectedObjectBoundingBox: DRAFT_item.detectedObjectBoundingBox };
 
         if (project?.userId) {
-            const suggestionsFromFind = await findSuggestionsForItem(itemForSuggestions, project.userId, imageUrlToProcess, null);
+            const suggestionsFromFind = await findSuggestionsForItem(itemForSuggestions, project.userId, imageUrlToProcess, segmentationMaskUrl);
             itemsWithSuggestions.push({ item: DRAFT_item, suggestions: suggestionsFromFind});
         } else {
             itemsWithSuggestions.push({ item: DRAFT_item, suggestions: []});
@@ -585,13 +559,13 @@ export async function processDesignProjectImage(projectId: number, imageUrlToPro
         }
     }
     broadcastToProject(projectId.toString(), { type: 'ai_processing_complete', projectId });
-    console.log(`[AI Design Processor V3.5.1] Processamento da imagem para projeto ${projectId} concluído.`);
+    console.log(`[AI Design Processor V3.6] Processamento da imagem para projeto ${projectId} concluído.`);
   } catch (error: any) {
-    console.error(`[AI Design Processor V3.5.1] Erro GERAL no processamento para projeto ${projectId}:`, error);
+    console.error(`[AI Design Processor V3.6] Erro GERAL no processamento para projeto ${projectId}:`, error);
     try {
         if (project) await storage.updateDesignProject(projectId, { status: 'error', updatedAt: new Date() });
         broadcastToProject(projectId.toString(), { type: 'ai_processing_error', error: error.message || 'Unknown error' });
-    } catch (dbError) { console.error(`[AI Design Processor V3.5.1] Erro ao registrar erro no DB:`, dbError); }
+    } catch (dbError) { console.error(`[AI Design Processor V3.6] Erro ao registrar erro no DB:`, dbError); }
   }
 }
 

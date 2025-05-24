@@ -18,6 +18,14 @@ Refira-se ao `README.md` para detalhes sobre as funcionalidades.
 - [x] Implementar extração de dados Excel com IA (OpenAI).
 - [x] Implementar extração de imagens de Excel (Python).
 - [x] Implementar associação de imagens com IA Vision + Fallback.
+
+### Etapa 1: Upload Inteligente de Catálogos (Foco Atual)
+- [x] Permitir upload de arquivo artístico (PDF/Imagem) e arquivo de preços (Excel/PDF) na UI e Backend (armazenar referências separadas).
+- [ ] Etapa 1.1: Implementar processamento robusto do Arquivo Artístico (extrair dados visuais, textuais e imagens).
+- [ ] Etapa 1.2: Implementar processamento do Arquivo de Preços (extrair códigos, nomes, modelos e PREÇOS de Excel/PDF).
+- [ ] Etapa 1.3: Implementar Mecanismo de Mesclagem (Fusion Layer) para combinar dados do arquivo artístico e de preços (match por código, fallback IA com nome/categoria + embeddings).
+- [ ] Etapa 1.4: Garantir que o produto final no DB contenha informações consolidadas (imagem, descrição, PREÇO).
+
 - [ ] Implementar processamento para PDF (usando OCR/Visão IA).
 - [ ] Implementar processamento para Imagens (usando Visão IA).
 - [ ] Adicionar suporte para mais formatos de catálogo (CSV?).
@@ -138,34 +146,4 @@ Refira-se ao `README.md` para detalhes sobre as funcionalidades.
   - Envio de mensagens de texto e com anexos no chat funcionando.
   - A IA de Visão (OpenAI GPT-4o) agora é chamada para analisar a imagem anexada pelo usuário.
   - Produtos similares são buscados no catálogo (atualmente via busca textual e uma busca inicial por embedding da descrição do móvel detectado).
-  - `DesignProjectItems` são criados para armazenar os móveis detectados e as sugestões.
-  - O assistente de IA responde no chat com os móveis detectados e as sugestões de produtos, incluindo as imagens dos produtos sugeridos (renderizadas via `react-markdown`).
-  - A resposta da IA no chat agora tenta focar no tipo de móvel que o usuário especificou em sua mensagem.
-- **Script de Geração de Embeddings (`scripts/generate-product-embeddings.ts`):**
-  - Script foi depurado e executado com sucesso, populando a coluna `embedding` para todos os produtos no banco de dados usando o modelo `text-embedding-3-small` da OpenAI.
-- **Correções de Linter/Tipo Diversas:**
-  - Resolvido erro `Property 'text' does not exist on type 'ContentBlock'` em `ai-design-processor.ts` (Anthropic SDK).
-  - Corrigidos erros de tipo e referências em `server/routes.ts`, `server/ai-design-processor.ts` e `server/storage.ts` ao longo do desenvolvimento.
-
-## Próximos Passos Imediatos (Revisado para 17 de Maio de 2025)
-
-1.  **Refinar Precisão da Busca Textual FTS:**
-    *   **Objetivo:** Garantir que a FTS retorne resultados relevantes consistentemente.
-    *   **Ação:** Diagnosticar falhas atuais da FTS (quando retorna 0 resultados), analisar conteúdo dos `tsvector`s e refinar a construção da query em `storage.searchProducts`.
-
-2.  **Melhorar Qualidade e Precisão da IA de Visão (GPT-4o):**
-    *   **Objetivo:** Reduzir erros de classificação de móveis e obter Bounding Boxes mais úteis.
-    *   **Ação:** Experimentar com o prompt enviado ao GPT-4o em `ai-design-processor.ts`.
-
-3.  **Aperfeiçoar o Render Final com Inpainting:**
-    *   **Objetivo:** Obter um render final que aplique as substituições de produtos de forma clara e visualmente correta.
-    *   **Ação:** Investigar o "esticamento" da imagem, analisar os parâmetros enviados ao Replicate, e avaliar a qualidade do inpainting especialmente para BBoxes menores (agora que a restrição foi removida).
-
-4.  **Implementar Funcionalidade de `storage.updateDesignProjectItem` e Rota PUT correspondente:**
-    *   Permitir que o usuário interaja com as sugestões (aceitar/rejeitar/adicionar notas).
-
-5.  **Resolver Problemas de Tipo do Drizzle (`storage.ts`):** (Movido para Bugs Conhecidos, mas ainda importante)
-    *   Investigar e corrigir os erros "No overload matches this call".
-
----
-*Última atualização: 17 de Maio de 2025* 
+  - `

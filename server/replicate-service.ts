@@ -33,23 +33,7 @@ interface ReplicatePredictionResponse {
   };
 }
 
-export interface RamSamSegment {
-  box: [number, number, number, number];
-  label: string;
-  logit: number;
-  value: number; // ID da máscara, se aplicável a uma máscara combinada
-  mask_url?: string; // Adicionando caso o modelo retorne URLs de máscaras individuais aqui
-}
-
-interface RamSamOutput {
-  tags?: string;
-  json_data?: { mask?: RamSamSegment[] }; // O array de segmentos está em json_data.mask
-  masked_img?: string; // URL da imagem com máscaras coloridas (para debug)
-  rounding_box_img?: string; // URL da imagem com bboxes (para debug)
-  // O output principal da API também pode ser um array de URLs, 
-  // sendo a primeira geralmente a visualização e a última a máscara principal (mask.jpg)
-  // Vamos priorizar o json_data.mask se disponível.
-}
+// Removida RamSamSegment e RamSamOutput pois o output de andreasjansson/grounded-sam é esperado ser mais simples (URL de máscara)
 
 /**
  * Executa um modelo do Replicate e aguarda a conclusão
@@ -220,19 +204,23 @@ export async function extractTextFromImage(
   );
 }
 
-// ATUALIZADA para usar idea-research/ram-grounded-sam
-export async function getSegmentationDataRAM(
+// ATUALIZADA para tentar andreasjansson/grounded-sam
+// Esta função agora tentará retornar UMA URL de máscara para o objeto especificado pelo promptText
+export async function getSegmentationMaskSAM(
   imageUrl: string,
-  // promptText não é mais usado como input direto para este modelo SAM
-  modelIdentifier: string = "idea-research/ram-grounded-sam:80a2aede4cf8e3c9f26e96c308d45b23c350dd36f1c381de790715007f1ac0ad"
-  // Retorna o array de segmentos detectados (label e box) ou null
-): Promise<RamSamSegment[] | null> { 
+  promptText: string, 
+  modelIdentifier: string = "andreasjansson/grounded-sam:b8c7f97f29af1f56e372cddf7c60f55a8b5f91b67892b6d3dfc2e6c79779bfc6"
+): Promise<string | null> { 
   if (!process.env.REPLICATE_API_TOKEN) {
-    console.error("[DEBUG RAM-SAM SVC] REPLICATE_API_TOKEN não está configurado.");
+    console.error("[DEBUG SAM SVC] REPLICATE_API_TOKEN não está configurado.");
     return null;
   }
   if (!imageUrl) {
-    console.error("[DEBUG RAM-SAM SVC] URL da imagem não fornecida.");
+    console.error("[DEBUG SAM SVC] URL da imagem não fornecida para SAM.");
+    return null;
+  }
+  if (!promptText || promptText.trim() === "") {
+    console.error("[DEBUG SAM SVC] Prompt de texto para Grounded SAM não fornecido ou vazio.");
     return null;
   }
 
@@ -241,50 +229,60 @@ export async function getSegmentationDataRAM(
   });
   
   const input = {
-    input_image: imageUrl,
-    // use_sam_hq: false, // Default é false, podemos omitir ou setar explicitamente
-    // show_visualisation: false // Default é false, útil para debug no Replicate, mas não precisamos da imagem anotada no backend agora
+    image: imageUrl,
+    text: promptText, // Nome do campo de prompt conforme sugestão para este modelo
+    box_threshold: 0.3, 
+    text_threshold: 0.25 
   };
 
-  console.log(`[DEBUG RAM-SAM SVC] Chamando Replicate.run com: Model: ${modelIdentifier}, Input: ${JSON.stringify(input)}`);
+  console.log(`[DEBUG SAM SVC] Chamando Replicate.run com: Model: ${modelIdentifier}, Input: ${JSON.stringify(input)}`);
 
   try {
-    // O output principal é um objeto com várias chaves, incluindo json_data
-    const output = await replicate.run(modelIdentifier as `${string}/${string}:${string}`, { input }) as RamSamOutput;
+    // Espera-se que o output seja uma URL de string ou um array contendo a URL da máscara
+    const output: unknown = await replicate.run(modelIdentifier as `${string}/${string}:${string}`, { input });
     
-    console.log("[DEBUG RAM-SAM SVC] Output BRUTO do Replicate (idea-research/ram-grounded-sam):", JSON.stringify(output));
+    console.log("[DEBUG SAM SVC] Output BRUTO do Replicate (andreasjansson/grounded-sam):", JSON.stringify(output));
 
-    if (output && output.json_data && Array.isArray(output.json_data.mask)) {
-      console.log(`[DEBUG RAM-SAM SVC] ${output.json_data.mask.length} segmentos encontrados em json_data.mask.`);
-      return output.json_data.mask;
-    } else {
-      console.warn("[DEBUG RAM-SAM SVC] Output do Replicate não continha json_data.mask esperado.", output);
-      return null;
+    if (Array.isArray(output) && output.length > 0 && typeof output[0] === 'string' && output[0].startsWith('http')) {
+      console.log(`[DEBUG SAM SVC] Máscara recebida (primeiro item do array): ${output[0]}`);
+      return output[0]; 
+    } else if (typeof output === 'string' && output.startsWith('http')) {
+      console.log(`[DEBUG SAM SVC] Máscara recebida (string direta): ${output}`);
+      return output;
+    }
+    // Se o output for um objeto (alguns modelos SAM podem encapsular a URL)
+    else if (typeof output === 'object' && output !== null) {
+        const possibleKeys = ['mask', 'mask_url', 'image', 'image_url', 'output', 'url', 'segmentation_mask'];
+        for (const key of possibleKeys) {
+            if (typeof (output as any)[key] === 'string' && (output as any)[key].startsWith('http')) {
+                console.log(`[DEBUG SAM SVC] Máscara recebida (chave '${key}' do objeto): ${(output as any)[key]}`);
+                return (output as any)[key];
+            }
+        }
     }
 
+    console.warn("[DEBUG SAM SVC] Output do Replicate (andreasjansson/grounded-sam) não continha uma URL de máscara esperada.", output);
+    return null;
   } catch (error: any) {
-    console.error("[DEBUG RAM-SAM SVC] Erro ao chamar API do idea-research/ram-grounded-sam:", error.message);
+    console.error("[DEBUG SAM SVC] Erro ao chamar API do andreasjansson/grounded-sam no Replicate:", error.message);
     if (error.response?.status) {
-        console.error("[DEBUG RAM-SAM SVC] Replicate Error Status:", error.response.status);
+        console.error("[DEBUG SAM SVC] Replicate Error Status:", error.response.status);
         if (error.response.data?.detail) {
-            console.error("[DEBUG RAM-SAM SVC] Replicate Error Detail:", error.response.data.detail);
+            console.error("[DEBUG SAM SVC] Replicate Error Detail:", error.response.data.detail);
         } else if (error.response.data) {
-            console.error("[DEBUG RAM-SAM SVC] Replicate Error Data (snippet):", JSON.stringify(error.response.data).substring(0, 200));
+            console.error("[DEBUG SAM SVC] Replicate Error Data (snippet):", JSON.stringify(error.response.data).substring(0, 200));
         }
     }
     return null;
   }
 }
 
-// A função getSegmentationMaskSAM antiga não é mais necessária se usarmos getSegmentationDataRAM
-// Ou podemos renomeá-la e adaptar se precisarmos de outros modelos SAM no futuro.
-// Por agora, vou comentar a antiga para evitar confusão.
+// Comentar a função getSegmentationDataRAM para evitar conflito de nome se não for usada agora
 /*
-export async function getSegmentationMaskSAM(
+export async function getSegmentationDataRAM(
   imageUrl: string,
-  promptText: string, 
-  modelIdentifier: string = "andreasjansson/grounded-sam:b8c7f97f29af1f56e372cddf7c60f55a8b5f91b67892b6d3dfc2e6c79779bfc6"
-): Promise<string | null> { 
-  // ... (código antigo) ...
+  modelIdentifier: string = "idea-research/ram-grounded-sam:80a2aede4cf8e3c9f26e96c308d45b23c350dd36f1c381de790715007f1ac0ad"
+): Promise<RamSamSegment[] | null> { 
+  // ... (código anterior para idea-research/ram-grounded-sam)
 }
 */

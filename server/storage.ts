@@ -30,6 +30,7 @@ export interface IStorage {
 
   // Product methods
   getProduct(id: number): Promise<Product | undefined>;
+  updateProductPrice(productId: number, priceInCents: number): Promise<Product | undefined>;
   getProductsByUserId(userId: number | string, catalogId?: number): Promise<Product[]>;
   getProductsByCategory(userId: number | string, category: string): Promise<Product[]>;
   getProductsByCatalogId(catalogId: number): Promise<Product[]>; // Busca produtos por catalogId
@@ -146,14 +147,42 @@ export class DatabaseStorage implements IStorage {
     }
   }
   
-  async updateUser(id: number, userData: Partial<User>): Promise<User | undefined> {
+  async updateUser(id: number, userData: Partial<Pick<User, 'name' | 'companyName' | 'companyLogoUrl' | 'companyAddress' | 'companyPhone' | 'companyCnpj' | 'quotePaymentTerms' | 'quoteValidityDays' | 'cashDiscountPercentage'> >): Promise<User | undefined> {
     try {
-      const updateData = {
-        ...userData,
-        updatedAt: new Date()
-      };
-      delete (updateData as any).id; // id não deve ser atualizado
-      const result = await db.update(users).set(updateData).where(eq(users.id, id)).returning();
+      // Explicitly construct the update object to ensure type safety with Drizzle
+      const updatePayload: {
+        name?: string | null;
+        companyName?: string;
+        companyLogoUrl?: string | null;
+        companyAddress?: string | null;
+        companyPhone?: string | null;
+        companyCnpj?: string | null;
+        quotePaymentTerms?: string | null;
+        quoteValidityDays?: number | null;
+        cashDiscountPercentage?: number | null;
+        updatedAt: Date;
+      } = { updatedAt: new Date() };
+
+      if (userData.name !== undefined) updatePayload.name = userData.name;
+      if (userData.companyName !== undefined) updatePayload.companyName = userData.companyName;
+      if (userData.companyLogoUrl !== undefined) updatePayload.companyLogoUrl = userData.companyLogoUrl;
+      if (userData.companyAddress !== undefined) updatePayload.companyAddress = userData.companyAddress;
+      if (userData.companyPhone !== undefined) updatePayload.companyPhone = userData.companyPhone;
+      if (userData.companyCnpj !== undefined) updatePayload.companyCnpj = userData.companyCnpj;
+      if (userData.quotePaymentTerms !== undefined) updatePayload.quotePaymentTerms = userData.quotePaymentTerms;
+      if (userData.quoteValidityDays !== undefined) updatePayload.quoteValidityDays = userData.quoteValidityDays;
+      if (userData.cashDiscountPercentage !== undefined) updatePayload.cashDiscountPercentage = userData.cashDiscountPercentage;
+
+      // Ensure we are not trying to update if only updatedAt is set (which happens by default)
+      if (Object.keys(updatePayload).length === 1 && updatePayload.updatedAt) {
+        // If only updatedAt is present, it means no actual user data was provided for update.
+        // In this case, we can either return the existing user or perform a touch (update only updatedAt).
+        // For now, let's perform a touch to update the timestamp as initially intended.
+        const result = await db.update(users).set({ updatedAt: new Date() }).where(eq(users.id, id)).returning();
+        return result[0];
+      }
+      
+      const result = await db.update(users).set(updatePayload).where(eq(users.id, id)).returning();
       return result[0];
     } catch (error) {
       console.error('Error updating user:', error);
@@ -170,6 +199,20 @@ export class DatabaseStorage implements IStorage {
       return product;
     } catch (error) {
       console.error('Error getting product:', error);
+      return undefined;
+    }
+  }
+  
+  async updateProductPrice(productId: number, priceInCents: number): Promise<Product | undefined> {
+    try {
+      const [updatedProduct] = await db
+        .update(products)
+        .set({ price: priceInCents })
+        .where(eq(products.id, productId))
+        .returning();
+      return updatedProduct;
+    } catch (error) {
+      console.error(`Error updating product price for ID ${productId}:`, error);
       return undefined;
     }
   }
@@ -535,8 +578,18 @@ export class DatabaseStorage implements IStorage {
         const key = keyStr as keyof InsertMoodboard;
         if (dataToInsert[key] === undefined) delete dataToInsert[key];
       });
-      const [moodboard] = await db.insert(moodboards).values(dataToInsert).returning();
-      return moodboard;
+      
+      // Modificado para retornar apenas o ID e depois buscar o objeto completo
+      const insertedResult = await db.insert(moodboards).values(dataToInsert).returning({ id: moodboards.id });
+      if (!insertedResult || insertedResult.length === 0 || !insertedResult[0].id) {
+        throw new Error("Falha ao criar moodboard ou obter ID de retorno.");
+      }
+      const newMoodboardId = insertedResult[0].id;
+      const newMoodboard = await this.getMoodboard(newMoodboardId);
+      if (!newMoodboard) {
+        throw new Error(`Moodboard criado (ID: ${newMoodboardId}) mas não pôde ser recuperado.`);
+      }
+      return newMoodboard;
     } catch (error) {
       console.error('Error creating moodboard in storage:', error);
       throw error;
