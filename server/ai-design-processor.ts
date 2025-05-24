@@ -17,7 +17,7 @@ import { products, type Product, type DesignProject, type NewDesignProjectItem, 
 import { getClipEmbeddingFromImageUrl, getClipEmbeddingFromImageBuffer } from './clip-service'; 
 import { broadcastToProject } from './index';
 import sharp from 'sharp';
-import { getSegmentationMaskSAM } from './replicate-service'; 
+import { getSegmentationDataRAM, type RamSamSegment } from './replicate-service'; 
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -120,104 +120,54 @@ async function findSuggestionsForItem(
     item: DesignProjectItem, 
     userId: number, 
     imageUrlToProcess: string, 
-    segmentationMaskUrl?: string | null
-): Promise<{product: Product, source: string, matchScore: number, visualSimilarity?: number, textSimilarity?: number, combinedScore: number}[]> {
-    console.log(`[findSuggestionsForItem V3.3.2-SAM_CLIP] Iniciando para item: "${item.detectedObjectName || 'sem nome'}", Mask URL: ${segmentationMaskUrl ? segmentationMaskUrl.substring(0,60)+"..." : "Nenhuma"}`);
+    _segmentationMaskUrl_IGNORED?: string | null 
+): Promise<SuggestionForChat[]> {
+    console.log(`[findSuggestionsForItem V3.5.1] DEBUG: Iniciando para item: ${item.detectedObjectName}`);
     try {
         const detectedText = (`${item.detectedObjectName || ''} ${item.detectedObjectDescription || ''}`).trim();
-        if (!detectedText && !item.detectedObjectBoundingBox) {
-            console.log("[findSuggestionsForItem V3.3.2-SAM_CLIP] Texto detectado e BBox estão vazios. Retornando nenhuma sugestão.");
-            return [];
-        }
-
+        if (!detectedText && !item.detectedObjectBoundingBox) return [];
         let textualSearchResults: (Product & { relevance?: number })[] = [];
         if (detectedText) {
             try {
                 textualSearchResults = await storage.searchProducts(userId, detectedText);
-                textualSearchResults = textualSearchResults.filter(p => p.imageUrl); 
-                console.log(`[findSuggestionsForItem V3.3.2-SAM_CLIP] FTS encontrou ${textualSearchResults.length} resultados (com imagem) para "${detectedText}".`);
-            } catch (error) { console.error("[findSuggestionsForItem V3.3.2-SAM_CLIP] Erro FTS:", error); }
-        } else {
-            console.log("[findSuggestionsForItem V3.3.2-SAM_CLIP] Texto detectado vazio, pulando FTS.");
+                textualSearchResults = textualSearchResults.filter(p => p.imageUrl);
+            } catch (error) { console.error("[findSuggestionsForItem V3.5.1] Erro FTS:", error); }
         }
-
         let targetRoiClipEmbedding: number[] | null = null;
-        let roiExtractionMethod = "none";
         let originalImageBuffer: Buffer | null = null;
         let imageMetadata: sharp.Metadata | null = null;
-
         if (imageUrlToProcess) {
             try {
                 originalImageBuffer = await fetchImageAsBuffer(imageUrlToProcess);
-                if (originalImageBuffer) {
-                    imageMetadata = await sharp(originalImageBuffer).metadata();
-                }
-            } catch (e) {
-                console.error(`[findSuggestionsForItem V3.3.2-SAM_CLIP] Erro ao carregar imagem original ${imageUrlToProcess}:`, e);
-                originalImageBuffer = null; 
-            }
+                if (originalImageBuffer) imageMetadata = await sharp(originalImageBuffer).metadata();
+            } catch (e) { originalImageBuffer = null; }
         }
-
-        if (originalImageBuffer && imageMetadata && imageMetadata.width && imageMetadata.height) {
-            if (segmentationMaskUrl) {
-                try {
-                    console.log(`[findSuggestionsForItem V3.3.2-SAM_CLIP] Tentando usar MÁSCARA SAM para ROI: "${item.detectedObjectName || 'sem nome'}"`);
-                    const maskImageBuffer = await fetchImageAsBuffer(segmentationMaskUrl);
-                    const maskedRoiBuffer = await sharp(originalImageBuffer).composite([{ input: maskImageBuffer, blend: 'in' }]).png().toBuffer();
-                    const pixelBbox = await calculatePixelBbox(item.detectedObjectBoundingBox, imageMetadata.width, imageMetadata.height);
-                    if (pixelBbox && pixelBbox.w > 0 && pixelBbox.h > 0) {
-                        targetRoiClipEmbedding = await getClipEmbeddingFromImageBuffer(maskedRoiBuffer, `roi_sam_${item.id}_${item.detectedObjectName || 'sem_nome'}`);
-                        if (targetRoiClipEmbedding) {
-                            console.log(`[findSuggestionsForItem V3.3.2-SAM_CLIP] Embedding CLIP da ROI MASCARADA (SAM) gerado.`);
-                            roiExtractionMethod = "sam_mask";
-                        } else {
-                            console.warn(`[findSuggestionsForItem V3.3.2-SAM_CLIP] Falha ao gerar embedding CLIP da ROI MASCARADA (SAM).`);
-                        }
-                    } else {
-                         console.warn(`[findSuggestionsForItem V3.3.2-SAM_CLIP] BBox inválida para item ao tentar usar máscara SAM.`);
-                    }
-                } catch (samProcessingError) {
-                    console.error(`[findSuggestionsForItem V3.3.2-SAM_CLIP] Erro ao processar ROI com MÁSCARA SAM:`, samProcessingError);
+        if (originalImageBuffer && imageMetadata?.width && imageMetadata?.height && item.detectedObjectBoundingBox) {
+            try {
+                const pixelBbox = await calculatePixelBbox(item.detectedObjectBoundingBox, imageMetadata.width, imageMetadata.height);
+                if (pixelBbox && pixelBbox.w > 0 && pixelBbox.h > 0) {
+                    const roiBuffer = await sharp(originalImageBuffer).extract({ left: pixelBbox.x, top: pixelBbox.y, width: pixelBbox.w, height: pixelBbox.h }).png().toBuffer();
+                    targetRoiClipEmbedding = await getClipEmbeddingFromImageBuffer(roiBuffer, `roi_bbox_${item.id}_${item.detectedObjectName || 'sem_nome'}`);
                 }
-            }
-
-            if (!targetRoiClipEmbedding && item.detectedObjectBoundingBox) {
-                try {
-                    console.log(`[findSuggestionsForItem V3.3.2-SAM_CLIP] Usando FALLBACK para BBOX para ROI: "${item.detectedObjectName || 'sem nome'}"`);
-                    const pixelBbox = await calculatePixelBbox(item.detectedObjectBoundingBox, imageMetadata.width, imageMetadata.height);
-                    if (pixelBbox && pixelBbox.w > 0 && pixelBbox.h > 0) {
-                        const roiBuffer = await sharp(originalImageBuffer).extract({ left: pixelBbox.x, top: pixelBbox.y, width: pixelBbox.w, height: pixelBbox.h }).png().toBuffer();
-                        targetRoiClipEmbedding = await getClipEmbeddingFromImageBuffer(roiBuffer, `roi_bbox_${item.id}_${item.detectedObjectName || 'sem_nome'}`);
-                        if (targetRoiClipEmbedding) {
-                            console.log(`[findSuggestionsForItem V3.3.2-SAM_CLIP] Embedding CLIP da ROI por BBOX (fallback) gerado.`);
-                            roiExtractionMethod = "bbox_fallback";
-                        } else {
-                            console.warn(`[findSuggestionsForItem V3.3.2-SAM_CLIP] Falha ao gerar embedding CLIP da ROI por BBOX (fallback).`);
-                        }
-                    } else {
-                        console.warn(`[findSuggestionsForItem V3.3.2-SAM_CLIP] BBox inválida ou com dimensões zero (fallback).`);
-                    }
-                } catch (bboxError) {
-                    console.error(`[findSuggestionsForItem V3.3.2-SAM_CLIP] Erro ao processar ROI por BBOX (fallback):`, bboxError);
-                }
-            }
-        } else if (imageUrlToProcess) {
-            console.warn(`[findSuggestionsForItem V3.3.2-SAM_CLIP] Não foi possível carregar imagem original ou seus metadados. Pulando toda a extração de ROI CLIP.`);
+            } catch (bboxError) { console.error(`[findSuggestionsForItem V3.5.1] Erro BBOX:`, bboxError); }
         }
-        
         const combinedSuggestionsMap: Map<number, {product: Product, textScore: number, visualScore: number, sourceDetails: string[]}> = new Map();
         const maxFtsRelevance = textualSearchResults.reduce((max, p) => Math.max(max, p.relevance || 0), 0);
-        
         for (const product of textualSearchResults) {
             let ftsScore = maxFtsRelevance > 0 ? (product.relevance || 0) / maxFtsRelevance : 0;
             ftsScore = Math.max(0, Math.min(ftsScore, 1));
-            if (ftsScore > 0.01) {
-                combinedSuggestionsMap.set(product.id, { product, textScore: ftsScore, visualScore: 0, sourceDetails: ['text_fts'] });
-            }
+            if (ftsScore > 0.01) combinedSuggestionsMap.set(product.id, { product, textScore: ftsScore, visualScore: 0, sourceDetails: ['text_fts'] });
         }
-
+        if (textualSearchResults.length > 0) {
+            console.log(`[findSuggestionsForItem V3.5.1] DEBUG: Top ${Math.min(15, textualSearchResults.length)} resultados FTS:`);
+            textualSearchResults.slice(0, 15).forEach(p => {
+                let ftsScore = maxFtsRelevance > 0 ? (p.relevance || 0) / maxFtsRelevance : 0;
+                ftsScore = Math.max(0, Math.min(ftsScore, 1));
+                console.log(`  -> FTS Raw: ID ${p.id} (${p.name.substring(0,20)}), Cat: ${p.category}, Relevance: ${p.relevance?.toFixed(4)}, Calc FTS Score: ${ftsScore.toFixed(4)}`);
+                if (p.id === 28738) console.log(`    ----> ASPEN ALTA (28738) encontrada na FTS! Relevance: ${p.relevance}, Score FTS: ${ftsScore}`);
+            });
+        }
         if (targetRoiClipEmbedding) {
-            console.log(`[findSuggestionsForItem V3.3.2-SAM_CLIP] Buscando produtos no DB com clipEmbedding para similaridade visual (ROI extraída via: ${roiExtractionMethod}).`);
             let visuallySimilarProductsDb: (Product & { distance?: number })[] = [];
             try {
                 const embeddingStringForDb = `[${targetRoiClipEmbedding.join(',')}]`;
@@ -225,25 +175,51 @@ async function findSuggestionsForItem(
                 
                 visuallySimilarProductsDb = await db
                     .select({
-                        id: products.id, userId: products.userId, catalogId: products.catalogId, name: products.name,
-                        code: products.code, description: products.description, price: products.price, category: products.category,
-                        manufacturer: products.manufacturer, imageUrl: products.imageUrl, colors: products.colors, materials: products.materials,
-                        sizes: products.sizes, location: products.location, stock: products.stock, excelRowNumber: products.excelRowNumber,
-                        embedding: products.embedding, clipEmbedding: products.clipEmbedding, search_tsv: products.search_tsv,
-                        createdAt: products.createdAt, firestoreId: products.firestoreId, firebaseUserId: products.firebaseUserId, isEdited: products.isEdited,
+                        id: products.id,
+                        userId: products.userId,
+                        catalogId: products.catalogId,
+                        name: products.name,
+                        code: products.code,
+                        description: products.description,
+                        price: products.price,
+                        category: products.category,
+                        manufacturer: products.manufacturer,
+                        imageUrl: products.imageUrl,
+                        colors: products.colors,
+                        materials: products.materials,
+                        sizes: products.sizes,
+                        location: products.location,
+                        stock: products.stock,
+                        excelRowNumber: products.excelRowNumber,
+                        embedding: products.embedding,
+                        clipEmbedding: products.clipEmbedding,
+                        search_tsv: products.search_tsv,
+                        createdAt: products.createdAt,
+                        firestoreId: products.firestoreId,
+                        firebaseUserId: products.firebaseUserId,
+                        isEdited: products.isEdited,
                         distance: distanceExpression.mapWith(Number) 
                     })
                     .from(products)
                     .where(and(isNotNull(products.clipEmbedding), isNotNull(products.imageUrl)))
                     .orderBy(distanceExpression)
-                    .limit(40); 
-                console.log(`[findSuggestionsForItem V3.3.4-SAM_CLIP] Busca vetorial CLIP no DB retornou ${visuallySimilarProductsDb.length} produtos.`);
+                    .limit(40);
+                console.log(`[findSuggestionsForItem V3.5.1] Busca vetorial CLIP no DB retornou ${visuallySimilarProductsDb.length} produtos.`);
+
             } catch (dbVectorError) { 
-                console.error("[findSuggestionsForItem V3.3.4-SAM_CLIP] Erro na busca vetorial CLIP no DB:", dbVectorError);
+                console.error("[findSuggestionsForItem V3.5.1] Erro na busca vetorial CLIP no DB:", dbVectorError);
                 visuallySimilarProductsDb = []; 
             }
-            
-            const visualClipThreshold = 0.10;
+            if (visuallySimilarProductsDb && visuallySimilarProductsDb.length > 0) {
+                console.log(`[findSuggestionsForItem V3.5.1] DEBUG: Top ${Math.min(15, visuallySimilarProductsDb.length)} resultados da Busca Visual:`);
+                visuallySimilarProductsDb.slice(0, 15).forEach(p => {
+                    let visualScore = typeof p.distance === 'number' ? (1 / (1 + p.distance)) : 0;
+                    visualScore = Math.max(0, Math.min(visualScore, 1));
+                    console.log(`  -> Visual Raw: ID ${p.id} (${p.name.substring(0,20)}), Cat: ${p.category}, Distance: ${p.distance?.toFixed(4)}, Calc Visual Score: ${visualScore.toFixed(4)}`);
+                    if (p.id === 28738) console.log(`    ----> ASPEN ALTA (28738) encontrada na Busca Visual! Dist: ${p.distance}, Score Visual: ${visualScore}`);
+                });
+            }
+            const visualClipThreshold = 0.10; 
             for (const product of visuallySimilarProductsDb) {
                 let currentVisualClipScore = typeof product.distance === 'number' ? (1 / (1 + product.distance)) : 0;
                 currentVisualClipScore = Math.max(0, Math.min(currentVisualClipScore, 1));
@@ -258,115 +234,40 @@ async function findSuggestionsForItem(
                 }
             }
         }
-        
-        let processedSuggestions = Array.from(combinedSuggestionsMap.values()).map(sugg => {
-            const textWeight = 0.01; 
-            const visualWeight = 0.99; 
-            let combinedScore = 0;
-            if (sugg.visualScore > 0 && sugg.textScore > 0) {
-                combinedScore = (sugg.textScore * textWeight) + (sugg.visualScore * visualWeight);
-            } else if (sugg.visualScore > 0) {
-                combinedScore = sugg.visualScore * visualWeight; 
-            } else if (sugg.textScore > 0) { 
-                combinedScore = sugg.textScore * textWeight;
-            }
-            return { 
-                product: sugg.product,
-                source: sugg.sourceDetails.join('+') || 'none',
-                matchScore: combinedScore, 
-                textSimilarity: sugg.textScore, 
-                visualSimilarity: sugg.visualScore, 
-                combinedScore: combinedScore 
-            };
+        let processedSuggestions: SuggestionForChat[] = Array.from(combinedSuggestionsMap.values()).map(sugg => {
+            const textWeight = 0.01, visualWeight = 0.99; 
+            let cs = (sugg.textScore * textWeight) + (sugg.visualScore * visualWeight);
+            if (sugg.visualScore > 0 && sugg.textScore === 0) cs = sugg.visualScore * visualWeight;
+            else if (sugg.textScore > 0 && sugg.visualScore === 0) cs = sugg.textScore * textWeight;
+            return { product: sugg.product, source: sugg.sourceDetails.join('+') || 'none', matchScore: cs, textSimilarity: sugg.textScore, visualSimilarity: sugg.visualScore, combinedScore: cs };
         });
-        
-        processedSuggestions = processedSuggestions.filter(s => s.combinedScore > 0.05);
-        processedSuggestions.sort((a, b) => b.combinedScore - a.combinedScore);
-
-        console.log(`[findSuggestionsForItem V3.3.2-SAM_CLIP] Sugestões ANTES do filtro de categoria para "${item.detectedObjectName || 'sem nome'}": ${processedSuggestions.length}`);
-        processedSuggestions.slice(0, 10).forEach(s_log => { 
-            console.log(`  -> PRE-FILTER V3.3.2: ID: ${s_log.product.id}, Cat: ${s_log.product.category}, Nome: ${s_log.product.name.substring(0,30)}, Score: ${s_log.combinedScore.toFixed(4)} (T_FTS: ${s_log.textSimilarity?.toFixed(4)}, V_CLIP: ${s_log.visualSimilarity?.toFixed(4)}) Src: ${s_log.source}`);
-        });
-
-        // Adicionar este bloco para debug detalhado de scores:
-        const currentItemNameForLog = item.detectedObjectName?.toLowerCase() || "desconhecido";
-        console.log(`[DEBUG SCORES ANTES CAT FILTRO] Para item: \"${item.detectedObjectName}\" (ID: ${item.id})`);
-        processedSuggestions.forEach(s_log_debug => {
-            const prodCatLower = s_log_debug.product.category?.toLowerCase() || "sem_categoria";
-            // Logar todos para análise inicial, ou filtrar se ficar muito verboso:
-            // if (currentItemNameForLog.includes("mesa") && prodCatLower.includes("mesa")) { // Exemplo de filtro para mesa
-                console.log(`  -> CANDIDATO: ID: ${s_log_debug.product.id}, Nome: ${s_log_debug.product.name.substring(0,35)}, Cat: ${s_log_debug.product.category}, Score Combinado: ${s_log_debug.combinedScore.toFixed(4)}, Visual: ${s_log_debug.visualSimilarity?.toFixed(4)}, Text: ${s_log_debug.textSimilarity?.toFixed(4)}, Source: ${s_log_debug.source}`);
-            // }
-        });
-        // Agora começa a filtragem por categoria
+        processedSuggestions = processedSuggestions.filter(s => s.combinedScore > 0.05).sort((a, b) => b.combinedScore - a.combinedScore);
         const itemDetectedObjectNameNormalized = normalizeText(item.detectedObjectName);
         const categoryFilteredSuggestions = processedSuggestions.filter(sugg => {
-            if (!sugg.product.imageUrl) {
-                 console.log(`[findSuggestionsForItem V3.3.4] Filtrando: Produto \"${sugg.product.name}\" (ID: ${sugg.product.id}) sem imagem -> REJEITADO`);
-                return false;
-            }
+            if (!sugg.product.imageUrl) return false;
             if (!item.detectedObjectName) return true; 
             const productCategoryNormalized = normalizeText(sugg.product.category);
-            if (!productCategoryNormalized) {
-                console.log(`[findSuggestionsForItem V3.3.4] Filtrando: Produto \"${sugg.product.name}\" (ID: ${sugg.product.id}) tem categoria normalizada VAZIA -> REJEITADO`);
-                return false; 
-            }
-
-            // Usar uma cópia do itemDetectedObjectNameNormalized para modificações locais no filtro
+            if (!productCategoryNormalized) return false;
             let currentItemNameNormalized = itemDetectedObjectNameNormalized;
-
-            // Simplificação para casos como "sofá de 3 lugares" -> "sofa"
-            if (currentItemNameNormalized.includes("sofa de") && currentItemNameNormalized.includes("lugares")) {
-                currentItemNameNormalized = "sofa";
-            }
-            // Adicionar outras simplificações se necessário, ex: "cadeira de jantar" -> "cadeira"
-            if (currentItemNameNormalized.includes("cadeira de jantar")) {
-                // Isso já deve ser tratado pelo mappings, mas uma verificação explícita não prejudica
-                // Se quisermos ser mais restritos, podemos fazer currentItemNameNormalized = "cadeira"; aqui.
-            }
-
+            if (currentItemNameNormalized.includes("sofa de") && currentItemNameNormalized.includes("lugares")) currentItemNameNormalized = "sofa";
             if (currentItemNameNormalized === productCategoryNormalized) return true;
-            
             const mappings: Record<string, string[]> = {
-                'sofa': ['sofa', 'estofado'], 
-                'poltrona': ['poltrona', 'cadeira', 'cadeira de jantar'],
-                'cadeira': ['cadeira', 'cadeira de jantar', 'poltrona', 'banqueta', 'banco'],
-                'cadeira de jantar': ['cadeira de jantar', 'cadeira'], // Já deve permitir match com "cadeira"
-                'mesa': ['mesa', 'mesa de centro', 'mesa lateral', 'mesa de apoio', 'mesa de jantar', 'escrivaninha'],
-                'mesa de jantar': ['mesa de jantar', 'mesa', 'mesa de jantar redonda'], // Adicionado "mesa de jantar redonda"
-                'mesa de jantar redonda': ['mesa de jantar redonda', 'mesa de jantar', 'mesa'], // Adicionado para o caso específico
-                'mesa de centro': ['mesa de centro', 'mesa'],
-                'mesa lateral': ['mesa lateral', 'mesa de apoio', 'mesa', 'mesa lateral redonda'],
-                'mesa lateral redonda': ['mesa lateral redonda', 'mesa lateral', 'mesa de apoio', 'mesa'],
-                'mesa de apoio': ['mesa de apoio', 'mesa lateral', 'mesa'], 
-                'rack': ['rack', 'movel para tv', 'móvel para tv', 'rack baixo para tv'],
-                'rack baixo para tv': ['rack baixo para tv', 'rack', 'movel para tv', 'móvel para tv'],
-                'estante': ['estante', 'livreiro'], 
-                'luminaria': ['luminaria', 'luminaria de chao', 'luminaria de mesa', 'abajur'],
-                'luminaria de chao': ['luminaria de chao', 'luminaria'], 
-                'armario': ['armario', 'roupeiro', 'guarda-roupa'],
-                'buffet': ['buffet', 'aparador', 'balcao'], 
-                'aparador': ['aparador', 'buffet', 'console', 'balcao']
+                'sofa': ['sofa', 'estofado'], 'poltrona': ['poltrona', 'cadeira', 'cadeira de jantar'], 'cadeira': ['cadeira', 'cadeira de jantar', 'poltrona', 'banqueta', 'banco'], 'cadeira de jantar': ['cadeira de jantar', 'cadeira'],
+                'mesa': ['mesa', 'mesa de centro', 'mesa lateral', 'mesa de apoio', 'mesa de jantar', 'escrivaninha'], 'mesa de jantar': ['mesa de jantar', 'mesa', 'mesa de jantar redonda'], 'mesa de jantar redonda': ['mesa de jantar redonda', 'mesa de jantar', 'mesa'],
+                'mesa de centro': ['mesa de centro', 'mesa', 'mesa de centro redonda'], 'mesa de centro redonda': ['mesa de centro redonda', 'mesa de centro', 'mesa'], 'mesa lateral': ['mesa lateral', 'mesa de apoio', 'mesa', 'mesa lateral redonda'],
+                'mesa lateral redonda': ['mesa lateral redonda', 'mesa lateral', 'mesa de apoio', 'mesa'], 'mesa de apoio': ['mesa de apoio', 'mesa lateral', 'mesa'], 'rack': ['rack', 'movel para tv', 'móvel para tv', 'rack baixo para tv'],
+                'rack baixo para tv': ['rack baixo para tv', 'rack', 'movel para tv', 'móvel para tv'], 'estante': ['estante', 'livreiro'], 'luminaria': ['luminaria', 'luminaria de chao', 'luminaria de mesa', 'abajur'],
+                'luminaria de chao': ['luminaria de chao', 'luminaria'], 'armario': ['armario', 'roupeiro', 'guarda-roupa'], 'buffet': ['buffet', 'aparador', 'balcao'], 'aparador': ['aparador', 'buffet', 'console', 'balcao']
             };
-
-            // Usar currentItemNameNormalized para o mapeamento
             if (mappings[currentItemNameNormalized]?.includes(productCategoryNormalized)) return true;
             if (mappings[productCategoryNormalized]?.includes(currentItemNameNormalized)) return true;
-
-            // Fallback para nomes mais longos (ex: "cadeira de jantar com braços" deve bater com categoria "cadeira de jantar" ou "cadeira")
             if (currentItemNameNormalized.startsWith(productCategoryNormalized) || productCategoryNormalized.startsWith(currentItemNameNormalized)) return true;
-
-            console.log(`[findSuggestionsForItem V3.3.4] Filtrando por categoria: Item \"${itemDetectedObjectNameNormalized}\" (usando como base \"${currentItemNameNormalized}\") vs ProdCat \"${productCategoryNormalized}\" -> REJEITADO`);
             return false;
         });
-
-        console.log(`[findSuggestionsForItem V3.3.2-SAM_CLIP] Top sugestões PÓS-FILTRO de categoria para "${item.detectedObjectName || 'sem nome'}": ${categoryFilteredSuggestions.length}`);
-        categoryFilteredSuggestions.slice(0, 5).forEach(s_log => { 
-            console.log(`  - V3.3.2 FINAL: ID: ${s_log.product.id}, Cat: ${s_log.product.category}, Nome: ${s_log.product.name.substring(0,30)}, Score Final: ${s_log.combinedScore.toFixed(4)}, T_FTS: ${s_log.textSimilarity?.toFixed(4)}, V_CLIP: ${s_log.visualSimilarity?.toFixed(4)}, Source: ${s_log.source}`);
-        });
+        console.log(`[findSuggestionsForItem V3.5.1] PÓS-FILTRO categoria: ${categoryFilteredSuggestions.length} para "${item.detectedObjectName}".`);
         return categoryFilteredSuggestions.slice(0, 5);
     } catch (error) {
-        console.error(`[findSuggestionsForItem V3.3.2-SAM_CLIP] Erro GERAL INESPERADO no item ${item.id} (${item.detectedObjectName}):`, error);
+        console.error(`[findSuggestionsForItem V3.5.1] Erro GERAL item ${item.id}:`, error);
         return [];
     }
 }
@@ -470,7 +371,7 @@ export async function processAiDesignProject(projectId: number): Promise<DesignP
 }
 
 export async function processDesignProjectImage(projectId: number, imageUrlToProcess: string, userMessageText?: string): Promise<void> {
-  console.log(`[AI Design Processor V3.3.2] Iniciando processamento para projeto ${projectId}, imagem: ${imageUrlToProcess}, mensagem: "${userMessageText}"`);
+  console.log(`[AI Design Processor V3.5.1] Iniciando para projeto ${projectId}`);
   const initialUserMessageForChat = userMessageText ? 
     `Analisando a imagem que você enviou com a mensagem: "${userMessageText}"...` :
     `Analisando a imagem que você enviou...`;
@@ -480,89 +381,78 @@ export async function processDesignProjectImage(projectId: number, imageUrlToPro
   let detectedObjectsFromVision: { name: string; description: string; bbox: any; }[] = [];
   let visionAnalysisFailed = false;
   let project: DesignProject | undefined | null = null; 
+  let allSamSegments: RamSamSegment[] | null = null; 
+
+  let originalImageBuffer: Buffer | null = null;
+  let imageMetadata: sharp.Metadata | null = null;
+
+  if (imageUrlToProcess) {
+      try {
+          originalImageBuffer = await fetchImageAsBuffer(imageUrlToProcess);
+          if (originalImageBuffer) {
+              imageMetadata = await sharp(originalImageBuffer).metadata();
+          }
+      } catch (e) {
+          console.error("[AI Design Processor V3.5.1] Erro ao buscar imagem:", e);
+          return; 
+      }
+  }
+  if (!originalImageBuffer || !imageMetadata?.width || !imageMetadata?.height) {
+      console.error("[AI Design Processor V3.5.1] Imagem ou metadados inválidos.");
+      return; 
+  }
 
   try {
-    project = await storage.getDesignProject(projectId); 
+    project = await storage.getDesignProject(projectId);
     if (!project) {
-      console.error(`[AI Design Processor V3.3.2] Projeto ${projectId} não encontrado.`);
+      console.error(`[AI Design Processor V3.5.1] Projeto ${projectId} não encontrado.`);
       await storage.createAiDesignChatMessage({ projectId, role: "assistant", content: `Erro: Não consegui encontrar os detalhes do projeto (ID: ${projectId}).` });
       broadcastToProject(projectId.toString(), { type: 'ai_processing_error', error: 'Project not found' });
       return; 
     }
 
-    console.log(`[AI Design Processor V3.3.2] Enviando imagem para análise de visão GPT-4o...`);
+    console.log(`[AI Design Processor V3.5.1] Enviando imagem para análise de visão GPT-4o...`);
     let visionContent: string | null | undefined = null;
     try {
       const visionResponse = await openai.chat.completions.create({
-      model: "gpt-4o", 
-      messages: [
-          {
-            role: "system",
-            content: `Você é um especialista em design de interiores com formação avançada (nível doutorado) e ampla experiência na análise de renders de ambientes. Sua tarefa é analisar a imagem fornecida e identificar APENAS OS MÓVEIS PRINCIPAIS presentes no ambiente (excluindo itens decorativos, plantas, cortinas, objetos pequenos e estruturas fixas).
+        model: "gpt-4o", 
+        messages: [
+            {
+              role: "system",
+              content: `Você é um especialista em design de interiores... (SEU PROMPT COMPLETO AQUI)... RESPONDA SEMPRE em formato JSON válido. O JSON deve ser um objeto contendo uma chave "furniture" que é um array de objetos. Cada objeto representa um móvel. Se NENHUM MÓVEL for identificável, retorne { "furniture": [] }.`
+            },
+          { role: "user", content: [{ type: "text", text: `Analise...` },{ type: "image_url", image_url: { url: imageUrlToProcess } }] }
+          ],
+        response_format: { type: "json_object" }, 
+          max_tokens: 3000,
+        });
+        visionContent = visionResponse.choices[0]?.message?.content;
+    } catch (e) { visionAnalysisFailed = true; console.error("[AI Design Processor V3.5.1] Erro GPT-4o Vision", e); }
 
-Para CADA MÓVEL INDIVIDUALMENTE IDENTIFICADO (liste cada instância separadamente, mesmo que sejam do mesmo tipo, como múltiplas cadeiras idênticas), responda com:
-
-1.  **NOME DO MÓVEL:** Forneça o nome mais preciso e técnico possível (ex: "Cadeira de jantar Estilo Eames", "Sofá Chesterfield 3 lugares", "Mesa lateral redonda tripé").
-    *   **CADEIRA vs. POLTRONA:**
-        *   **Poltrona:** Estofada, com braços, aspecto robusto, geralmente voltada ao conforto.
-        *   **Cadeira de jantar:** Usada com mesa de jantar. Pode ser estofada, mas mais leve.
-        *   **Cadeira de escritório:** Com rodízios e ajuste de altura.
-        *   **Cadeira (genérica):** Assento simples individual, sem características claras das anteriores.
-        *   ⚠️ **Nunca confunda** uma poltrona com uma cadeira estofada leve.
-    *   Use nomes técnicos como: "mesa lateral", "rack baixo", "estante alta", "banco", "banqueta", "mesa de cabeceira", "sofá modular", etc.
-
-2.  **DESCRIÇÃO CURTA:** Máximo 20 palavras, descrevendo estilo, cor principal, material predominante e uma característica marcante.
-    *   Exemplo:
-        *   "Sofá de 3 lugares, veludo verde-escuro, encosto baixo, pés dourados, estilo moderno."
-        *   "Mesa lateral redonda, madeira clara, estilo escandinavo, base de três pés."
-
-3.  **BOUNDING BOX (bbox):** Forneça as coordenadas da bounding box para CADA móvel, em formato JSON: { "x_min": %, "y_min": %, "x_max": %, "y_max": % } (valores de 0.0 a 1.0 relativos à dimensão da imagem). **A BBOX DEVE SER PRECISA E ENVOLVER COMPLETAMENTE APENAS O MÓVEL VISÍVEL, sem ser excessivamente pequena nem incluir muitos elementos ao redor. Certifique-se que a BBox cubra a maior parte do objeto.**
-
-RESPONDA SEMPRE em formato JSON válido. O JSON deve ser um objeto contendo uma chave "furniture" que é um array de objetos. Cada objeto representa um móvel. Se NENHUM MÓVEL for identificável, retorne { "furniture": [] }. Evite frases como "não foram encontrados móveis", apenas retorne o JSON especificado.`
-          },
-        { role: "user", content: [{ type: "text", text: `Analise a imagem e identifique os móveis conforme as instruções. Mensagem do usuário (pode estar vazia): "${userMessageText || ''}"` },{ type: "image_url", image_url: { url: imageUrlToProcess } }] }
-        ],
-      response_format: { type: "json_object" }, 
-        max_tokens: 3000,
-      });
-      visionContent = visionResponse.choices[0]?.message?.content;
-    } catch (openaiError: any) {
-      console.error("[AI Design Processor V3.3.2] Erro DIRETO na chamada da API OpenAI Vision:", openaiError);
-      visionAnalysisFailed = true;
-    }
-    
-    if (!visionAnalysisFailed && !visionContent) {
-      console.error("[AI Design Processor V3.3.2] Resposta da API Vision bem-sucedida, mas o conteúdo da mensagem está vazio ou nulo.");
-      visionAnalysisFailed = true; 
-    } else if (!visionAnalysisFailed && visionContent) {
-      try {
-        const parsedJsonResponse = JSON.parse(visionContent);
-        let tempDetectedObjects: { name: string | undefined; description: string | undefined; bbox: any; }[] = [];
-        if (parsedJsonResponse?.furniture && Array.isArray(parsedJsonResponse.furniture)) {
-             tempDetectedObjects = parsedJsonResponse.furniture.map((item: any) => ({
-                name: item["NOME DO MÓVEL"] || item.nome || item.name,
-                description: item["DESCRIÇÃO CURTA"] || item.descrição || item.description,
-                bbox: item["BOUNDING BOX (bbox)"] || item["BOUNDING BOX"] || item.bounding_box || item.bbox, 
-            }));
-        } else if (Array.isArray(parsedJsonResponse)) {
-            tempDetectedObjects = parsedJsonResponse.map((item: any) => ({
-                name: item["NOME DO MÓVEL"] || item.nome || item.name,
-                description: item["DESCRIÇÃO CURTA"] || item.descrição || item.description,
-                bbox: item["BOUNDING BOX (bbox)"] || item["BOUNDING BOX"] || item.bounding_box || item.bbox, 
-            }));
-        }
-        detectedObjectsFromVision = tempDetectedObjects.filter(obj => obj.name && obj.name.trim() !== "").map(obj => ({
-            name: obj.name!, description: obj.description || "", bbox: obj.bbox,
-        }));
-        console.log(`[AI Design Processor V3.3.2] ${detectedObjectsFromVision.length} objetos detectados com NOME VÁLIDO.`);
-      } catch (parseError) {
-          console.error("[AI Design Processor V3.3.2] Erro CRÍTICO ao parsear JSON da API Vision:", parseError);
-          visionAnalysisFailed = true;
-        }
-    }
+    if (!visionAnalysisFailed && visionContent) {
+        try {
+            const parsedJsonResponse = JSON.parse(visionContent);
+            let tempDetectedObjects: { name: string | undefined; description: string | undefined; bbox: any; }[] = [];
+            if (parsedJsonResponse?.furniture && Array.isArray(parsedJsonResponse.furniture)) {
+                 tempDetectedObjects = parsedJsonResponse.furniture.map((item: any) => ({
+                    name: item["NOME DO MÓVEL"] || item.nome || item.name,
+                    description: item["DESCRIÇÃO CURTA"] || item.descrição || item.description,
+                    bbox: item["BOUNDING BOX (bbox)"] || item["BOUNDING BOX"] || item.bounding_box || item.bbox, 
+                }));
+            } else if (Array.isArray(parsedJsonResponse)) { 
+                tempDetectedObjects = parsedJsonResponse.map((item: any) => ({
+                    name: item["NOME DO MÓVEL"] || item.nome || item.name,
+                    description: item["DESCRIÇÃO CURTA"] || item.descrição || item.description,
+                    bbox: item["BOUNDING BOX (bbox)"] || item["BOUNDING BOX"] || item.bounding_box || item.bbox, 
+                }));
+            }
+            detectedObjectsFromVision = tempDetectedObjects.filter(obj => obj.name && obj.name.trim() !== "").map(obj => ({ name: obj.name!, description: obj.description || "", bbox: obj.bbox }));
+            console.log(`[AI Design Processor V3.5.1] ${detectedObjectsFromVision.length} objetos detectados pela IA de Visão.`);
+        } catch (parseError) { visionAnalysisFailed = true; console.error("[AI Design Processor V3.5.1] Erro parse JSON Vision", parseError);}
+    } 
 
     if (visionAnalysisFailed || detectedObjectsFromVision.length === 0) {
-        const errorMsg = visionAnalysisFailed ? "Falha na análise da imagem pela IA." : "Nenhum móvel principal identificado na imagem.";
+        const errorMsg = visionAnalysisFailed ? "Falha na análise inicial da imagem pela IA." : "Nenhum móvel principal identificado na imagem.";
         await storage.createAiDesignChatMessage({ projectId, role: 'assistant', content: errorMsg });
         if (project) {
             await storage.updateDesignProject(projectId, { status: visionAnalysisFailed? 'error_vision':'processed_no_items', updatedAt: new Date() });
@@ -580,7 +470,7 @@ RESPONDA SEMPRE em formato JSON válido. O JSON deve ser um objeto contendo uma 
         const createdItem = await storage.createDesignProjectItem(newItemData);
         if (createdItem) createdDesignProjectItems.push(createdItem as DesignProjectItem);
     }
-    console.log(`[AI Design Processor V3.3.2] ${createdDesignProjectItems.length} DesignProjectItems criados.`);
+    console.log(`[AI Design Processor V3.5.1] ${createdDesignProjectItems.length} DesignProjectItems criados a partir da IA de Visão.`);
     
     let chatResponseContent = "";
     let focusedProcessing = false; 
@@ -596,52 +486,45 @@ RESPONDA SEMPRE em formato JSON válido. O JSON deve ser um objeto contendo uma 
                 mainKeyword = kw; normalizedMainKeyword = normalizedKw; break;
             }
         }
-        if(mainKeyword) console.log(`[AI Design Processor V3.3.2] Keyword de foco detectada: "${mainKeyword}"`);
+        if(mainKeyword) console.log(`[AI Design Processor V3.5.1] Keyword de foco detectada: "${mainKeyword}"`);
     }
     
-    const itemsWithSuggestions: {item: DesignProjectItem, suggestions: SuggestionForChat[], segmentationMaskForRoiUrl: string | null}[] = [];
+    const itemsWithSuggestions: {item: DesignProjectItem, suggestions: SuggestionForChat[]}[] = [];
     for (const DRAFT_item of createdDesignProjectItems) {
-        let segmentationMaskForRoiUrl: string | null = null;
-        const detectedObjectNameLower = DRAFT_item.detectedObjectName?.toLowerCase() || "";
-        let samPromptText = DRAFT_item.detectedObjectName || ""; // Default to full name
+        let finalBboxToUse = DRAFT_item.detectedObjectBoundingBox;
+        const visionObjectNameNorm = normalizeText(DRAFT_item.detectedObjectName);
 
-        // Simplificar o prompt para o SAM
-        if (detectedObjectNameLower.includes("mesa")) {
-            samPromptText = "mesa";
-        } else if (detectedObjectNameLower.includes("cadeira")) {
-            samPromptText = "cadeira";
-        } else if (detectedObjectNameLower.includes("sofa")) {
-            samPromptText = "sofa";
-        } else if (detectedObjectNameLower.includes("poltrona")) {
-            samPromptText = "poltrona";
-        } else if (detectedObjectNameLower.includes("aparador")) {
-            samPromptText = "aparador";
-        } else if (detectedObjectNameLower.includes("buffet")) {
-            samPromptText = "buffet";
-        } else if (detectedObjectNameLower.includes("rack")) {
-            samPromptText = "rack";
-        } else if (detectedObjectNameLower.includes("estante")) {
-            samPromptText = "estante";
+        if (allSamSegments && visionObjectNameNorm && imageMetadata?.width && imageMetadata?.height) {
+            let bestSamSegment: RamSamSegment | null = null;
+            let highestScore = -1;
+            const segmentsToLoop: RamSamSegment[] = allSamSegments || [];
+            for (const samSegment of segmentsToLoop) {
+                const samLabelNorm = normalizeText(samSegment.label);
+                if (samLabelNorm.includes(visionObjectNameNorm) || visionObjectNameNorm.includes(samLabelNorm)) {
+                    if (samSegment.logit > highestScore) {
+                        highestScore = samSegment.logit;
+                        bestSamSegment = samSegment;
+                    }
+                }
+            }
+            if (bestSamSegment) {
+                console.log(`[AI Design Processor V3.5.1] Usando BBox do SAM para "${DRAFT_item.detectedObjectName}" (Label SAM: "${bestSamSegment.label}")`);
+                finalBboxToUse = { 
+                    x_min: bestSamSegment.box[0], y_min: bestSamSegment.box[1], 
+                    x_max: bestSamSegment.box[2], y_max: bestSamSegment.box[3] 
+                }; 
+            } else {
+                 console.log(`[AI Design Processor V3.5.1] Nenhum segmento SAM para "${DRAFT_item.detectedObjectName}". Usando BBox da Visão.`);
+            }
         }
-        // Adicionar mais simplificações conforme necessário para outros tipos de móveis comuns
+        
+        const itemForSuggestions = { ...DRAFT_item, detectedObjectBoundingBox: finalBboxToUse };
 
-        console.log(`[PROCESS_SAM_DEBUG V3.3.2] Item: "${DRAFT_item.detectedObjectName}", SAM Prompt a ser usado: "${samPromptText}"`);
-
-        if (DRAFT_item.detectedObjectBoundingBox && typeof DRAFT_item.detectedObjectBoundingBox === 'object' && Object.keys(DRAFT_item.detectedObjectBoundingBox).length > 0 && imageUrlToProcess && project && samPromptText.trim() !== "") {
-            console.log(`[PROCESS_SAM_DEBUG V3.3.2] Condições para SAM OK. Chamando getSegmentationMaskSAM.`);
-            try {
-                segmentationMaskForRoiUrl = await getSegmentationMaskSAM(imageUrlToProcess, samPromptText); 
-                if (segmentationMaskForRoiUrl) console.log(`[PROCESS_SAM_DEBUG V3.3.2] Máscara SAM OBTIDA: ${segmentationMaskForRoiUrl.substring(0,70)}...`);
-                else console.warn(`[PROCESS_SAM_DEBUG V3.3.2] getSegmentationMaskSAM retornou NULL para prompt: "${samPromptText}".`);
-            } catch (samError) { console.error(`[PROCESS_SAM_DEBUG V3.3.2] Erro SAM:`, samError); }
+        if (project?.userId) {
+            const suggestionsFromFind = await findSuggestionsForItem(itemForSuggestions, project.userId, imageUrlToProcess, null);
+            itemsWithSuggestions.push({ item: DRAFT_item, suggestions: suggestionsFromFind});
         } else {
-          console.warn(`[PROCESS_SAM_DEBUG V3.3.2] Condições para SAM NÃO SATISFEITAS. Nome Original: "${DRAFT_item.detectedObjectName || 'NULO'}", Prompt SAM: "${samPromptText}", BBox: ${DRAFT_item.detectedObjectBoundingBox ? 'Presente' : 'Ausente'}`);
-        }
-        if (project && typeof project.userId === 'number') {
-            const suggestionsFromFind = await findSuggestionsForItem(DRAFT_item, project.userId, imageUrlToProcess, segmentationMaskForRoiUrl);
-            itemsWithSuggestions.push({ item: DRAFT_item, suggestions: suggestionsFromFind, segmentationMaskForRoiUrl});
-        } else {
-            itemsWithSuggestions.push({ item: DRAFT_item, suggestions: [], segmentationMaskForRoiUrl: null});
+            itemsWithSuggestions.push({ item: DRAFT_item, suggestions: []});
         }
     }
 
@@ -702,13 +585,13 @@ RESPONDA SEMPRE em formato JSON válido. O JSON deve ser um objeto contendo uma 
         }
     }
     broadcastToProject(projectId.toString(), { type: 'ai_processing_complete', projectId });
-    console.log(`[AI Design Processor V3.3.2] Processamento da imagem para projeto ${projectId} concluído.`);
+    console.log(`[AI Design Processor V3.5.1] Processamento da imagem para projeto ${projectId} concluído.`);
   } catch (error: any) {
-    console.error(`[AI Design Processor V3.3.2] Erro GERAL no processamento para projeto ${projectId}:`, error);
+    console.error(`[AI Design Processor V3.5.1] Erro GERAL no processamento para projeto ${projectId}:`, error);
     try {
         if (project) await storage.updateDesignProject(projectId, { status: 'error', updatedAt: new Date() });
         broadcastToProject(projectId.toString(), { type: 'ai_processing_error', error: error.message || 'Unknown error' });
-    } catch (dbError) { console.error(`[AI Design Processor V3.3.2] Erro ao registrar erro no DB:`, dbError); }
+    } catch (dbError) { console.error(`[AI Design Processor V3.5.1] Erro ao registrar erro no DB:`, dbError); }
   }
 }
 
@@ -747,7 +630,7 @@ export async function triggerInpaintingForItem(itemId: number, projectId: number
 }
 
 async function performSingleInpaintingStep(baseImageUrl: string, item: DesignProjectItem, product: Product): Promise<string | null> {
-  console.log(`[Inpainting Step V3.3.2] Iniciando para item ID: ${item.id}`);
+  console.log(`[Inpainting Step V3.5.1] Iniciando para item ID: ${item.id}`);
   if (!product.imageUrl || !item.detectedObjectBoundingBox) return null;
   try {
     const baseImageBuffer = await fetchImageAsBuffer(baseImageUrl);
@@ -768,33 +651,14 @@ async function performSingleInpaintingStep(baseImageUrl: string, item: DesignPro
     const { data: resizedProductBuffer, info: resizedInfo } = resizedProductImageOutput;
     const offsetX = rectX + Math.floor((rectWidth - resizedInfo.width) / 2);
     const offsetY = rectY + Math.floor((rectHeight - resizedInfo.height) / 2);
-    // Usar baseImageBuffer em vez de recarregar
     const primedBuffer = await sharp(baseImageBuffer).composite([{ input: resizedProductBuffer, left: offsetX, top: offsetY }]).png().toBuffer();
     const primedImageBase64 = `data:image/png;base64,${primedBuffer.toString('base64')}`; 
     const inpaintingPrompt = `A photo of a ${product.name}, ${product.description || 'high quality'}.`;
 
-    // CHAMADA runReplicateModel COMENTADA CONFORME SOLICITADO ANTERIORMENTE
-    console.warn("[Inpainting Step V3.3.2] Chamada a runReplicateModel para inpainting está COMENTADA. Implementação futura via replicate-service.ts é necessária.");
-    /*
-    const replicateApiKey = process.env.REPLICATE_API_TOKEN;
-    if (!replicateApiKey) { 
-        console.error("[Inpainting Step V3.3.2] REPLICATE_API_TOKEN não configurado."); 
-        return null; 
-    }
-    const inpaintingResult = await runReplicateModel<string[] | string>( 
-      "stability-ai/stable-diffusion-inpainting", 
-      "some_version_hash", // Idealmente, usar uma versão estável ou remover para usar a mais recente via replicate-service
-      { image: primedImageBase64, mask: `data:image/png;base64,${maskBuffer.toString('base64')}`, prompt: inpaintingPrompt },
-      replicateApiKey 
-    );
-    let generatedImageUrl: string | null = null;
-    if (inpaintingResult && Array.isArray(inpaintingResult) && inpaintingResult.length > 0) generatedImageUrl = inpaintingResult[0];
-    else if (typeof inpaintingResult === 'string') generatedImageUrl = inpaintingResult;
-    return generatedImageUrl;
-    */
+    console.warn("[Inpainting Step V3.5.1] Chamada a runReplicateModel está COMENTADA.");
     return null; 
   } catch (error) {
-    console.error(`[Inpainting Step V3.3.2] Erro:`, error); return null;
+    console.error(`[Inpainting Step V3.5.1] Erro:`, error); return null;
   }
 }
 

@@ -33,6 +33,24 @@ interface ReplicatePredictionResponse {
   };
 }
 
+export interface RamSamSegment {
+  box: [number, number, number, number];
+  label: string;
+  logit: number;
+  value: number; // ID da máscara, se aplicável a uma máscara combinada
+  mask_url?: string; // Adicionando caso o modelo retorne URLs de máscaras individuais aqui
+}
+
+interface RamSamOutput {
+  tags?: string;
+  json_data?: { mask?: RamSamSegment[] }; // O array de segmentos está em json_data.mask
+  masked_img?: string; // URL da imagem com máscaras coloridas (para debug)
+  rounding_box_img?: string; // URL da imagem com bboxes (para debug)
+  // O output principal da API também pode ser um array de URLs, 
+  // sendo a primeira geralmente a visualização e a última a máscara principal (mask.jpg)
+  // Vamos priorizar o json_data.mask se disponível.
+}
+
 /**
  * Executa um modelo do Replicate e aguarda a conclusão
  * 
@@ -202,22 +220,19 @@ export async function extractTextFromImage(
   );
 }
 
-// ATUALIZADA para usar schananas/grounded_sam com o hash de versão e input corretos
-export async function getSegmentationMaskSAM(
+// ATUALIZADA para usar idea-research/ram-grounded-sam
+export async function getSegmentationDataRAM(
   imageUrl: string,
-  promptText: string, 
-  modelIdentifier: string = "schananas/grounded_sam:ee871c19efb1941f55f66a3d7d960428c8a5afcb77449547fe8e5a3ab9ebc21c"
-): Promise<string | null> { 
+  // promptText não é mais usado como input direto para este modelo SAM
+  modelIdentifier: string = "idea-research/ram-grounded-sam:80a2aede4cf8e3c9f26e96c308d45b23c350dd36f1c381de790715007f1ac0ad"
+  // Retorna o array de segmentos detectados (label e box) ou null
+): Promise<RamSamSegment[] | null> { 
   if (!process.env.REPLICATE_API_TOKEN) {
-    console.error("[DEBUG SAM SVC] REPLICATE_API_TOKEN não está configurado.");
+    console.error("[DEBUG RAM-SAM SVC] REPLICATE_API_TOKEN não está configurado.");
     return null;
   }
   if (!imageUrl) {
-    console.error("[DEBUG SAM SVC] URL da imagem não fornecida para SAM.");
-    return null;
-  }
-  if (!promptText || promptText.trim() === "") {
-    console.error("[DEBUG SAM SVC] Prompt de texto (mask_prompt) para Grounded SAM não fornecido ou vazio.");
+    console.error("[DEBUG RAM-SAM SVC] URL da imagem não fornecida.");
     return null;
   }
 
@@ -226,39 +241,50 @@ export async function getSegmentationMaskSAM(
   });
   
   const input = {
-    image: imageUrl,
-    mask_prompt: promptText,
-    box_threshold: 0.3,
-    text_threshold: 0.25
+    input_image: imageUrl,
+    // use_sam_hq: false, // Default é false, podemos omitir ou setar explicitamente
+    // show_visualisation: false // Default é false, útil para debug no Replicate, mas não precisamos da imagem anotada no backend agora
   };
 
-  console.log(`[DEBUG SAM SVC] Chamando Replicate.run com: Model: ${modelIdentifier}, Input: ${JSON.stringify(input)}`);
+  console.log(`[DEBUG RAM-SAM SVC] Chamando Replicate.run com: Model: ${modelIdentifier}, Input: ${JSON.stringify(input)}`);
 
   try {
-    const output: unknown = await replicate.run(modelIdentifier as `${string}/${string}:${string}`, { input });
+    // O output principal é um objeto com várias chaves, incluindo json_data
+    const output = await replicate.run(modelIdentifier as `${string}/${string}:${string}`, { input }) as RamSamOutput;
     
-    console.log("[DEBUG SAM SVC] Output BRUTO do Replicate (schananas/grounded_sam):", JSON.stringify(output));
+    console.log("[DEBUG RAM-SAM SVC] Output BRUTO do Replicate (idea-research/ram-grounded-sam):", JSON.stringify(output));
 
-    if (Array.isArray(output) && output.length > 0 && typeof output[0] === 'string' && output[0].startsWith('http')) {
-      console.log(`[DEBUG SAM SVC] Máscara(s) recebida(s). Usando a primeira: ${output[0]}`);
-      return output[0]; 
-    } else if (typeof output === 'string' && output.startsWith('http')) {
-      console.log(`[DEBUG SAM SVC] Máscara recebida (string direta): ${output}`);
-      return output;
+    if (output && output.json_data && Array.isArray(output.json_data.mask)) {
+      console.log(`[DEBUG RAM-SAM SVC] ${output.json_data.mask.length} segmentos encontrados em json_data.mask.`);
+      return output.json_data.mask;
+    } else {
+      console.warn("[DEBUG RAM-SAM SVC] Output do Replicate não continha json_data.mask esperado.", output);
+      return null;
     }
 
-    console.warn("[DEBUG SAM SVC] Output do Replicate (schananas/grounded_sam) não é um array de URLs de máscara esperado ou uma URL de string direta, ou está vazio.", output);
-    return null;
   } catch (error: any) {
-    console.error("[DEBUG SAM SVC] Erro ao chamar API do schananas/grounded_sam no Replicate:", error.message);
+    console.error("[DEBUG RAM-SAM SVC] Erro ao chamar API do idea-research/ram-grounded-sam:", error.message);
     if (error.response?.status) {
-        console.error("[DEBUG SAM SVC] Replicate Error Status:", error.response.status);
+        console.error("[DEBUG RAM-SAM SVC] Replicate Error Status:", error.response.status);
         if (error.response.data?.detail) {
-            console.error("[DEBUG SAM SVC] Replicate Error Detail:", error.response.data.detail);
+            console.error("[DEBUG RAM-SAM SVC] Replicate Error Detail:", error.response.data.detail);
         } else if (error.response.data) {
-            console.error("[DEBUG SAM SVC] Replicate Error Data (snippet):", JSON.stringify(error.response.data).substring(0, 200));
+            console.error("[DEBUG RAM-SAM SVC] Replicate Error Data (snippet):", JSON.stringify(error.response.data).substring(0, 200));
         }
     }
     return null;
   }
 }
+
+// A função getSegmentationMaskSAM antiga não é mais necessária se usarmos getSegmentationDataRAM
+// Ou podemos renomeá-la e adaptar se precisarmos de outros modelos SAM no futuro.
+// Por agora, vou comentar a antiga para evitar confusão.
+/*
+export async function getSegmentationMaskSAM(
+  imageUrl: string,
+  promptText: string, 
+  modelIdentifier: string = "andreasjansson/grounded-sam:b8c7f97f29af1f56e372cddf7c60f55a8b5f91b67892b6d3dfc2e6c79779bfc6"
+): Promise<string | null> { 
+  // ... (código antigo) ...
+}
+*/
