@@ -202,14 +202,12 @@ export async function extractTextFromImage(
   );
 }
 
-// ATUALIZADA para usar cjwbw/semantic-segment-anything
+// ATUALIZADA para usar andreasjansson/grounded-sam
 export async function getSegmentationMaskSAM(
   imageUrl: string,
-  // promptText não é usado diretamente como input para cjwbw/semantic-segment-anything,
-  // mas pode ser usado para selecionar a máscara correta do output se ele retornar múltiplas máscaras com etiquetas.
-  promptText: string, 
-  // ATUALIZADO o hash da versão para o mais recente sugerido pelo ChatGPT
-  modelIdentifier: string = "cjwbw/semantic-segment-anything:947b2da7a7f17c3edafc85f72fdc16210c507a4b7bcec6579ef49b85db58311d"
+  promptText: string, // Este será o input para o campo "text"
+  // Novo modelIdentifier para andreasjansson/grounded-sam com hash de versão
+  modelIdentifier: string = "andreasjansson/grounded-sam:b8c7f97f29af1f56e372cddf7c60f55a8b5f91b67892b6d3dfc2e6c79779bfc6"
 ): Promise<string | null> { 
   if (!process.env.REPLICATE_API_TOKEN) {
     console.error("[DEBUG SAM SVC] REPLICATE_API_TOKEN não está configurado.");
@@ -219,6 +217,10 @@ export async function getSegmentationMaskSAM(
     console.error("[DEBUG SAM SVC] URL da imagem não fornecida para SAM.");
     return null;
   }
+  if (!promptText || promptText.trim() === "") {
+    console.error("[DEBUG SAM SVC] Prompt de texto para Grounded SAM não fornecido ou vazio.");
+    return null;
+  }
 
   const replicate = new Replicate({
     auth: process.env.REPLICATE_API_TOKEN,
@@ -226,64 +228,55 @@ export async function getSegmentationMaskSAM(
   
   const input = {
     image: imageUrl,
-    threshold: 0.4 // Usando o threshold sugerido pelo ChatGPT, pode precisar de ajuste
+    text: promptText, // Usar o promptText aqui
+    box_threshold: 0.3, // Valor padrão do exemplo, pode precisar de ajuste
+    text_threshold: 0.25 // Valor padrão do exemplo, pode precisar de ajuste
   };
 
   console.log(`[DEBUG SAM SVC] Chamando Replicate.run com: Model: ${modelIdentifier}, Input: ${JSON.stringify(input)}`);
 
   try {
-    const output = await replicate.run(modelIdentifier as `${string}/${string}:${string}`, { input }) as any; 
+    // O output deste modelo provavelmente será uma URL direta para a máscara do objeto detectado via texto.
+    const output = await replicate.run(modelIdentifier as `${string}/${string}:${string}`, { input }) as unknown;
     
-    console.log("[DEBUG SAM SVC] Output BRUTO do Replicate (cjwbw/semantic-segment-anything):", JSON.stringify(output));
+    console.log("[DEBUG SAM SVC] Output BRUTO do Replicate (andreasjansson/grounded-sam):", JSON.stringify(output));
 
-    if (output) {
-      if (typeof output === 'string') {
-        if (output.startsWith('http')) return output;
-        return null; 
-      }
-      if (typeof output === 'object' && output !== null) {
-        const possibleMaskKeys = ['mask', 'mask_url', 'image', 'output', 'combined_mask', 'segmentation_map'];
-        for (const key of possibleMaskKeys) {
-          if (typeof output[key] === 'string' && output[key].startsWith('http')) {
-            return output[key];
-          }
-        }
-        let segments: {label?: string, class?: string, category?: string, name?: string, mask_url?: string, mask?: string}[] = [];
-        if (Array.isArray(output.segments)) segments = output.segments;
-        else if (Array.isArray(output.masks)) segments = output.masks;
-        else if (Array.isArray(output.predictions)) segments = output.predictions;
-        else if (Array.isArray(output.outputs)) segments = output.outputs;
-        else if (Array.isArray(output)) segments = output; 
-
-        if (segments.length > 0) {
-            console.log(`[DEBUG SAM SVC] Encontrados ${segments.length} segmentos/máscaras no output.`);
-            const normalizedPromptText = promptText.toLowerCase().trim();
-            for (const seg of segments) {
-                const label = seg.label || seg.class || seg.category || seg.name;
-                const maskUrl = seg.mask_url || seg.mask; 
-                if (label && typeof label === 'string' && maskUrl && typeof maskUrl === 'string' && maskUrl.startsWith('http')) {
-                    if (label.toLowerCase().includes(normalizedPromptText)) {
-                        console.log(`[DEBUG SAM SVC] Máscara correspondente encontrada para "${promptText}" com etiqueta "${label}": ${maskUrl}`);
-                        return maskUrl;
-                    }
-                }
-            }
-            console.warn(`[DEBUG SAM SVC] Nenhum segmento com etiqueta correspondente a "${promptText}" encontrado nas máscaras retornadas.`);
-            if (segments.length === 1 && (segments[0].mask_url || segments[0].mask) && typeof (segments[0].mask_url || segments[0].mask) === 'string'){
-                const singleMaskUrl = segments[0].mask_url || segments[0].mask;
-                 if(singleMaskUrl && singleMaskUrl.startsWith('http')){
-                    console.log(`[DEBUG SAM SVC] Retornando a única máscara encontrada, pois não houve match de etiqueta: ${singleMaskUrl}`);
-                    return singleMaskUrl;
-                }
+    // Tentar extrair a URL da máscara. 
+    // Modelos SAM frequentemente retornam a URL da imagem da máscara diretamente ou dentro de um array/objeto simples.
+    if (typeof output === 'string' && output.startsWith('http')) {
+      console.log(`[DEBUG SAM SVC] Máscara recebida (string direta): ${output}`);
+      return output;
+    } 
+    // Se for um array, pegar o primeiro elemento se for uma URL
+    else if (Array.isArray(output) && output.length > 0 && typeof output[0] === 'string' && output[0].startsWith('http')) {
+      console.log(`[DEBUG SAM SVC] Máscara recebida (primeiro item do array): ${output[0]}`);
+      return output[0];
+    } 
+    // Alguns modelos podem aninhar a URL em um objeto, ex: { image_url: "..." } ou { mask: "..." }
+    else if (typeof output === 'object' && output !== null) {
+        const possibleKeys = ['mask', 'mask_url', 'image', 'image_url', 'output', 'url'];
+        for (const key of possibleKeys) {
+            if (typeof (output as any)[key] === 'string' && (output as any)[key].startsWith('http')) {
+                console.log(`[DEBUG SAM SVC] Máscara recebida (chave '${key}' do objeto): ${(output as any)[key]}`);
+                return (output as any)[key];
             }
         }
-      }
     }
-    console.warn("[DEBUG SAM SVC] Output do Replicate (cjwbw/semantic-segment-anything) não continha uma URL de máscara utilizável ou correspondente.", output);
+
+    console.warn("[DEBUG SAM SVC] Output do Replicate (andreasjansson/grounded-sam) não continha uma URL de máscara esperada.", output);
     return null;
   } catch (error: any) {
-    console.error("[DEBUG SAM SVC] Erro ao chamar API do cjwbw/semantic-segment-anything no Replicate:", error.message);
-    if (error.response?.status) console.error("[DEBUG SAM SVC] Replicate Error Status:", error.response.status);
+    console.error("[DEBUG SAM SVC] Erro ao chamar API do andreasjansson/grounded-sam no Replicate:", error.message);
+    if (error.response?.status) {
+        console.error("[DEBUG SAM SVC] Replicate Error Status:", error.response.status);
+        // Não logar error.response.data completo por padrão para evitar verbosidade excessiva e potenciais dados sensíveis.
+        // Mas é útil saber se há um payload de erro específico.
+        if (error.response.data?.detail) {
+            console.error("[DEBUG SAM SVC] Replicate Error Detail:", error.response.data.detail);
+        } else if (error.response.data) {
+            console.error("[DEBUG SAM SVC] Replicate Error Data (snippet):", JSON.stringify(error.response.data).substring(0, 200));
+        }
+    }
     return null;
   }
 }
