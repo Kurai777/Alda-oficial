@@ -202,18 +202,21 @@ export async function extractTextFromImage(
   );
 }
 
-// ATUALIZADA para usar schananas/grounded_sam com prompt de texto
+// ATUALIZADA para usar cjwbw/semantic-segment-anything
 export async function getSegmentationMaskSAM(
   imageUrl: string,
+  // promptText não é usado diretamente como input para cjwbw/semantic-segment-anything,
+  // mas pode ser usado para selecionar a máscara correta do output se ele retornar múltiplas máscaras com etiquetas.
   promptText: string, 
-  modelIdentifier: string = "schananas/grounded_sam"
+  // Novo modelIdentifier para cjwbw/semantic-segment-anything com hash de versão
+  modelIdentifier: string = "cjwbw/semantic-segment-anything:3c1e3d401ae19046cde20ad78941c3e87b6de60b3c3b45aaee18e714a017b50e"
 ): Promise<string | null> { 
   if (!process.env.REPLICATE_API_TOKEN) {
     console.error("[DEBUG SAM SVC] REPLICATE_API_TOKEN não está configurado.");
     return null;
   }
-  if (!promptText || promptText.trim() === "") {
-    console.error("[DEBUG SAM SVC] Prompt de texto para Grounded SAM não fornecido ou vazio.");
+  if (!imageUrl) {
+    console.error("[DEBUG SAM SVC] URL da imagem não fornecida para SAM.");
     return null;
   }
 
@@ -223,36 +226,86 @@ export async function getSegmentationMaskSAM(
   
   const input = {
     image: imageUrl,
-    mask_prompt: promptText, 
-    box_threshold: 0.3, 
-    text_threshold: 0.25 
+    threshold: 0.4 // Usando o threshold sugerido pelo ChatGPT, pode precisar de ajuste
   };
 
   console.log(`[DEBUG SAM SVC] Chamando Replicate.run com: Model: ${modelIdentifier}, Input: ${JSON.stringify(input)}`);
 
   try {
-    const output = await replicate.run(modelIdentifier as `${string}/${string}:${string}`, { input }) as unknown;
-    console.log("[DEBUG SAM SVC] Output BRUTO do Replicate (Grounded SAM):", JSON.stringify(output));
+    // O output deste modelo pode ser diferente. Precisamos inspecioná-lo.
+    // Exemplo de output esperado (HIPOTÉTICO - PRECISA VERIFICAR O REAL):
+    // { masks: [ { label: "chair", mask_url: "url1" }, { label: "table", mask_url: "url2" } ] }
+    // ou apenas uma URL de uma imagem de máscara combinada, ou um objeto com várias URLs de máscaras.
+    const output = await replicate.run(modelIdentifier as `${string}/${string}:${string}`, { input }) as any; // Usar 'any' por enquanto até sabermos o formato exato
+    
+    console.log("[DEBUG SAM SVC] Output BRUTO do Replicate (cjwbw/semantic-segment-anything):", JSON.stringify(output));
 
-    if (Array.isArray(output) && output.length > 0 && typeof output[0] === 'string') {
-      console.log(`[DEBUG SAM SVC] Máscara(s) recebida(s) de Grounded SAM. Usando a primeira: ${output[0]}`);
-      return output[0]; 
-    } else if (typeof output === 'string') { 
-        console.log(`[DEBUG SAM SVC] Máscara única (string) recebida de Grounded SAM: ${output}`);
-        return output;
+    // LÓGICA PARA EXTRAIR A MÁSCARA CORRETA (PRECISA SER AJUSTADA BASEADO NO OUTPUT REAL)
+    if (output) {
+      // Cenário 1: Se o output for diretamente uma URL de string (máscara única/combinada)
+      if (typeof output === 'string') {
+        console.log(`[DEBUG SAM SVC] Output é uma string (URL de máscara?): ${output}`);
+        // Se for uma máscara combinada, não podemos usá-la diretamente para um objeto específico facilmente.
+        // Por ora, vamos retornar se for uma URL, mas idealmente queremos máscaras por objeto.
+        if (output.startsWith('http')) return output;
+        return null; // Não é uma URL válida
+      }
+
+      // Cenário 2: Se o output for um objeto com uma propriedade contendo a URL da máscara (ex: output.mask_url ou output.image)
+      // Isso é comum para modelos que retornam uma única imagem processada.
+      if (typeof output === 'object' && output !== null) {
+        const possibleMaskKeys = ['mask', 'mask_url', 'image', 'output', 'combined_mask', 'segmentation_map'];
+        for (const key of possibleMaskKeys) {
+          if (typeof output[key] === 'string' && output[key].startsWith('http')) {
+            console.log(`[DEBUG SAM SVC] Encontrada URL de máscara na chave '${key}': ${output[key]}`);
+            // Novamente, se for uma máscara única, não é ideal para objeto específico, mas retornamos por enquanto.
+            return output[key];
+          }
+        }
+
+        // Cenário 3: Se o output for uma estrutura com múltiplas máscaras e etiquetas (IDEAL)
+        // Exemplo: output.segments = [{label: "chair", mask_url: "..."}, {label: "table", mask_url: "..."}]
+        // ou output.masks = [...] ou output.predictions = [...] etc.
+        let segments: {label?: string, class?: string, category?: string, name?: string, mask_url?: string, mask?: string}[] = [];
+        if (Array.isArray(output.segments)) segments = output.segments;
+        else if (Array.isArray(output.masks)) segments = output.masks;
+        else if (Array.isArray(output.predictions)) segments = output.predictions;
+        else if (Array.isArray(output.outputs)) segments = output.outputs;
+        else if (Array.isArray(output)) segments = output; // Se o output for diretamente um array de segmentos
+
+        if (segments.length > 0) {
+            console.log(`[DEBUG SAM SVC] Encontrados ${segments.length} segmentos/máscaras no output.`);
+            const normalizedPromptText = promptText.toLowerCase().trim();
+            for (const seg of segments) {
+                const label = seg.label || seg.class || seg.category || seg.name;
+                const maskUrl = seg.mask_url || seg.mask; // Alguns modelos podem usar 'mask' para a URL
+                if (label && typeof label === 'string' && maskUrl && typeof maskUrl === 'string' && maskUrl.startsWith('http')) {
+                    if (label.toLowerCase().includes(normalizedPromptText)) {
+                        console.log(`[DEBUG SAM SVC] Máscara correspondente encontrada para "${promptText}" com etiqueta "${label}": ${maskUrl}`);
+                        return maskUrl;
+                    }
+                }
+            }
+            console.warn(`[DEBUG SAM SVC] Nenhum segmento com etiqueta correspondente a "${promptText}" encontrado nas máscaras retornadas.`);
+            // Se nenhum match exato, mas temos um promptText e só uma máscara principal, talvez retornar ela?
+            // Ou, se houver apenas uma máscara no array, retorná-la?
+            if (segments.length === 1 && (segments[0].mask_url || segments[0].mask) && typeof (segments[0].mask_url || segments[0].mask) === 'string'){
+                const singleMaskUrl = segments[0].mask_url || segments[0].mask;
+                 if(singleMaskUrl && singleMaskUrl.startsWith('http')){
+                    console.log(`[DEBUG SAM SVC] Retornando a única máscara encontrada, pois não houve match de etiqueta: ${singleMaskUrl}`);
+                    return singleMaskUrl;
+                }
+            }
+        }
+      }
     }
-    console.warn("[DEBUG SAM SVC] Output do Replicate (Grounded SAM) não é um array de strings esperado ou está vazio.", output);
+
+    console.warn("[DEBUG SAM SVC] Output do Replicate (cjwbw/semantic-segment-anything) não continha uma URL de máscara utilizável ou correspondente.", output);
     return null;
   } catch (error: any) {
-    console.error("[DEBUG SAM SVC] Erro ao chamar API do Grounded SAM no Replicate:", error.message);
-    if (error.response) { 
-        console.error("[DEBUG SAM SVC] Replicate Error Status:", error.response.status);
-        let errorDataString = "No error data in response";
-        if (error.response.data) {
-            errorDataString = typeof error.response.data === 'string' ? error.response.data : JSON.stringify(error.response.data);
-        }
-        console.error("[DEBUG SAM SVC] Replicate Error Data:", errorDataString.substring(0, 500));
-    }
+    console.error("[DEBUG SAM SVC] Erro ao chamar API do cjwbw/semantic-segment-anything no Replicate:", error.message);
+    // Não logar error.response completo aqui, pode ser muito grande ou já logado por runReplicateModel
+    if (error.response?.status) console.error("[DEBUG SAM SVC] Replicate Error Status:", error.response.status);
     return null;
   }
 }
