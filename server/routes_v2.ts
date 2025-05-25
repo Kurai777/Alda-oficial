@@ -600,52 +600,68 @@ export async function registerRoutes(router: ExpressRouter, upload: multer.Multe
 
       const artisticFile = files?.artisticFile?.[0];
       const pricingFile = files?.pricingFile?.[0];
+      const uploadMode = req.body.uploadMode as 'complete' | 'separate' | undefined;
 
-      if (!artisticFile) {
-        return res.status(400).json({ message: "Nenhum arquivo artístico enviado (campo 'artisticFile')." });
+      if (!uploadMode) {
+        return res.status(400).json({ message: "Modo de upload (uploadMode) não especificado." });
       }
 
-      const artisticOriginalName = artisticFile.originalname;
-      const artisticLocation = (artisticFile as any).location || artisticFile.path;
-      const artisticS3Key = (artisticFile as any).key;
-      const artisticFileType = artisticOriginalName.split('.').pop()?.toLowerCase() || '';
-      // const artisticFileSize = artisticFile.size; // Not directly used in catalogData for createCatalog
+      let mainFileToProcess: Express.Multer.File | undefined = undefined;
+      let pricingFileToLink: Express.Multer.File | undefined = undefined;
 
-      const catalogDataToCreate = {
-        userId: localUser.id,
+      if (uploadMode === 'complete') {
+        if (!artisticFile) { // No modo completo, artisticFile é o arquivo único
+          return res.status(400).json({ message: "Nenhum arquivo de catálogo completo enviado (campo 'artisticFile')." });
+        }
+        mainFileToProcess = artisticFile;
+        // pricingFile não é usado no modo 'complete' para o processamento inicial
+      } else { // 'separate' mode
+        if (!artisticFile) {
+          return res.status(400).json({ message: "Nenhum arquivo artístico enviado (campo 'artisticFile')." });
+        }
+        mainFileToProcess = artisticFile;
+        pricingFileToLink = pricingFile; // Pode ser undefined se não enviado
+      }
+
+      const artisticOriginalName = mainFileToProcess.originalname;
+      const artisticLocation = (mainFileToProcess as any).location || mainFileToProcess.path;
+      const artisticS3Key = (mainFileToProcess as any).key;
+      const artisticFileType = artisticOriginalName.split('.').pop()?.toLowerCase() || '';
+
+      const catalogDataToCreate: InsertCatalog = {
+        userId: userId,
         artisticFileName: artisticOriginalName,
         artisticFileUrl: artisticLocation,
+        pricingFileName: pricingFileToLink ? pricingFileToLink.originalname : null,
+        pricingFileUrl: pricingFileToLink ? ((pricingFileToLink as any).location || pricingFileToLink.path) : null,
         processedStatus: 'queued' as 'queued',
-        pricingFileName: pricingFile ? pricingFile.originalname : null,
-        pricingFileUrl: pricingFile ? ((pricingFile as any).location || pricingFile.path) : null,
       };
 
       const catalog = await storage.createCatalog(catalogDataToCreate);
 
-      // Para processCatalogInBackground, vamos focar no arquivo artístico por enquanto
-      const processingFilePath = artisticS3Key || artisticFile.path; // Path para o arquivo artístico
-
       const jobData = {
         catalogId: catalog.id, 
-        userId: localUser.id, 
-        s3Key: artisticS3Key,
-        processingFilePath: processingFilePath,
-        fileName: artisticOriginalName,
+        userId: userId, 
+        s3Key: artisticS3Key, // Chave S3 do arquivo artístico/principal
+        processingFilePath: artisticLocation, // Caminho/URL do arquivo artístico/principal
+        fileName: artisticOriginalName, 
         fileType: artisticFileType,
-        isS3Upload: !!artisticS3Key
+        uploadMode: uploadMode, // Passar o modo de upload
+        // Passar a chave do arquivo de preços se existir, para o catalog-processor decidir se chama processPricingFile
+        pricingFileS3Key: pricingFileToLink ? (pricingFileToLink as any).key : null 
       };
-      await processCatalogInBackground(jobData);
+      processCatalogInBackground(jobData as any); // TODO: Ajustar tipo de CatalogJobData
       
-      let message = `Catálogo "${artisticOriginalName}" enviado e na fila para processamento.`;
-      if (pricingFile) {
-        message += ` Arquivo de preços "${pricingFile.originalname}" também recebido.`;
+      let message = `Catálogo "${artisticOriginalName}" (modo: ${uploadMode}) enviado e na fila.`;
+      if (pricingFileToLink) {
+        message += ` Arquivo de preços "${pricingFileToLink.originalname}" também recebido.`;
       }
 
       return res.status(201).json({
         message: message,
         catalogId: catalog.id,
         artisticFileUrl: artisticLocation,
-        pricingFileUrl: pricingFile ? catalogDataToCreate.pricingFileUrl : undefined
+        pricingFileUrl: pricingFileToLink ? catalogDataToCreate.pricingFileUrl : undefined
       });
     } catch (error) {
       console.error("Erro GERAL na rota de upload de catálogos:", error);

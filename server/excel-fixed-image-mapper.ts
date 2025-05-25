@@ -71,14 +71,14 @@ export async function mapImagesToProducts(
         // Verificar se o nome da imagem ou texto alternativo contém o código
         const imgName = path.parse(img.name).name.toLowerCase();
         const altText = img.altText?.toLowerCase() || '';
-        const productCode = product.code.toLowerCase();
+        const productCodeLower = product.code ? product.code.toLowerCase() : '';
         
-        return imgName.includes(productCode) || altText.includes(productCode);
+        return productCodeLower ? (imgName.includes(productCodeLower) || altText.includes(productCodeLower)) : false;
       });
       
       if (codeMatch) {
         bestMatch = { image: codeMatch, confidence: 0.9 }; // Alta confiança para correspondência de código
-        console.log(`Encontrada correspondência por código para produto ${product.id} (${product.code}): ${codeMatch.name}`);
+        console.log(`Encontrada correspondência por código para produto ${product.id} (${product.code || 'N/A'}): ${codeMatch.name}`);
       }
     }
     
@@ -144,8 +144,14 @@ export async function mapImagesToProducts(
           const confidence = Math.min(0.6, 0.3 + (bestTextMatch.matchCount / significantWords.length) * 0.3);
           
           // Usar esta correspondência apenas se não encontramos nada melhor
-          if (!bestMatch || confidence > bestMatch.confidence) {
+          if (bestMatch) {
+            if (confidence > bestMatch.confidence) {
+                bestMatch = { image: bestTextMatch.image, confidence };
+            }
+          } else {
             bestMatch = { image: bestTextMatch.image, confidence };
+          }
+          if (bestMatch && bestMatch.image === bestTextMatch.image) { // Checa se a atribuição ocorreu
             console.log(`Encontrada correspondência por texto para produto ${product.id} (${product.name}): ${bestMatch.image.name}`);
           }
         }
@@ -168,7 +174,7 @@ export async function mapImagesToProducts(
     if (bestMatch) {
       productImageMappings.push({
         productId: product.id,
-        productCode: product.code,
+        productCode: product.code || '',
         imagePath: bestMatch.image.path,
         confidence: bestMatch.confidence
       });
@@ -418,14 +424,14 @@ export async function remapAllCatalogs(userId: number | string): Promise<{ succe
     
     // Processar cada catálogo
     for (const catalog of catalogs) {
-      if (catalog.filePath && fs.existsSync(catalog.filePath)) {
-        console.log(`Processando catálogo ${catalog.id}: ${catalog.fileName}`);
+      if (catalog.artisticFileUrl && fs.existsSync(catalog.artisticFileUrl)) {
+        console.log(`Processando catálogo ${catalog.id}: ${catalog.artisticFileName}`);
         
         // Verificar se é um arquivo Excel
-        if (catalog.filePath.toLowerCase().endsWith('.xlsx') || 
-            catalog.filePath.toLowerCase().endsWith('.xls')) {
+        if (catalog.artisticFileUrl.toLowerCase().endsWith('.xlsx') || 
+            catalog.artisticFileUrl.toLowerCase().endsWith('.xls')) {
             
-          const result = await extractAndMapImages(catalog.filePath, catalog.id, userId);
+          const result = await extractAndMapImages(catalog.artisticFileUrl, catalog.id, userId);
           
           console.log(`Resultado do remapeamento para catálogo ${catalog.id}:`, result);
           
@@ -446,7 +452,7 @@ export async function remapAllCatalogs(userId: number | string): Promise<{ succe
     console.error('Erro ao remapear catálogos:', error);
     return { 
       success: false, 
-      message: `Erro ao remapear catálogos: ${error.message}`, 
+      message: `Erro ao remapear catálogos: ${(error as Error).message}`, 
       updated: 0 
     };
   }
@@ -492,7 +498,7 @@ export async function extractAndMapImages(
     console.error(`Erro ao extrair e mapear imagens do Excel:`, error);
     return {
       success: false,
-      message: `Erro ao processar imagens: ${error}`,
+      message: `Erro ao processar imagens: ${(error as Error).message}`,
       updated: 0
     };
   }

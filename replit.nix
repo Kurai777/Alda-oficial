@@ -3,6 +3,9 @@
   deps = [
     pkgs.nodejs_20
     
+    # Adicionar Ghostscript headless para processamento de PDF
+    pkgs.ghostscript_headless 
+    
     # Dependências completas para Puppeteer/Chromium no Nix (REMOVIDAS)
     # pkgs.chromium  // REMOVIDO
     # pkgs.alsa-lib // REMOVIDO

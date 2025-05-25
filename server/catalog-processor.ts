@@ -8,7 +8,7 @@ import path from 'path';
 import XLSX from 'xlsx'; // Importar XLSX para ler o arquivo
 import { spawn } from 'child_process'; // Importar spawn
 import { Product, InsertProduct } from '@shared/schema'; // Importar tipo Product e InsertProduct
-// import { getClipEmbeddingFromImageUrl } from './clip-service'; // Não vamos mais usar CLIP para embedding de produto aqui
+import { getClipEmbeddingFromImageUrl } from './clip-service'; // ADICIONAR ESTA LINHA
 
 // Adicionar imports para OpenAI e o modelo de embedding
 import OpenAI from "openai";
@@ -16,6 +16,8 @@ import OpenAI from "openai";
 import { processPricingFile, ExtractedPriceItem } from './pricing-file-processor.js'; // Importando a nova função
 // @ts-ignore
 import { fuseCatalogData } from './catalog-fusion-service.js'; // Importando a função de fusão
+import { fromBuffer } from "pdf2pic"; // ADICIONAR ESTA IMPORTAÇÃO
+// import { getDocumentInfo } from 'pdf-lib'; // Para tentar obter o número de páginas -- REMOVER ESTA LINHA
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const EMBEDDING_MODEL = 'text-embedding-3-small'; // Mesmo modelo usado em ai-design-processor
@@ -42,6 +44,8 @@ interface CatalogJobData {
   processingFilePath: string; // Caminho local temporário do arquivo baixado do S3
   fileName: string;
   fileType: string;
+  uploadMode: 'complete' | 'separate';
+  pricingFileS3Key?: string | null;
 }
 
 // Lista de palavras-chave ESSENCIAIS para tipos de móveis (manter em minúsculas e sem acentos)
@@ -141,12 +145,12 @@ function compareFurnitureType(productText: string | null | undefined, imageDescr
 
 interface AIAVisionProductExtraction {
     name?: string;
-    code?: string;
     description?: string;
+    code?: string;
     dimensions?: string;
-    // category?: string; // A IA pode tentar inferir, ou podemos fazer isso depois
-    // materials?: string[];
-    // colors?: string[];
+    category_hint?: string | null; 
+    materials_hint?: string[] | null; 
+    colors_hint?: string[] | null; 
 }
 
 interface AIAVisionExtractionResponse {
@@ -158,446 +162,415 @@ interface AIAVisionExtractionResponse {
  * Processa um catálogo em background (extrai dados, imagens, associa).
  * Atualiza o status do catálogo no banco de dados.
  */
-export async function processCatalogInBackground(data: CatalogJobData): Promise<void> {
-  const { catalogId, userId, s3Key, processingFilePath: s3Url, fileName, fileType } = data;
-  console.log(`[BG Proc ${catalogId}] INICIANDO background job para: ${fileName} (S3 Key: ${s3Key}, URL: ${s3Url}, Tipo: ${fileType})`);
+export async function processCatalogInBackground(jobData: CatalogJobData): Promise<void> {
+  const { catalogId, userId, s3Key, fileName, fileType, uploadMode, pricingFileS3Key } = jobData;
+  console.log(`[BG Proc ${catalogId}] INICIANDO: ${fileName}, Tipo: ${fileType}, ModoUpload: ${uploadMode}, ArqPreçoS3: ${pricingFileS3Key || 'N/A'}`);
 
   let localTempFilePath: string | null = null;
-  let rawExtractedProducts: any[] = []; // Produtos brutos da IA (Excel ou PDF Vision)
-  let savedLocalProducts: Product[] = []; // Produtos efetivamente salvos no DB
-  let uploadedImages: UploadedImageInfo[] = []; // Declarada aqui para escopo correto
-  let extractionInfo = `Iniciando processamento para ${fileType}`;
+  let rawExtractedProducts: any[] = []; // Mantido como any[] para flexibilidade inicial, mas os produtos de PDF serão AIAVisionProductExtraction
+  let savedLocalProducts: Product[] = [];
+  let uploadedImages: UploadedImageInfo[] = [];
+  let extractionInfo = `Upload modo '${uploadMode}'. Artístico/Principal: ${fileType}.`;
   let pricingDataResult: ExtractedPriceItem[] | null = null;
+  const MAX_PDF_PAGES_TO_PROCESS = 5; // Definindo o máximo de páginas a processar para PDFs
 
   try {
-    console.log(`[BG Proc ${catalogId}] Dados recebidos: ${JSON.stringify(data)}`);
-
     const tempDir = path.join(process.cwd(), 'temp');
-    if (!fs.existsSync(tempDir)) {
-      fs.mkdirSync(tempDir, { recursive: true });
-    }
-    localTempFilePath = path.join(tempDir, `${catalogId}-${Date.now()}-${path.basename(fileName)}`); // Usar path.basename
-    console.log(`[BG Proc ${catalogId}] Baixando arquivo S3 (${s3Key}) para ${localTempFilePath}...`);
+    if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+    localTempFilePath = path.join(tempDir, `${catalogId}-${Date.now()}-${path.basename(fileName)}`);
     const fileBufferFromS3 = await downloadFileFromS3(s3Key);
     fs.writeFileSync(localTempFilePath, fileBufferFromS3);
-    console.log(`[BG Proc ${catalogId}] Download do S3 concluído e salvo em ${localTempFilePath}.`);
-
+    console.log(`[BG Proc ${catalogId}] Download do arquivo principal S3 (${s3Key}) concluído: ${localTempFilePath}.`);
     await storage.updateCatalogStatus(catalogId, 'processing');
-    console.log(`[BG Proc ${catalogId}] Status atualizado para 'processing'.`);
 
     const localUserIdNum = typeof userId === 'number' ? userId : parseInt(userId.toString());
 
+    // PARTE 1: Processar o Arquivo Principal (Artístico ou Completo)
     if (fileType === 'xlsx' || fileType === 'xls') {
-      // 3. Ler TODOS os dados do Excel (do arquivo local baixado)
-      console.log(`[BG Proc ${catalogId}] Lendo arquivo Excel local: ${localTempFilePath}`);
-      const workbook = XLSX.read(fileBufferFromS3, { type: 'buffer' });
-      const firstSheetName = workbook.SheetNames[0];
-      const sheet = workbook.Sheets[firstSheetName];
+      console.log(`[BG Proc ${catalogId}] Processando ARQUIVO PRINCIPAL Excel: ${localTempFilePath}`);
+        const workbook = XLSX.read(fileBufferFromS3, { type: 'buffer' });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
       const rawSheetData = XLSX.utils.sheet_to_json(sheet, { header: 'A', defval: null });
-      console.log(`[BG Proc ${catalogId}] Total de ${rawSheetData.length} linhas lidas do Excel.`);
-
-      // 4. Processamento IA em Blocos
-      const CHUNK_SIZE = 25;
-      let allAiExcelProducts: any[] = [];
-
+      
+      let produtos_excel_ia: any[] = []; 
+        const CHUNK_SIZE = 25;
       for (let i = 0; i < rawSheetData.length; i += CHUNK_SIZE) {
-          const chunk = rawSheetData.slice(i, i + CHUNK_SIZE);
-          const currentBlockNum = i / CHUNK_SIZE + 1;
-          console.log(`[BG Proc ${catalogId}] Processando bloco ${currentBlockNum} (Linhas ${i + 1} a ${i + chunk.length})...`);
-          const chunkWithRowNumbers = chunk.map((row: any, index: number) => ({
-              excelRowNumber: i + index + 1,
-              ...(typeof row === 'object' && row !== null ? row : {})
-          }));
-
-          try {
-              const aiResult = await processExcelWithAI(chunkWithRowNumbers);
-              if (aiResult && aiResult.products) {
-                console.log(`[BG Proc ${catalogId}] IA retornou ${aiResult.products.length} produtos para o bloco.`);
-                const cleanedProducts = aiResult.products.map((p: any, idx: number) => ({
-                    ...p,
-                    excelRowNumber: p.excelRowNumber || (i + idx + 1)
-                })).filter((p: any) => p.name && p.excelRowNumber > 0);
-
-                allAiExcelProducts.push(...cleanedProducts);
-                console.log(`Amostra da IA:`, cleanedProducts[0]);
-                console.log(`Total de produtos válidos após limpeza no bloco: ${cleanedProducts.length}`);
-              } else {
-                console.warn(`[BG Proc ${catalogId}] IA não retornou produtos para o bloco ${currentBlockNum}.`);
-              }
-          } catch (aiError) {
-              console.error(`[BG Proc ${catalogId}] Erro no processamento IA do bloco ${currentBlockNum}:`, aiError);
-          }
-          if (i + CHUNK_SIZE < rawSheetData.length) {
-            console.log(`[BG Proc ${catalogId}] Pausando por 1 segundo antes do próximo bloco...`);
-            await new Promise(resolve => setTimeout(resolve, 1000));
-          }
-      }
-      rawExtractedProducts = allAiExcelProducts;
-      extractionInfo = `IA (Excel) processou ${rawSheetData.length} linhas e extraiu ${rawExtractedProducts.length} produtos.`;
-      console.log(`[BG Proc ${catalogId}] ${extractionInfo}`);
-
-      if (rawExtractedProducts.length === 0 && rawSheetData.length > 0) {
-        console.warn("[BG Proc ${catalogId}] Falha da IA (Excel): Nenhum produto extraído.");
-      }
-
-      // --- Salvar Produtos no Banco (PG) ---
-      console.log(`[BG Proc ${catalogId}] Salvando ${rawExtractedProducts.length} produtos no DB...`);
-      for (const pData of rawExtractedProducts) {
+        const chunk = rawSheetData.slice(i, i + CHUNK_SIZE);
+        const chunkComNumLinha = chunk.map((r: any, idx: number) => ({ excelRowNumber: i + idx + 1, ...r }));
         try {
-          let embeddingVector: number[] | null = null;
-          const textForEmbedding = (`${pData.name || ''} ${pData.category || ''} ${pData.description || ''} ` +
-                                    `${pData.manufacturer || ''} ${(pData.colors || []).join(' ')} ` +
-                                    `${(pData.materials || []).join(' ')}`).replace(/\s+/g, ' ').trim();
-          if (textForEmbedding && textForEmbedding.length > 5) {
-              try {
-                  const embeddingResponse = await openai.embeddings.create({
-                      model: EMBEDDING_MODEL,
-                      input: textForEmbedding,
-                      dimensions: 1536 
-                  });
-                  if (embeddingResponse.data && embeddingResponse.data.length > 0) {
-                      embeddingVector = embeddingResponse.data[0].embedding;
-                  }
-              } catch (embeddingError) {
-                  console.error(`[Embedding Gen ${catalogId}] Erro ao gerar embedding para "${pData.name}":`, embeddingError);
-              }
+          const resultadoIA = await processExcelWithAI(chunkComNumLinha);
+          if (resultadoIA?.products) {
+            produtos_excel_ia.push(...resultadoIA.products.filter((p: any) => p.name && p.excelRowNumber > 0));
           }
+        } catch (e) { console.error(`[BG Proc ${catalogId}] Erro IA Excel bloco ${i/CHUNK_SIZE +1}:`, e); }
+        if (i + CHUNK_SIZE < rawSheetData.length && openai) await new Promise(r => setTimeout(r, 1000));
+      }
+      rawExtractedProducts = produtos_excel_ia;
+      extractionInfo += ` | Principal(Excel): ${rawExtractedProducts.length} produtos brutos da IA.`;
 
-          // 1. Crie o objeto base com os campos definidos em InsertProduct, omitindo os problemáticos para o linter
-          const productBase: Omit<InsertProduct, 'embedding' | 'search_tsv'> = {
-            userId: localUserIdNum,
-            catalogId: catalogId,
-            name: pData.name || 'Nome Indisponível',
-            code: pData.code || null,
-            description: pData.description || null,
+        savedLocalProducts = []; 
+      for (const pData of rawExtractedProducts) { 
+          try {
+            let embeddingVector: number[] | null = null;
+          const textForEmb = (`${pData.name || ''} ${pData.category || ''} ${pData.description || ''} ` +
+                            `${pData.manufacturer || ''} ${(pData.colors || []).join(' ')} ` +
+                            `${(pData.materials || []).join(' ')}`).replace(/\s+/g, ' ').trim();
+          if (textForEmb.length > 5 && openai) { 
+              const embResp = await openai.embeddings.create({ model: EMBEDDING_MODEL, input: textForEmb, dimensions: 1536 });
+              if (embResp.data?.length) embeddingVector = embResp.data[0].embedding;
+          }
+          const productToSave: InsertProduct = {
+            userId: localUserIdNum, catalogId: catalogId, name: pData.name || 'Nome Indisponível',
+            code: pData.code || null, description: pData.description || null,
             price: Math.round((typeof pData.price === 'number' ? pData.price : 0) * 100),
-            category: pData.category || null,
-            manufacturer: pData.manufacturer || null,
-            imageUrl: null, 
-            colors: pData.colors || [], 
-            materials: pData.materials || [], 
-            sizes: pData.sizes || [], 
-            location: pData.location || null,
-            stock: pData.stock || null,
-            excelRowNumber: pData.excelRowNumber,
-            isEdited: false,
-            // createdAt e updatedAt são omitidos
+            category: pData.category || null, manufacturer: pData.manufacturer || null, 
+            imageUrl: null, colors: pData.colors || [], materials: pData.materials || [], 
+            sizes: pData.sizes || [], dimensions: pData.dimensions || null, 
+            location: pData.location || null, stock: pData.stock || null,
+            excelRowNumber: pData.excelRowNumber, isEdited: false, 
+            embedding: embeddingVector, clipEmbedding: (pData.clipEmbedding as number[]|undefined) || null,
           };
-
-          // 2. Crie um novo objeto que inclua embedding e search_tsv, e faça a asserção de tipo.
-          const productToSave = {
-              ...productBase,
-              embedding: embeddingVector,      // Pode ser number[] ou null
-              search_tsv: null                 // Definido como null para o trigger do banco lidar
-          } as InsertProduct; // Afirma que o objeto final corresponde a InsertProduct (confiando que Drizzle trata)
-          
-          // Remover chaves explicitamente undefined ANTES de passar para storage.createProduct
-          Object.keys(productToSave).forEach(key => {
-              const K = key as keyof InsertProduct;
-              if ((productToSave as any)[K] === undefined) { // Usar 'as any' para acesso genérico na checagem
-                   delete (productToSave as any)[K];
-              }
-          });
-          
+          Object.keys(productToSave).forEach(k => (productToSave as any)[k] === undefined && delete (productToSave as any)[k]);
           const savedProd = await storage.createProduct(productToSave);
           savedLocalProducts.push(savedProd);
-        } catch (dbError) {
-          console.error(`[BG Proc ${catalogId}] Erro ao salvar produto (linha ${pData.excelRowNumber}) no PG:`, dbError);
-        }
+        } catch (dbError) { console.error(`[BG Proc ${catalogId}] Erro salvar produto Excel (Linha ${pData.excelRowNumber}):`, dbError); }
       }
-      console.log(`[BG Proc ${catalogId}] ${savedLocalProducts.length} produtos salvos no PG com seus embeddings (ou null).`);
-      if (savedLocalProducts.length === 0) {
-           throw new Error("Nenhum produto pôde ser salvo no banco de dados.");
-      }
-
-      // --- Extrair e Fazer Upload de TODAS as Imagens (usar arquivo local) ---
-      console.log(`[BG Proc ${catalogId}] Extraindo TODAS as imagens e suas âncoras via Python (usando ${localTempFilePath})...`);
-      try {
-          const pythonResult = await runPythonImageRowExtractor(localTempFilePath!);
-          const extractedRawImages: ExtractedImageData[] = pythonResult.images || [];
-          console.log(`[BG Proc ${catalogId}] Python extraiu ${extractedRawImages.length} imagens com linha.`);
-
-          if (extractedRawImages.length > 0) {
-              console.log(`---> Fazendo upload de ${extractedRawImages.length} imagens extraídas...`);
-              const uploadPromises = extractedRawImages.map(async (imgData, index) => {
-                  try {
-                      const buffer = Buffer.from(imgData.image_base64, 'base64');
-                      const imageName = `image_row${imgData.anchor_row}_idx${index}`;
-                      const s3Path = `users/${userId}/catalogs/${catalogId}/images/${imageName}.png`;
-                      const imageUrl = await uploadBufferToS3(buffer, s3Path, 'image/png');
-                      return { imageUrl: imageUrl, anchorRow: imgData.anchor_row, sheetName: imgData.sheet_name };
-                  } catch (uploadErr) {
-                      console.error(`Erro no upload da imagem da linha ${imgData.anchor_row} (idx ${index}):`, uploadErr);
-                      return null;
-                  }
-              });
-              const results = await Promise.all(uploadPromises);
-              const resolvedUploadedImages = results.filter(r => r !== null) as UploadedImageInfo[];
-              uploadedImages = resolvedUploadedImages;
-              console.log(`---> ${uploadedImages.length} imagens enviadas com sucesso para S3.`);
-          }
-      } catch (pyError) {
-          console.error(`[BG Proc ${catalogId}] Erro CRÍTICO ao executar/processar script Python de extração de imagem:`, pyError);
-          extractionInfo += " (Falha na extração de imagens Python)";
-      }
-
-      // --- Associação Inteligente com IA Vision + Fallback (v5) ---
-      console.log(`---> Associando ${uploadedImages.length} imagens a ${savedLocalProducts.length} produtos (IA Vision v4 + Fallback Linha Exata Única)...`);
-      let associatedCount = 0;
-      const imageAssociatedFlags = new Map<string, boolean>(); // Para não reutilizar imagens
-      for (const product of savedLocalProducts) {
-          const productRowAny: any = product.excelRowNumber;
-          if (typeof productRowAny !== 'number' || isNaN(productRowAny) || productRowAny <= 0) {
-              console.warn(`[Assoc v5] Produto ID ${product.id} (${product.name}) sem linha válida (${productRowAny}). Pulando.`);
-              continue;
-          }
-          const productRow: number = productRowAny;
-          const productDetailsForVision = {
-              name: product.name,
-              code: product.code,
-              description: product.description,
-              category: product.category,
-              manufacturer: product.manufacturer,
-              colors: product.colors,
-              materials: product.materials
-          };
-          console.log(`\n[Assoc v5] Tentando associar para Prod ID ${product.id} (Linha ${productRow}) - ${product.name}`);
-
-          let associatedImage: UploadedImageInfo | undefined = undefined;
-          let visionConfirmedMatch = false; // Flag para saber se a IA confirmou
-          const candidateImages = uploadedImages.filter(img => img.anchorRow === productRow);
-
-          if (candidateImages && candidateImages.length > 0) {
-              console.log(`[Assoc v5]   Encontradas ${candidateImages.length} imagens candidatas na linha ${productRow}`);
-              const evaluatedCandidates: { image: UploadedImageInfo, result: { match: boolean, reason: string } | null }[] = [];
-
-              // 1. Avaliar TODAS as candidatas da linha com a IA
-              for (const candidateImage of candidateImages) {
-                  if (imageAssociatedFlags.has(candidateImage.imageUrl)) {
-                      console.log(`[Assoc v5]     Pulando imagem já usada: ${candidateImage.imageUrl.substring(candidateImage.imageUrl.lastIndexOf('/') + 1)}`);
-                      continue;
-                  }
-                  console.log(`[Assoc v5]     Aguardando 1s antes de chamar Vision Compare...`);
-                  await new Promise(resolve => setTimeout(resolve, 1000));
-                  const visionResult = await verifyImageMatchWithVision(productDetailsForVision, candidateImage.imageUrl);
-                  evaluatedCandidates.push({ image: candidateImage, result: visionResult });
-              }
-              // 2. Analisar resultados e escolher SOMENTE se houver EXATAMENTE UM match da IA
-              const matches = evaluatedCandidates.filter(c => c.result && c.result.match === true);
-              
-              if (matches.length === 1) {
-                  console.log(`[Assoc v5]   >>> IA VISION CONFIRMOU MATCH ÚNICO na linha ${productRow}! <<<`);
-                  associatedImage = matches[0].image;
-                  visionConfirmedMatch = true; // Marcar que a IA confirmou
-              } else if (matches.length > 1) {
-                  console.warn(`[Assoc v5]   AMBIGUIDADE IA: ${matches.length} imagens retornaram 'match: true'. Nenhuma será associada por IA.`);
-                  matches.forEach((m, idx) => console.log(`   -> Match Ambíguo ${idx+1}: ${m.image.imageUrl.substring(m.image.imageUrl.lastIndexOf('/') + 1)} (Razão: ${m.result?.reason})`));
-              } else { // matches.length === 0
-                  console.log(`[Assoc v5]   Nenhum match confirmado pela IA na linha ${productRow}.`);
-              }
-          } else {
-              console.log(`[Assoc v5]   Nenhuma imagem encontrada ancorada na linha ${productRow}.`);
-          }
-
-          // 3. *** FALLBACK: Se a IA não confirmou, mas existe EXATAMENTE UMA imagem não usada na linha ***
-          if (!associatedImage && candidateImages && candidateImages.length > 0) {
-              const unusedCandidates = candidateImages.filter(img => !imageAssociatedFlags.has(img.imageUrl));
-              if (unusedCandidates.length === 1) {
-                  console.log(`[Assoc v5 Fallback]   IA não confirmou, mas há EXATAMENTE UMA imagem não usada na linha ${productRow}. Usando fallback.`);
-                  associatedImage = unusedCandidates[0];
-                  // visionConfirmedMatch continua false
-              } else if (unusedCandidates.length > 1) {
-                   console.log(`[Assoc v5 Fallback]   IA não confirmou e há ${unusedCandidates.length} imagens não usadas na linha ${productRow}. Impossível usar fallback.`);
-              } // Se unusedCandidates.length === 0, não faz nada
-          }
-
-          // 4. Associar se associatedImage foi definido (pela IA ou pelo Fallback)
-          if (associatedImage) {
-              imageAssociatedFlags.set(associatedImage.imageUrl, true); // Marcar como usada
-              try {
-                  await storage.updateProductImageUrl(product.id, associatedImage.imageUrl);
-                  associatedCount++;
-                  const successLog = visionConfirmedMatch ? '[Assoc v5 SUCESSO (IA)]' : '[Assoc v5 SUCESSO (Fallback)]';
-                  console.log(`${successLog}: Prod ID ${product.id} -> Imagem da linha ${associatedImage.anchorRow}, URL: ${associatedImage.imageUrl.substring(associatedImage.imageUrl.lastIndexOf('/') + 1)}`);
-              } catch (updateError) {
-                  console.error(`[Assoc v5] ERRO DB ao atualizar Imagem do Prod ID ${product.id}:`, updateError);
-              }
-          } else {
-              // Logar falha
-               console.warn(`[Assoc v5 FALHA FINAL]: Nenhuma imagem associada para Prod ID ${product.id} (Linha ${productRow}).`);
-          }
-      }
-      console.log(`---> Associação v5 (IA Vision + Fallback) concluída. ${associatedCount} produtos atualizados com imagens.`);
-    } else if (fileType === 'pdf') {
-      console.log(`[BG Proc ${catalogId}] Iniciando processamento de ARQUIVO ARTÍSTICO PDF com IA Vision...`);
-      extractionInfo = "Processamento de PDF artístico com IA Vision iniciado.";
-      if (!openai) {
-        console.error(`[BG Proc ${catalogId}] OpenAI client não está disponível para processar PDF artístico.`);
-        extractionInfo += " | OpenAI client indisponível.";
-      } else {
+      console.log(`[BG Proc ${catalogId}] ${savedLocalProducts.length} produtos do Excel Principal salvos.`);
+      
+      if (localTempFilePath) {
+        console.log(`[BG Proc ${catalogId}] Extraindo imagens do Excel: ${localTempFilePath}...`);
         try {
-          // Preparar a imagem para a API Vision. 
-          // A API GPT-4o aceita URLs de imagem ou dados base64.
-          // Para PDFs, a API pode lidar com eles diretamente ou converter para imagens.
-          // Vamos tentar enviar o buffer do PDF como base64, encapsulado como uma "imagem".
-          // Nota: A API Vision pode ter limites no tamanho do PDF/imagem.
-          // Para PDFs grandes, processar página por página ou usar URLs diretas (se seguro) pode ser melhor.
-          
-          const pdfBase64 = fileBufferFromS3.toString('base64');
-          const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
-            {
-              role: "system",
-              content: `Você é um assistente especialista em analisar catálogos de móveis em formato PDF. Sua tarefa é identificar produtos distintos nas páginas do PDF fornecido.\nPara CADA produto distinto que você identificar visualmente:\n1. Extraia o NOME principal do produto (geralmente próximo à imagem ou em destaque).\n2. Extraia o CÓDIGO/MODELO do produto, se visível e claramente associado ao produto.\n3. Extraia uma breve DESCRIÇÃO textual do produto, incluindo estilo, materiais principais ou características visuais notáveis, se disponíveis no texto próximo ao produto.\n4. Extraia as DIMENSÕES do produto (ex: C x L x A, Largura, Altura), se especificadas.\n\nIgnore seções que são apenas texto geral, informações da empresa, índices, ou que não apresentam produtos claramente.\nConcentre-se em extrair informações de produtos individuais. Se um produto tiver múltiplas variações de tamanho ou cor listadas juntas, trate-as como parte da descrição do produto principal identificado visualmente.\n\nResponda OBRIGATORIAMENTE em formato JSON. A estrutura principal do JSON deve ser:\n{\n  "products": [\n    {\n      "name": "string (nome do produto)\",\n      "code": "string (código/modelo, opcional)\",\n      "description": "string (descrição textual, opcional)\",\n      "dimensions": "string (dimensões textuais, opcional)\"\n    }\n  ],\n  "error": "string (opcional, preencha se não conseguir processar ou encontrar dados significativos)\"\n}\nSe nenhum produto for encontrado, retorne uma lista "products" vazia.`
-            },
-            {
-              role: "user",
-              content: [
-                {
-                  type: "text",
-                  text: "Analise o seguinte catálogo em PDF e extraia os detalhes dos produtos conforme instruído."
-                },
-                {
-                  type: "image_url",
-                  image_url: {
-                    url: `data:application/pdf;base64,${pdfBase64}`,
-                  },
-                },
-              ],
-            },
-          ];
-
-          console.log(`[BG Proc ${catalogId}] Enviando PDF para análise da IA Vision (GPT-4o)...`);
-          const aiVisionResponse = await openai.chat.completions.create({
-            model: "gpt-4o", 
-            messages: messages,
-            max_tokens: 4000, // Ajustar conforme necessário
-            response_format: { type: "json_object" },
-            temperature: 0.3,
-          });
-
-          const responseContent = aiVisionResponse.choices[0]?.message?.content;
-          if (!responseContent) {
-            throw new Error("Resposta da IA Vision vazia.");
-          }
-          console.log(`[BG Proc ${catalogId}] Resposta da IA Vision recebida (primeiros 500 chars): ${responseContent.substring(0,500)}`);
-          const parsedResponse = JSON.parse(responseContent) as AIAVisionExtractionResponse;
-
-          if (parsedResponse.error) {
-            throw new Error(`IA Vision reportou erro: ${parsedResponse.error}`);
-          }
-
-          if (parsedResponse.products && parsedResponse.products.length > 0) {
-            extractionInfo += ` | IA Vision extraiu ${parsedResponse.products.length} produtos do PDF.`;
-            rawExtractedProducts = parsedResponse.products; // Usar rawExtractedProducts aqui também
-            for (const pData of rawExtractedProducts) {
-              if (!pData.name) {
-                console.warn(`[BG Proc ${catalogId}] Produto do PDF artístico sem nome, pulando.`);
-                continue;
-              }
-              try {
-                let embeddingVector: number[] | null = null;
-                const textForEmbedding = (`${pData.name || ''} ${pData.description || ''}`).replace(/\s+/g, ' ').trim();
-                if (textForEmbedding && textForEmbedding.length > 5) {
-                    const embeddingResponse = await openai.embeddings.create({
-                        model: EMBEDDING_MODEL, input: textForEmbedding, dimensions: 1536 
-                    });
-                    if (embeddingResponse.data && embeddingResponse.data.length > 0) {
-                        embeddingVector = embeddingResponse.data[0].embedding;
-                    }
-                }
-                const productToSave = {
-                  userId: localUserIdNum, catalogId: catalogId, name: pData.name,
-                  code: pData.code || null, description: pData.description || null, price: 0, 
-                  category: null, dimensions: pData.dimensions || null, imageUrl: null, 
-                  colors: [], materials: [], sizes: [],
-                  embedding: embeddingVector as any, // TENTATIVA: Coerção para 'any' para diagnóstico do linter
-                  clipEmbedding: null, 
-                  search_tsv: null, isEdited: false,
-                  excelRowNumber: null, // PDFs não têm linha de excel
-                  manufacturer: null,   // IA Vision de PDF pode não pegar isso inicialmente
-                  location: null,       // IA Vision de PDF pode não pegar isso inicialmente
-                  stock: null,          // IA Vision de PDF pode não pegar isso inicialmente
-                } as InsertProduct; 
-                Object.keys(productToSave).forEach(k => (productToSave as any)[k] === undefined && delete (productToSave as any)[k]);
-                const savedProd = await storage.createProduct(productToSave as InsertProduct);
-                savedLocalProducts.push(savedProd);
-              } catch (dbError) {
-                console.error(`[BG Proc ${catalogId}] Erro ao salvar produto do PDF artístico (Nome: ${pData.name}) no DB:`, dbError);
-              }
-            }
-            console.log(`[BG Proc ${catalogId}] ${savedLocalProducts.length} produtos do PDF artístico salvos no DB.`);
+          const pyResult = await runPythonImageRowExtractor(localTempFilePath);
+          if (pyResult.images?.length) {
+            const uploadPromises = pyResult.images.map(async (imgData: ExtractedImageData, index: number) => {
+              const buffer = Buffer.from(imgData.image_base64, 'base64');
+              const imageName = `image_row${imgData.anchor_row}_idx${index}.png`;
+              const s3ImgPath = `users/${localUserIdNum}/catalogs/${catalogId}/images/${imageName}`;
+              const imgUrl = await uploadBufferToS3(buffer, s3ImgPath, 'image/png');
+              return { imageUrl: imgUrl, anchorRow: imgData.anchor_row, sheetName: imgData.sheet_name };
+            });
+            const resolvedUploadedImages = (await Promise.all(uploadPromises)).filter(r => r !== null);
+            uploadedImages = resolvedUploadedImages as UploadedImageInfo[];
+            console.log(`[BG Proc ${catalogId}] Python extraiu e S3 upload concluiu para ${uploadedImages.length} imagens.`);
           } else {
-            extractionInfo += " | IA Vision não encontrou produtos no PDF.";
+            console.log(`[BG Proc ${catalogId}] Python não retornou imagens ou pyResult.images estava vazio.`);
           }
-        } catch (visionError) {
-          console.error(`[BG Proc ${catalogId}] Erro durante processamento do PDF artístico com IA Vision:`, visionError);
-          extractionInfo += ` | Erro na IA Vision: ${visionError instanceof Error ? visionError.message : String(visionError)}.`;
+        } catch (pyErr) { 
+            console.error(`[BG Proc ${catalogId}] Erro script Python imagem Excel:`, pyErr); 
+            extractionInfo += " (Falha na extração de imagens Python)";
         }
       }
-    } else {
-      console.warn(`[BG Proc ${catalogId}] Processamento de ARQUIVO ARTÍSTICO do tipo '${fileType}' (extração de produtos/imagens) ainda não implementado. Pulando esta etapa.`);
-      extractionInfo = `Processamento de arquivo artístico '${fileType}' pendente.`;
+
+      // LÓGICA DE ASSOCIAÇÃO DE IMAGENS E EMBEDDING (BASEADA NO CÓDIGO ANTIGO FORNECIDO)
+      if (savedLocalProducts.length > 0 && uploadedImages.length > 0 && openai) {
+        console.log(`[BG Proc ${catalogId}] Iniciando Associação v5 (IA Vision + Fallback) e Embedding para ${uploadedImages.length} imagens e ${savedLocalProducts.length} produtos.`);
+        let associatedCount = 0;
+        const imageAssociatedFlags = new Map<string, boolean>(); // Para não reutilizar imagens
+
+        for (const product of savedLocalProducts) {
+            const productRowAny: any = product.excelRowNumber;
+            if (typeof productRowAny !== 'number' || isNaN(productRowAny) || productRowAny <= 0) {
+                console.warn(`[Assoc v5] Produto ID ${product.id} (${product.name}) sem linha Excel (excelRowNumber) válida (${productRowAny}). Pulando associação de imagem.`);
+                continue;
+            }
+            const productRow: number = productRowAny;
+            const productDetailsForVision = {
+                name: product.name,
+                code: product.code,
+                description: product.description,
+                category: product.category,
+                manufacturer: product.manufacturer,
+                colors: product.colors as string[] | undefined, // Cast para o tipo esperado
+                materials: product.materials as string[] | undefined // Cast para o tipo esperado
+            };
+            // console.log(`\n[Assoc v5] Tentando associar para Prod ID ${product.id} (Linha ${productRow}) - ${product.name}`);
+
+            let associatedImageInfo: UploadedImageInfo | undefined = undefined;
+            let visionConfirmedMatch = false;
+            const candidateImages = uploadedImages.filter(img => img.anchorRow === productRow);
+
+            if (candidateImages.length > 0) {
+                // console.log(`[Assoc v5]   Encontradas ${candidateImages.length} imagens candidatas na linha ${productRow}`);
+                const evaluatedCandidates: { image: UploadedImageInfo, result: { match: boolean, reason: string } | null }[] = [];
+
+                for (const candidateImage of candidateImages) {
+                    if (imageAssociatedFlags.has(candidateImage.imageUrl)) {
+                        // console.log(`[Assoc v5]     Pulando imagem já usada: ${candidateImage.imageUrl.substring(candidateImage.imageUrl.lastIndexOf('/') + 1)}`);
+                        continue;
+                    }
+                    // console.log(`[Assoc v5]     Aguardando 1s antes de chamar Vision Compare para ${candidateImage.imageUrl}...`);
+                    await new Promise(resolve => setTimeout(resolve, 1000)); // Delay antes de cada chamada à Vision API
+                    const visionResult = await verifyImageMatchWithVision(productDetailsForVision, candidateImage.imageUrl);
+                    evaluatedCandidates.push({ image: candidateImage, result: visionResult });
+                }
+                
+                const matches = evaluatedCandidates.filter(c => c.result && c.result.match === true);
+
+                if (matches.length === 1) {
+                    console.log(`[Assoc v5]   >>> IA VISION CONFIRMOU MATCH ÚNICO na linha ${productRow} para produto ${product.id}! <<<`);
+                    associatedImageInfo = matches[0].image;
+                    visionConfirmedMatch = true;
+                } else if (matches.length > 1) {
+                    console.warn(`[Assoc v5]   AMBIGUIDADE IA na linha ${productRow} para produto ${product.id}: ${matches.length} imagens retornaram 'match: true'. Nenhuma será associada por IA nesta etapa.`);
+                    // matches.forEach((m, idx) => console.log(`   -> Match Ambíguo ${idx+1}: ${m.image.imageUrl.substring(m.image.imageUrl.lastIndexOf('/') + 1)} (Razão: ${m.result?.reason})`));
+                } else {
+                    // console.log(`[Assoc v5]   Nenhum match confirmado pela IA na linha ${productRow} para produto ${product.id}.`);
+                }
+            }
+            // else {
+            //     console.log(`[Assoc v5]   Nenhuma imagem encontrada ancorada na linha ${productRow} para produto ${product.id}.`);
+            // }
+
+            if (!associatedImageInfo && candidateImages.length > 0) {
+                const unusedCandidatesOnRow = candidateImages.filter(img => !imageAssociatedFlags.has(img.imageUrl));
+                if (unusedCandidatesOnRow.length === 1) {
+                    console.log(`[Assoc v5 Fallback] IA não confirmou, mas há EXATAMENTE UMA imagem não usada na linha ${productRow} para produto ${product.id}. Usando fallback.`);
+                    associatedImageInfo = unusedCandidatesOnRow[0];
+                } 
+                // else if (unusedCandidatesOnRow.length > 1) {
+                //      console.log(`[Assoc v5 Fallback] IA não confirmou e há ${unusedCandidatesOnRow.length} imagens não usadas na linha ${productRow}. Impossível usar fallback.`);
+                // }
+            }
+
+            if (associatedImageInfo) {
+                imageAssociatedFlags.set(associatedImageInfo.imageUrl, true);
+                try {
+                    await storage.updateProductImageUrl(product.id, associatedImageInfo.imageUrl);
+                    associatedCount++;
+                    const successLog = visionConfirmedMatch ? '[Assoc v5 SUCESSO (IA)]' : '[Assoc v5 SUCESSO (Fallback)]';
+                    console.log(`${successLog}: Prod ID ${product.id} (${product.name}) -> Imagem da linha ${associatedImageInfo.anchorRow}, URL: ${associatedImageInfo.imageUrl}`);
+
+                    // Gerar e salvar CLIP embedding para a imagem associada
+                    console.log(`[Embedding CLIP] Tentando gerar embedding para Prod ID ${product.id} usando imagem: ${associatedImageInfo.imageUrl}`);
+                    try {
+                      const clipEmbeddingVector = await getClipEmbeddingFromImageUrl(associatedImageInfo.imageUrl);
+                      if (clipEmbeddingVector && clipEmbeddingVector.length > 0) {
+                        await storage.updateProduct(product.id, { clipEmbedding: clipEmbeddingVector as any });
+                        console.log(`[Embedding CLIP] Embedding gerado e salvo para Prod ID ${product.id}.`);
+                      } else {
+                        console.warn(`[Embedding CLIP] Falha ao gerar embedding (vetor nulo ou vazio) para Prod ID ${product.id}`);
+                      }
+                    } catch (embeddingError) {
+                      console.error(`[Embedding CLIP] ERRO ao gerar/salvar embedding para Prod ID ${product.id}:`, embeddingError);
+                    }
+
+                } catch (updateError) {
+                    console.error(`[Assoc v5] ERRO DB ao atualizar Prod ID ${product.id} com imagem ${associatedImageInfo.imageUrl}:`, updateError);
+                }
+            } 
+            // else {
+            //    console.warn(`[Assoc v5 FALHA FINAL]: Nenhuma imagem associada para Prod ID ${product.id} (Linha ${productRow}).`);
+            // }
+        }
+        extractionInfo += ` | Associação Imagens Excel v5: ${associatedCount} produtos atualizados.`;
+        console.log(`[BG Proc ${catalogId}] Associação v5 (IA Vision + Fallback) e Embedding concluída. ${associatedCount} produtos atualizados com imagens.`);
+
+      } else if (savedLocalProducts.length > 0 && uploadedImages.length === 0 && fileType.startsWith('xls')) {
+        extractionInfo += ` | Nenhuma imagem extraída do Excel para associar.`;
+        console.log(`[BG Proc ${catalogId}] Nenhuma imagem foi extraída do Excel (uploadedImages vazio), embora ${savedLocalProducts.length} produtos tenham sido salvos.`);
+      }
+
+    } else if (fileType === 'pdf') {
+      extractionInfo += " | Principal(PDF): IA Vision iniciada (multi-página).";
+      if (!openai) { 
+          console.error(`[BG Proc ${catalogId}] OpenAI client indisponível para PDF.`); 
+          extractionInfo += " OpenAI off."; 
+      } else {
+        const allPdfProducts: AIAVisionProductExtraction[] = [];
+        const pdfOptions = { density: 150, savePath: tempDir, saveFilename: `pg_${catalogId}_${Date.now()}`, format: "png", width: 1024, height: 1024 };
+        const convert = fromBuffer(fileBufferFromS3, pdfOptions);
+        
+        let actualPagesToProcess = MAX_PDF_PAGES_TO_PROCESS;
+        for (let pageNum = 1; pageNum <= actualPagesToProcess; pageNum++) {
+          try {
+            console.log(`[BG Proc ${catalogId}] Convertendo PDF página ${pageNum}...`);
+            const pageImageResult = await convert(pageNum, { responseType: "base64" });
+            
+            // NOVO LOG AQUI:
+            console.log(`[BG Proc ${catalogId}] Resultado da conversão para página ${pageNum}:`, JSON.stringify(pageImageResult, null, 2));
+
+            if (!pageImageResult || !pageImageResult.base64) { // Modificado para pageImageResult
+              console.warn(`[BG Proc ${catalogId}] Falha ao converter PDF página ${pageNum} para imagem (resultado inválido ou sem base64) ou página não existe. Interrompendo processamento de páginas.`);
+              break; // Interrompe o loop se uma página não puder ser convertida
+            }
+            const pageImage = pageImageResult; // Continuar usando pageImage depois da checagem
+            
+            let systemPromptForPdfPage = `Você é um especialista em analisar páginas de catálogos de móveis artísticos.
+Analise a imagem da página fornecida e identifique CADA MÓVEL principal individualmente.
+
+Para CADA MÓVEL identificado, forneça os seguintes detalhes em um objeto JSON:
+- "name": O nome do produto como exibido ou o mais descritivo possível (ex: "Poltrona Concha", "Mesa Lateral Cubo").
+- "description": Uma breve descrição do estilo ou característica marcante (ex: "Estofado em veludo azul, pés palito", "Tampo de mármore, base metálica dourada").
+- "code": Se um código de produto estiver claramente associado e visível PRÓXIMO ao móvel, extraia-o. Caso contrário, deixe como null.
+- "dimensions": Se as dimensões (Altura, Largura, Profundidade) estiverem claramente associadas e visíveis PRÓXIMO ao móvel (ex: "A: 80cm L: 120cm P: 60cm" ou "120x60x80"), extraia a string original. Caso contrário, deixe como null.
+- "category_hint": Se puder inferir a categoria principal do móvel (ex: "Sofá", "Poltrona", "Mesa de Jantar", "Luminária"), forneça como string. Caso contrário, null.
+- "materials_hint": Se materiais forem mencionados ou claramente visíveis (ex: "Madeira Carvalho", "Aço Inox", "Veludo"), liste-os em um array de strings. Caso contrário, null.
+- "colors_hint": Se cores forem proeminentes ou mencionadas (ex: "Azul Marinho", "Branco Gelo"), liste-as em um array de strings. Caso contrário, null.
+
+RESPONDA APENAS com um objeto JSON contendo uma chave "products". O valor de "products" deve ser um ARRAY de objetos, onde cada objeto representa um móvel identificado na página.
+Se NENHUM móvel for identificável na página, retorne { "products": [] }.
+
+Exemplo de resposta para uma página com dois móveis:
+{
+  "products": [
+    {
+      "name": "Sofá Sereno 3 Lugares",
+      "description": "Linho cinza claro, design minimalista.",
+      "code": "SF-SER-3L-CZ",
+      "dimensions": "220x90x85cm",
+      "category_hint": "Sofá",
+      "materials_hint": ["Linho", "Madeira"],
+      "colors_hint": ["Cinza Claro"]
+    },
+    {
+      "name": "Mesa de Centro Fluss",
+      "description": "Madeira natural com detalhes em resina.",
+      "code": null,
+      "dimensions": "D: 90cm A: 40cm",
+      "category_hint": "Mesa de Centro",
+      "materials_hint": ["Madeira", "Resina"],
+      "colors_hint": ["Natural", "Transparente"]
+    }
+  ]
+}`;
+            // Nota: Se uploadMode === 'complete', o prompt precisaria pedir preços também.
+            // Isso não está implementado nesta iteração para manter o foco no PDF artístico.
+
+            const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
+              { role: "system", content: systemPromptForPdfPage }, 
+              { role: "user", content: [ { type: "text", text: `Analise a imagem da página ${pageNum} do catálogo PDF.` }, { type: "image_url", image_url: { url: `data:image/png;base64,${pageImage.base64}` } } ] }
+            ];
+            console.log(`[BG Proc ${catalogId}] Enviando página ${pageNum} para IA Vision...`);
+            const aiVisionResponse = await openai.chat.completions.create({ model: "gpt-4o", messages, max_tokens: 4000, response_format: { type: "json_object" }, temperature: 0.2 });
+            const respContent = aiVisionResponse.choices[0]?.message?.content;
+
+            if (!respContent) {
+                console.warn(`[BG Proc ${catalogId}] Resposta IA Vision (PDF página ${pageNum}) vazia.`);
+                continue; 
+            }
+            const parsedResp = JSON.parse(respContent) as AIAVisionExtractionResponse;
+            if (parsedResp.error) {
+                console.warn(`[BG Proc ${catalogId}] IA Vision (PDF página ${pageNum}) erro: ${parsedResp.error}`);
+                continue;
+            }
+            if (parsedResp.products?.length) {
+              console.log(`[BG Proc ${catalogId}] IA Vision PDF página ${pageNum}: ${parsedResp.products.length} produtos extraídos.`);
+              allPdfProducts.push(...parsedResp.products);
+            } else {
+              console.log(`[BG Proc ${catalogId}] IA Vision PDF página ${pageNum}: Nenhum produto extraído.`);
+            }
+            // Delay para não sobrecarregar a API
+            if (pageNum < actualPagesToProcess) await new Promise(resolve => setTimeout(resolve, 1500));
+
+          } catch (pageProcessingError: any) { // Modificado para :any para melhor log
+            console.error(`[BG Proc ${catalogId}] ERRO DETALHADO ao processar/converter PDF página ${pageNum}:`, pageProcessingError);
+            // Logar a mensagem e o stack se disponível
+            if (pageProcessingError instanceof Error) {
+                console.error(`[BG Proc ${catalogId}] Mensagem do Erro: ${pageProcessingError.message}`);
+                if (pageProcessingError.stack) {
+                    console.error(`[BG Proc ${catalogId}] Stack do Erro: ${pageProcessingError.stack}`);
+                }
+            }
+            
+            const errorMsgStr = pageProcessingError instanceof Error ? pageProcessingError.message : String(pageProcessingError);
+            if (errorMsgStr.includes("page number out of range") || 
+                errorMsgStr.includes("Invalid page range") || 
+                errorMsgStr.includes("PageCount") || 
+                errorMsgStr.toLowerCase().includes("cannot open file")) { // Adicionada checagem genérica de erro de arquivo
+                 console.log(`[BG Proc ${catalogId}] Erro indica página fora do intervalo ou falha ao abrir/processar o arquivo PDF para a página ${pageNum}. Interrompendo processamento de páginas do PDF.`);
+                 break;
+            }
+            console.warn(`[BG Proc ${catalogId}] Continuando para a próxima página (se houver) após erro no processamento/conversão da página ${pageNum}.`);
+        }
+        } // Fim do loop de páginas
+
+        rawExtractedProducts = allPdfProducts;
+        extractionInfo += ` | IA Vision PDF (multi-página): ${rawExtractedProducts.length} produtos brutos no total.`;
+        
+        savedLocalProducts = [];
+        for (const pData of rawExtractedProducts as AIAVisionProductExtraction[]) { // Cast aqui
+          if (!pData.name) { console.warn(`[BG Proc ${catalogId}] PDF produto sem nome.`); continue; }
+          try {
+            let embeddingVector: number[] | null = null;
+            const textForEmb = (`${pData.name || ''} ${pData.description || ''} ${pData.category_hint || ''} ` + 
+                                `${(pData.materials_hint || []).join(' ')} ${(pData.colors_hint || []).join(' ')}`).replace(/\s+/g, ' ').trim();
+
+            if (textForEmb.length > 5 && openai) { 
+                const embResp = await openai.embeddings.create({ model: EMBEDDING_MODEL, input: textForEmb, dimensions: 1536 });
+                if (embResp.data?.length) embeddingVector = embResp.data[0].embedding;
+            }
+            const productToSave: InsertProduct = {
+              userId: localUserIdNum, catalogId: catalogId, name: pData.name,
+              code: pData.code || null, description: pData.description || null, 
+              price: (uploadMode === 'complete' && typeof (pData as any).price === 'number') ? Math.round((pData as any).price * 100) : 0, // Preço do PDF completo ainda não implementado no prompt
+              category: pData.category_hint || null, 
+              dimensions: pData.dimensions || null, 
+              imageUrl: null, // Será preenchido depois se as imagens forem extraídas do PDF e associadas
+              colors: pData.colors_hint || [], 
+              materials: pData.materials_hint || [], 
+              sizes: [], // O campo 'dimensions' é uma string, 'sizes' é um array estruturado. Mapear se necessário.
+              embedding: embeddingVector as any, clipEmbedding: null, isEdited: false,
+              excelRowNumber: null, manufacturer: null, location: null, stock: null,
+            };
+            Object.keys(productToSave).forEach(k => (productToSave as any)[k] === undefined && delete (productToSave as any)[k]);
+            const savedProd = await storage.createProduct(productToSave as InsertProduct);
+            savedLocalProducts.push(savedProd);
+          } catch (dbErr) { console.error(`[BG Proc ${catalogId}] Erro salvar produto PDF (Nome: ${pData.name}):`, dbErr); }
+        }
+        console.log(`[BG Proc ${catalogId}] ${savedLocalProducts.length} produtos PDF (multi-página) salvos.`);
+      }
+    } else { // Fim do if (fileType === 'pdf')
+      console.warn(`[BG Proc ${catalogId}] Tipo de arquivo principal \\\'${fileType}\\\' não suportado para extração.`);
+      extractionInfo += ` | Tipo de arquivo principal ${fileType} não processado.`;
     }
 
-    // Processamento do arquivo de preços (ocorre independentemente do tipo do arquivo artístico)
-    console.log(`[BG Proc ${catalogId}] Tentando processar arquivo de preços associado...`);
-    try {
+    // PARTE 2: Processar Arquivo de Preços Separado
+    if (uploadMode === 'separate' && pricingFileS3Key) {
+      console.log(`[BG Proc ${catalogId}] MODO SEPARADO: Processando arquivo de preços (S3Key: ${pricingFileS3Key})`);
       pricingDataResult = await processPricingFile(catalogId);
-      if (pricingDataResult && pricingDataResult.length > 0) {
-        console.log(`[BG Proc ${catalogId}] Processamento do arquivo de preços CONCLUÍDO. Encontrados ${pricingDataResult.length} itens de preço.`);
-        extractionInfo += ` | Preços extraídos: ${pricingDataResult.length} itens.`;
-      } else if (pricingDataResult === null) {
-        console.log(`[BG Proc ${catalogId}] Processamento do arquivo de preços FALHOU ou arquivo não aplicável.`);
-        extractionInfo += ` | Falha/Não aplicável processamento de preços.`;
-      } else { 
-        console.log(`[BG Proc ${catalogId}] Arquivo de preços processado, mas NENHUM item de preço foi extraído.`);
-        extractionInfo += ` | Nenhum item de preço extraído.`;
-      }
-    } catch (priceProcessingError) {
-      console.error(`[BG Proc ${catalogId}] ERRO CRÍTICO ao chamar processPricingFile:`, priceProcessingError);
-      extractionInfo += ` | Erro crítico no processamento de preços.`;
+      if (pricingDataResult?.length) extractionInfo += ` | Arq.Preços: ${pricingDataResult.length} itens.`;
+      else extractionInfo += ` | Arq.Preços: Nenhum item ou falha.`;
+    } else if (uploadMode === 'separate' && !pricingFileS3Key) {
+      extractionInfo += ` | Nenhum arq. preços separado fornecido.`;
     }
 
-    // Fusão de dados (ocorre independentemente do tipo do arquivo artístico)
-    // Se savedLocalProducts estiver vazio (ex: PDF artístico ainda não processado), a fusão não terá produtos artísticos para atualizar,
-    // mas a função fuseCatalogData é chamada para registrar que tentou (e os matchDetails refletirão isso).
-    console.log(`[BG Proc ${catalogId}] Iniciando fusão de dados com ${savedLocalProducts.length} produtos artísticos e ${pricingDataResult?.length || 0} itens de preço.`);
-    try {
+    // PARTE 3: Fusão de Dados
+    if (savedLocalProducts.length > 0 || (pricingDataResult?.length || 0) > 0) {
+      console.log(`[BG Proc ${catalogId}] Iniciando fusão: ${savedLocalProducts.length} prod. base, ${pricingDataResult?.length || 0} itens de preço.`);
       const fusionResult = await fuseCatalogData(catalogId, savedLocalProducts, pricingDataResult);
-      console.log(`[BG Proc ${catalogId}] Resultado da Fusão: ${fusionResult.productsUpdatedWithPrice} produtos atualizados com preço.`);
-      extractionInfo += ` | Fusão: ${fusionResult.productsUpdatedWithPrice} produtos com preço atualizado.`;
-      if (savedLocalProducts.length === 0 && (pricingDataResult?.length || 0) > 0) {
-        extractionInfo += ` (Nota: Havia itens de preço mas nenhum produto do arquivo artístico para mesclar).`;
-      }
-    } catch (fusionError) {
-      console.error(`[BG Proc ${catalogId}] ERRO CRÍTICO durante a fusão de dados:`, fusionError);
-      extractionInfo += ` | Erro crítico na fusão de dados.`;
+      extractionInfo += ` | Fusão: ${fusionResult.productsUpdatedWithPrice} prods. com preço atualizado.`;
+    } else {
+      extractionInfo += ` | Nada para fusão.`;
     }
 
-    // Se chegou aqui, consideramos o processamento geral do catálogo como concluído,
-    // mesmo que partes específicas (como extração de PDF artístico) estejam pendentes.
-    // O status 'failed' seria para erros inesperados que impedem o fluxo.
+    // PARTE 4: Tentativa de extrair e associar imagens se o arquivo principal foi um PDF
+    // Esta parte é um placeholder e precisaria de uma lógica robusta de extração de imagem de PDF
+    if (fileType === 'pdf' && savedLocalProducts.length > 0) {
+        console.log(`[BG Proc ${catalogId}] TODO: Implementar extração de imagens de PDF e associação aos ${savedLocalProducts.length} produtos salvos.`);
+        // Exemplo de lógica futura:
+        // 1. Usar uma biblioteca (como pdf-image-extractor ou similar) para extrair todas as imagens do PDF para arquivos temporários.
+        // 2. Para cada imagem extraída:
+        //    a. Fazer upload para S3, obtendo uma URL.
+        //    b. Tentar associar essa imagem a um dos savedLocalProducts (ex: por proximidade na página, por descrição da IA, etc.).
+        //    c. Se associado, atualizar o imageUrl do produto no banco.
+        extractionInfo += ` | Extração/associação de imagens de PDF pendente.`;
+    }
+
+
     await storage.updateCatalogStatus(catalogId, 'completed');
-    console.log(`[BG Proc ${catalogId}] Processamento concluído. Status: completed. Info: ${extractionInfo}`);
+    console.log(`[BG Proc ${catalogId}] Processamento COMPLETO. Status: completed. Info: ${extractionInfo}`);
 
   } catch (error) {
-    console.error(`[BG Proc ${catalogId}] ERRO GERAL no processamento background:`, error);
+      console.error(`[BG Proc ${catalogId}] ERRO GERAL:`, error);
     try {
-        const errorMessage = error instanceof Error ? error.message : String(error);
+          const errMsg = error instanceof Error ? error.message : String(error);
         await storage.updateCatalogStatus(catalogId, 'failed');
-        console.log(`[BG Proc ${catalogId}] Status atualizado para 'failed'. Erro: ${errorMessage}`);
-    } catch (statusUpdateError) {
-        console.error(`[BG Proc ${catalogId}] FALHA CRÍTICA ao atualizar status para failed:`, statusUpdateError);
-    }
+          console.log(`[BG Proc ${catalogId}] Status: 'failed'. Erro: ${errMsg}`);
+      } catch (statusErr) { console.error(`[BG Proc ${catalogId}] FALHA CRÍTICA ao salvar status 'failed':`, statusErr); }
   } finally {
-    // Limpar arquivo temporário baixado do S3 (se existir)
     if (localTempFilePath && fs.existsSync(localTempFilePath)) {
-      try {
-        fs.unlinkSync(localTempFilePath);
-        console.log(`[BG Proc ${catalogId}] Arquivo temporário ${localTempFilePath} removido.`);
-      } catch (unlinkError) {
-        console.error(`[BG Proc ${catalogId}] Erro ao remover arquivo temporário ${localTempFilePath}:`, unlinkError);
-      }
+      try { fs.unlinkSync(localTempFilePath); console.log(`[BG Proc ${catalogId}] Temp arquivo ${localTempFilePath} removido.`); }
+      catch (unlinkErr) { console.error(`[BG Proc ${catalogId}] Erro remover temp arquivo ${localTempFilePath}:`, unlinkErr); }
     }
   }
 }
