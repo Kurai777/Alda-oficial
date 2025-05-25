@@ -39,7 +39,7 @@ export const products = pgTable("products", {
   userId: integer("user_id").notNull(),
   catalogId: integer("catalog_id"),
   name: text("name").notNull(),
-  code: text("code").notNull(),
+  code: text("code"),
   description: text("description"),
   price: integer("price").notNull(), // price in cents
   category: text("category"), // Segmento (sofá, home, poltrona, etc.)
@@ -48,6 +48,7 @@ export const products = pgTable("products", {
   colors: json("colors").$type<string[]>().default([]),
   materials: json("materials").$type<string[]>().default([]),
   sizes: json("sizes").$type<{width?: number, height?: number, depth?: number, label?: string}[]>().default([]),
+  dimensions: text("dimensions"),
   location: text("location"), // Localização do produto (ex: 2º Piso, Depósito, etc)
   stock: integer("stock"), // Quantidade em estoque
   excelRowNumber: integer("excel_row_number"), // Número da linha original no Excel
@@ -73,9 +74,12 @@ export const insertProductSchema = createInsertSchema(products).pick({
   colors: true,
   materials: true,
   sizes: true,
-  location: true,  // Localização física do produto
-  stock: true,     // Quantidade em estoque
-  excelRowNumber: true, // Número da linha original no Excel
+  dimensions: true,
+  location: true,  
+  stock: true,     
+  excelRowNumber: true, 
+  embedding: true,
+  clipEmbedding: true,
   firestoreId: true,
   firebaseUserId: true,
   isEdited: true,
