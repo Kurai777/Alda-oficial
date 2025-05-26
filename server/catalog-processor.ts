@@ -171,25 +171,61 @@ async function extractProductsFromTextWithOpenAI(
         return [];
     }
 
-    const systemPromptForTextExtraction = `Você é um especialista em analisar o texto extraído (OCR) de páginas de catálogos de móveis.
-O texto a seguir é o conteúdo OCR de UMA PÁGINA de um catálogo. Sua tarefa é identificar CADA MÓVEL principal individualmente mencionado ou descrito neste texto.
+    // PROMPT REFINADO COM SUGESTÕES DO USUÁRIO E ANÁLISE DOS LOGS
+    const systemPromptForTextExtraction = `Você é um assistente de IA ultra especializado em analisar texto extraído (via OCR) de páginas de catálogos de móveis e identificar produtos. O texto fornecido é o conteúdo OCR bruto de UMA ÚNICA PÁGINA de um catálogo.
 
-Para CADA MÓVEL identificado, forneça os seguintes detalhes em um objeto JSON:
-- "name": O nome do produto (ex: "Poltrona Concha", "Mesa Lateral Cubo"). Tente ser o mais completo possível com base no texto.
-- "description": Uma breve descrição do estilo, característica marcante ou detalhes adicionais fornecidos no texto.
-- "code": Se um código de produto estiver claramente associado ao móvel no texto, extraia-o. Caso contrário, deixe como null.
-- "dimensions": Se as dimensões (Altura, Largura, Profundidade) estiverem claramente associadas ao móvel no texto (ex: "A: 80cm L: 120cm P: 60cm" ou "120x60x80"), extraia a string original. Caso contrário, deixe como null.
-- "category_hint": Com base no nome e descrição, infira a categoria principal do móvel (ex: "Sofá", "Poltrona", "Mesa de Jantar", "Luminária"). Se não puder inferir com confiança, deixe como null.
-- "materials_hint": Se materiais forem mencionados no texto em associação com o móvel (ex: "Madeira Carvalho", "Aço Inox", "Veludo"), liste-os em um array de strings. Caso contrário, deixe como null ou um array vazio.
-- "colors_hint": Se cores forem mencionadas no texto em associação com o móvel (ex: "Azul Marinho", "Branco Gelo"), liste-as em um array de strings. Caso contrário, deixe como null ou um array vazio.
+Seu objetivo é identificar CADA PRODUTO DE MOBILIÁRIO principal descrito ou proeminentemente apresentado nesta página, OU especificações detalhadas que claramente pertençam a um produto de mobiliário (mesmo que o nome do modelo não esteja nesta página). Ignore informações genéricas da empresa, texto de capa, índices, ou seções que não descrevem um produto específico. Se a página for claramente uma capa ou índice sem produtos, retorne uma lista vazia.
 
-RESPONDA APENAS com um objeto JSON contendo uma chave "products". O valor de "products" deve ser um ARRAY de objetos, onde cada objeto representa um móvel identificado no texto da página.
-Se NENHUM móvel for identificável no texto da página, retorne { "products": [] }.
+Para CADA MÓVEL principal identificado OU conjunto de especificações de produto, extraia os seguintes detalhes e formate-os como um objeto JSON dentro de um array "products". **Não preencha campos com inferências ou suposições vagas. Se a informação não estiver explicitamente presente ou claramente inferível a partir do texto fornecido para o produto específico, retorne null para esse campo.**
 
-Certifique-se de que o JSON seja válido. Analise cuidadosamente todo o texto fornecido.`;
+- "name": (String) O nome principal do produto.
+    - **Prioridade 1:** Capture o nome mais completo e específico do modelo ou coleção, se disponível (ex: "Sofá Apgar", "Poltrona Costela"). Evite nomes genéricos como apenas 'sofá' ou 'cadeira' se houver um modelo ou nome de linha mais específico associado no texto.
+    - **Prioridade 2 (Se o nome do modelo NÃO estiver nesta página, mas houver especificações claras):** Use um nome genérico baseado na "category_hint" inferida (ex: "Sofá", "Poltrona", "Mesa") e adicione um sufixo como "(ver especificações)", resultando em algo como "Sofá (ver especificações)".
+    - **Prioridade 3 (Se nem categoria puder ser inferida, mas há especificações):** Use "Produto (ver especificações)".
+    - **Se a página contiver apenas um nome de modelo (ex: "Apgar") e nenhuma outra especificação detalhada, NÃO crie um produto apenas com o nome. Espere por uma página com mais detalhes.**
+- "description": (String) Uma descrição concisa. **Combine informações técnicas e estilísticas sobre o produto, mesmo que estejam dispersas no texto da página, formando frases claras e informativas.** (ex: "Encosto com fibra siliconada e sustentação por cinta elástica. Assento em espuma D26 HR soft envolvida por plumante e molas zig zag. Estrutura em madeira eucalipto e chapa MDF. Pés em madeira.").
+- "code": (String | null) Se um código de produto (SKU, referência, CÓD. AC) estiver explicitamente associado ao móvel no texto desta página, extraia-o. Caso contrário, retorne null.
+- "dimensions": (String | null) Medidas do produto se mencionadas, no formato encontrado no texto (ex: "1,80 x 0,95 x 0,91", "L: 220cm A: 90cm P: 85cm", "Diâmetro: 100cm", ou blocos de números próximos a desenhos técnicos como "0,91 0,95 2,25 0,95 2,03"). Tente capturar todas as dimensões relevantes apresentadas. Caso não existam ou não sejam claras para este produto, retorne null.
+- "category_hint": (String | null) Com base no nome e na descrição, infira a categoria principal do móvel (exemplos comuns: "Sofá", "Poltrona", "Cadeira", "Mesa de Jantar", "Mesa de Centro", "Mesa Lateral", "Aparador", "Buffet", "Rack", "Painel de TV", "Cama", "Cabeceira", "Cômoda", "Criado-Mudo", "Guarda-Roupa", "Estante", "Luminária", "Tapete", "Almofada", "Puff"). Se não puder inferir com alta confiança, retorne null.
+- "materials_hint": (Array de Strings | null) Se materiais específicos forem mencionados em associação direta com o produto no texto (ex: "Madeira Eucalipto", "Chapa MDF", "Fibra Siliconada", "Espuma D26", "Veludo", "Couro"), liste-os como um array de strings. Se nenhum material for claramente identificado para o produto, retorne null ou um array vazio.
+- "colors_hint": (Array de Strings | null) Se cores específicas forem mencionadas em associação direta com o produto no texto (ex: "Cinza Claro", "Preto Fosco"), liste-as como um array de strings. Se nenhuma cor for claramente identificada para o produto, retorne null ou um array vazio.
+
+INSTRUÇÕES IMPORTANTES:
+1.  FOCO NO PRODUTO OU ESPECIFICAÇÕES: Se a página contiver múltiplas seções ou informações dispersas, concentre-se em extrair informações que claramente pertençam a um produto de mobiliário específico ou a um conjunto de especificações de um produto.
+2.  PÁGINAS SEM PRODUTOS/ESPECIFICAÇÕES CLARAS: Se o texto da página for claramente uma capa com apenas um nome de modelo, índice, página de introdução da empresa, ou não contiver nenhuma descrição de produto de mobiliário ou especificações técnicas detalhadas, retorne um JSON com uma lista "products" vazia: { "products": [] }.
+3.  TEXTO OCR: Lembre-se que o texto é resultado de OCR e pode conter pequenos erros ou formatação imperfeita. Tente ser robusto a isso.
+4.  UMA PÁGINA POR VEZ: O texto fornecido é de APENAS UMA PÁGINA. Não tente inferir informações de outras páginas.
+5.  FORMATO DA RESPOSTA: Responda APENAS com o objeto JSON contendo a chave "products", cujo valor é um array dos objetos de produto extraídos. Não inclua nenhuma outra explicação ou texto introdutório na sua resposta.
+
+EXEMPLO DE TEXTO DE ENTRADA (OCR de uma página de especificações SEM nome do modelo):
+"Especificações\nEncosto\nFibra siliconada com sustentação por cinta elástica\nAssento\nEspuma D26 hr soft de alta resiliência envolvida por plumante e mola zig zag\nEstrutura\nMadeira eucalipto de reflorestamento e chapa MDF\nPés\nMadeira\n0,91 0,95 2,25 0,95 2,03"
+
+EXEMPLO DE SAÍDA JSON ESPERADA PARA O TEXTO ACIMA (assumindo que a IA infere a categoria "Sofá"):
+{
+  "products": [
+    {
+      "name": "Sofá (ver especificações)",
+      "description": "Encosto com fibra siliconada e sustentação por cinta elástica. Assento em espuma D26 hr soft de alta resiliência envolvida por plumante e mola zig zag. Estrutura em madeira eucalipto de reflorestamento e chapa MDF. Pés em madeira.",
+      "code": null,
+      "dimensions": "0,91 0,95 2,25 0,95 2,03",
+      "category_hint": "Sofá",
+      "materials_hint": ["Fibra siliconada", "Cinta elástica", "Espuma D26 hr soft", "Plumante", "Mola zig zag", "Madeira eucalipto", "Chapa MDF", "Madeira"],
+      "colors_hint": null
+    }
+  ]
+}
+`;
 
     try {
-        console.log(`[OpenAI Text Extractor - Cat ${catalogId}, Pg ${pageNumberForContext}] Enviando texto OCR para ${OPENAI_TEXT_EXTRACTION_MODEL} para extração de produtos... (Primeiros 300 chars do texto: ${pageText.substring(0,300).replace(/\n/g, ' ')}...`);
+        console.log(`[OpenAI Text Extractor - Cat ${catalogId}, Pg ${pageNumberForContext}] Enviando texto OCR (comprimento: ${pageText.length}) para ${OPENAI_TEXT_EXTRACTION_MODEL} para extração de produtos.`);
+        // Logar apenas uma parte do texto se for muito grande para os logs principais
+        if (pageText.length > 500) {
+            console.log(`    Primeiros 250 chars: ${pageText.substring(0,250).replace(/\n/g, ' ')}...`);
+            console.log(`    Últimos 250 chars: ...${pageText.substring(pageText.length - 250).replace(/\n/g, ' ')}`);
+        } else {
+            console.log(`    Texto completo: ${pageText.replace(/\n/g, ' ')}`);
+        }
+
         const response = await openai.chat.completions.create({
             model: OPENAI_TEXT_EXTRACTION_MODEL,
             messages: [
@@ -197,7 +233,7 @@ Certifique-se de que o JSON seja válido. Analise cuidadosamente todo o texto fo
                 { role: "user", content: `Aqui está o texto OCR da página do catálogo:\n\n${pageText}` }
             ],
             response_format: { type: "json_object" },
-            temperature: 0.1, // Baixa temperatura para respostas mais determinísticas e factuais
+            temperature: 0.1, 
         });
 
         const content = response.choices[0]?.message?.content;
@@ -229,25 +265,26 @@ export async function processCatalogInBackground(jobData: CatalogJobData): Promi
   console.log(`[BG Proc ${catalogId}] INICIANDO: ${fileName}, Tipo: ${fileType}, ModoUpload: ${uploadMode}, ArqPreçoS3: ${pricingFileS3Key || 'N/A'}`);
 
   let localTempFilePath: string | null = null;
-  let rawExtractedProducts: AIAVisionProductExtraction[] = []; // Alterado para tipo específico
+  let rawExtractedProducts: AIAVisionProductExtraction[] = []; 
   let savedLocalProducts: Product[] = [];
   let uploadedImages: UploadedImageInfo[] = [];
   let extractionInfo = `Upload modo '${uploadMode}'. Artístico/Principal: ${fileType}.`;
   let pricingDataResult: ExtractedPriceItem[] | null = null;
-  const MAX_PAGES_TO_PROCESS_PDF_TEXT = 5; // Limite de páginas OCR a enviar para OpenAI para extração de produtos
+  
+  const MAX_PAGES_TO_PROCESS_WITH_OPENAI = 20; // AUMENTADO PARA 20 PÁGINAS PARA COLETA DE DADOS
+  let potentialProductNameFromPreviousPage: string | null = null; // Nova variável
 
-  // Inicializar Google Vision Client
   let visionClient: ImageAnnotatorClient | null = null;
+  const gcpCredentialsJsonString = process.env.GCP_CREDENTIALS_JSON;
   let gcsStorage: Storage | null = null;
   const GCS_BUCKET_NAME = process.env.GCS_BUCKET_NAME;
-  const gcpCredentialsJsonString = process.env.GCP_CREDENTIALS_JSON;
 
   if (fileType === 'pdf') {
       if (gcpCredentialsJsonString) {
           try {
               const credentials = JSON.parse(gcpCredentialsJsonString);
               visionClient = new ImageAnnotatorClient({ credentials });
-              gcsStorage = new Storage({ credentials }); // Inicializa Storage com as mesmas creds
+              gcsStorage = new Storage({ credentials }); 
               console.log("[BG Proc] Clientes Google Vision e Storage inicializados com JSON de credenciais do Secret.");
           } catch (e) {
               console.error("[BG Proc] Erro ao parsear/inicializar clientes Google com JSON de credenciais. Tentando inicialização padrão.", e);
@@ -262,7 +299,6 @@ export async function processCatalogInBackground(jobData: CatalogJobData): Promi
           console.log("[BG Proc] Clientes Google Vision e Storage inicializados com método padrão.");
       }
   }
-
   try {
     const tempDir = path.join(process.cwd(), 'temp');
     if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
@@ -271,16 +307,13 @@ export async function processCatalogInBackground(jobData: CatalogJobData): Promi
     fs.writeFileSync(localTempFilePath, fileBufferFromS3);
     console.log(`[BG Proc ${catalogId}] Download do arquivo principal S3 (${s3Key}) concluído: ${localTempFilePath}.`);
     await storage.updateCatalogStatus(catalogId, 'processing');
-
     const localUserIdNum = typeof userId === 'number' ? userId : parseInt(userId.toString());
 
-    // PARTE 1: Processar o Arquivo Principal (Artístico ou Completo)
     if (fileType === 'xlsx' || fileType === 'xls') {
       console.log(`[BG Proc ${catalogId}] Processando ARQUIVO PRINCIPAL Excel: ${localTempFilePath}`);
         const workbook = XLSX.read(fileBufferFromS3, { type: 'buffer' });
       const sheet = workbook.Sheets[workbook.SheetNames[0]];
       const rawSheetData = XLSX.utils.sheet_to_json(sheet, { header: 'A', defval: null });
-      
       let produtos_excel_ia: any[] = []; 
         const CHUNK_SIZE = 25;
       for (let i = 0; i < rawSheetData.length; i += CHUNK_SIZE) {
@@ -294,24 +327,23 @@ export async function processCatalogInBackground(jobData: CatalogJobData): Promi
         } catch (e) { console.error(`[BG Proc ${catalogId}] Erro IA Excel bloco ${i/CHUNK_SIZE +1}:`, e); }
         if (i + CHUNK_SIZE < rawSheetData.length && openai) await new Promise(r => setTimeout(r, 1000));
       }
-      // rawExtractedProducts agora é AIAVisionProductExtraction[], então precisamos de um cast ou mapeamento
       rawExtractedProducts = produtos_excel_ia.map(p => ({ 
         name: p.name, 
         description: p.description,
         code: p.code,
-        dimensions: p.sizes?.map((s:any) => s.label).join('; ') || p.dimensions, // Ajuste para sizes
+        dimensions: p.sizes?.map((s:any) => s.label).join('; ') || p.dimensions, 
         category_hint: p.category,
         materials_hint: p.materials,
         colors_hint: p.colors
       }));
       extractionInfo += ` | Principal(Excel): ${rawExtractedProducts.length} produtos brutos da IA.`;
         savedLocalProducts = []; 
-      for (const pData of produtos_excel_ia) { // Iterar sobre produtos_excel_ia para ter todos os campos originais
+      for (const pData of produtos_excel_ia) { 
           try {
             let embeddingVector: number[] | null = null;
           const textForEmb = (`${pData.name || ''} ${pData.category || ''} ${pData.description || ''} ` +
                             `${pData.manufacturer || ''} ${(pData.colors || []).join(' ')} ` +
-                            `${(pData.materials || []).join(' ')}`).replace(/\s+/g, ' ').trim();
+                            `${(pData.materials || []).join(' ')}`).replace(/s+/g, ' ').trim();
           if (textForEmb.length > 5 && openai) { 
               const embResp = await openai.embeddings.create({ model: EMBEDDING_MODEL, input: textForEmb, dimensions: 1536 });
               if (embResp.data?.length) embeddingVector = embResp.data[0].embedding;
@@ -333,7 +365,6 @@ export async function processCatalogInBackground(jobData: CatalogJobData): Promi
         } catch (dbError) { console.error(`[BG Proc ${catalogId}] Erro salvar produto Excel (Linha ${pData.excelRowNumber}):`, dbError); }
       }
       console.log(`[BG Proc ${catalogId}] ${savedLocalProducts.length} produtos do Excel Principal salvos.`);
-      
       if (localTempFilePath) {
         console.log(`[BG Proc ${catalogId}] Extraindo imagens do Excel: ${localTempFilePath}...`);
         try {
@@ -357,13 +388,10 @@ export async function processCatalogInBackground(jobData: CatalogJobData): Promi
             extractionInfo += " (Falha na extração de imagens Python)";
         }
       }
-
-      // LÓGICA DE ASSOCIAÇÃO DE IMAGENS E EMBEDDING (BASEADA NO CÓDIGO ANTIGO FORNECIDO)
       if (savedLocalProducts.length > 0 && uploadedImages.length > 0 && openai) {
         console.log(`[BG Proc ${catalogId}] Iniciando Associação v5 (IA Vision + Fallback) e Embedding para ${uploadedImages.length} imagens e ${savedLocalProducts.length} produtos.`);
         let associatedCount = 0;
-        const imageAssociatedFlags = new Map<string, boolean>(); // Para não reutilizar imagens
-
+        const imageAssociatedFlags = new Map<string, boolean>(); 
         for (const product of savedLocalProducts) {
             const productRowAny: any = product.excelRowNumber;
             if (typeof productRowAny !== 'number' || isNaN(productRowAny) || productRowAny <= 0) {
@@ -377,58 +405,36 @@ export async function processCatalogInBackground(jobData: CatalogJobData): Promi
                 description: product.description,
                 category: product.category,
                 manufacturer: product.manufacturer,
-                colors: product.colors as string[] | undefined, // Cast para o tipo esperado
-                materials: product.materials as string[] | undefined // Cast para o tipo esperado
+                colors: product.colors as string[] | undefined, 
+                materials: product.materials as string[] | undefined 
             };
-            // console.log(`\n[Assoc v5] Tentando associar para Prod ID ${product.id} (Linha ${productRow}) - ${product.name}`);
-
             let associatedImageInfo: UploadedImageInfo | undefined = undefined;
             let visionConfirmedMatch = false;
             const candidateImages = uploadedImages.filter(img => img.anchorRow === productRow);
-
             if (candidateImages.length > 0) {
-                // console.log(`[Assoc v5]   Encontradas ${candidateImages.length} imagens candidatas na linha ${productRow}`);
                 const evaluatedCandidates: { image: UploadedImageInfo, result: { match: boolean, reason: string } | null }[] = [];
-
                 for (const candidateImage of candidateImages) {
-                    if (imageAssociatedFlags.has(candidateImage.imageUrl)) {
-                        // console.log(`[Assoc v5]     Pulando imagem já usada: ${candidateImage.imageUrl.substring(candidateImage.imageUrl.lastIndexOf('/') + 1)}`);
-                        continue;
-                    }
-                    // console.log(`[Assoc v5]     Aguardando 1s antes de chamar Vision Compare para ${candidateImage.imageUrl}...`);
-                    await new Promise(resolve => setTimeout(resolve, 1000)); // Delay antes de cada chamada à Vision API
+                    if (imageAssociatedFlags.has(candidateImage.imageUrl)) { continue; }
+                    await new Promise(resolve => setTimeout(resolve, 1000)); 
                     const visionResult = await verifyImageMatchWithVision(productDetailsForVision, candidateImage.imageUrl);
                     evaluatedCandidates.push({ image: candidateImage, result: visionResult });
                 }
-                
                 const matches = evaluatedCandidates.filter(c => c.result && c.result.match === true);
-
                 if (matches.length === 1) {
                     console.log(`[Assoc v5]   >>> IA VISION CONFIRMOU MATCH ÚNICO na linha ${productRow} para produto ${product.id}! <<<`);
                     associatedImageInfo = matches[0].image;
                     visionConfirmedMatch = true;
                 } else if (matches.length > 1) {
                     console.warn(`[Assoc v5]   AMBIGUIDADE IA na linha ${productRow} para produto ${product.id}: ${matches.length} imagens retornaram 'match: true'. Nenhuma será associada por IA nesta etapa.`);
-                    // matches.forEach((m, idx) => console.log(`   -> Match Ambíguo ${idx+1}: ${m.image.imageUrl.substring(m.image.imageUrl.lastIndexOf('/') + 1)} (Razão: ${m.result?.reason})`));
-                } else {
-                    // console.log(`[Assoc v5]   Nenhum match confirmado pela IA na linha ${productRow} para produto ${product.id}.`);
-                }
+                } 
             }
-            // else {
-            //     console.log(`[Assoc v5]   Nenhuma imagem encontrada ancorada na linha ${productRow} para produto ${product.id}.`);
-            // }
-
             if (!associatedImageInfo && candidateImages.length > 0) {
                 const unusedCandidatesOnRow = candidateImages.filter(img => !imageAssociatedFlags.has(img.imageUrl));
                 if (unusedCandidatesOnRow.length === 1) {
                     console.log(`[Assoc v5 Fallback] IA não confirmou, mas há EXATAMENTE UMA imagem não usada na linha ${productRow} para produto ${product.id}. Usando fallback.`);
                     associatedImageInfo = unusedCandidatesOnRow[0];
                 } 
-                // else if (unusedCandidatesOnRow.length > 1) {
-                //      console.log(`[Assoc v5 Fallback] IA não confirmou e há ${unusedCandidatesOnRow.length} imagens não usadas na linha ${productRow}. Impossível usar fallback.`);
-                // }
             }
-
             if (associatedImageInfo) {
                 imageAssociatedFlags.set(associatedImageInfo.imageUrl, true);
                 try {
@@ -436,8 +442,6 @@ export async function processCatalogInBackground(jobData: CatalogJobData): Promi
                     associatedCount++;
                     const successLog = visionConfirmedMatch ? '[Assoc v5 SUCESSO (IA)]' : '[Assoc v5 SUCESSO (Fallback)]';
                     console.log(`${successLog}: Prod ID ${product.id} (${product.name}) -> Imagem da linha ${associatedImageInfo.anchorRow}, URL: ${associatedImageInfo.imageUrl}`);
-
-                    // Gerar e salvar CLIP embedding para a imagem associada
                     console.log(`[Embedding CLIP] Tentando gerar embedding para Prod ID ${product.id} usando imagem: ${associatedImageInfo.imageUrl}`);
                     try {
                       const clipEmbeddingVector = await getClipEmbeddingFromImageUrl(associatedImageInfo.imageUrl);
@@ -450,39 +454,31 @@ export async function processCatalogInBackground(jobData: CatalogJobData): Promi
                     } catch (embeddingError) {
                       console.error(`[Embedding CLIP] ERRO ao gerar/salvar embedding para Prod ID ${product.id}:`, embeddingError);
                     }
-
                 } catch (updateError) {
                     console.error(`[Assoc v5] ERRO DB ao atualizar Prod ID ${product.id} com imagem ${associatedImageInfo.imageUrl}:`, updateError);
                 }
             } 
-            // else {
-            //    console.warn(`[Assoc v5 FALHA FINAL]: Nenhuma imagem associada para Prod ID ${product.id} (Linha ${productRow}).`);
-            // }
         }
         extractionInfo += ` | Associação Imagens Excel v5: ${associatedCount} produtos atualizados.`;
-        console.log(`[BG Proc ${catalogId}] Associação v5 (IA Vision + Fallback) e Embedding concluída. ${associatedCount} produtos atualizados com imagens.`);
-
+        console.log(`[BG Proc ${catalogId}] Associação v5 (IA Vision + Fallback) e Embedding concluída. ${associatedCount} produtos atualizados com imagem.`);
       } else if (savedLocalProducts.length > 0 && uploadedImages.length === 0 && fileType.startsWith('xls')) {
         extractionInfo += ` | Nenhuma imagem extraída do Excel para associar.`;
         console.log(`[BG Proc ${catalogId}] Nenhuma imagem foi extraída do Excel (uploadedImages vazio), embora ${savedLocalProducts.length} produtos tenham sido salvos.`);
       }
-
     } else if (fileType === 'pdf') {
       extractionInfo += " | Principal(PDF): Google Vision AI via GCS iniciado.";
       if (!visionClient || !gcsStorage || !GCS_BUCKET_NAME) {
         extractionInfo += " Google Vision/Storage Client ou GCS_BUCKET_NAME não inicializado/configurado.";
         console.error(`[BG Proc ${catalogId}] Google Vision/Storage Client ou GCS_BUCKET_NAME não inicializado/configurado. Verifique as credenciais e a variável de ambiente do bucket. VisionClient: ${!!visionClient}, GCSStorage: ${!!gcsStorage}, BucketName: ${GCS_BUCKET_NAME}`);
       } else {
-        const gcsPdfFileName = `catalogs_to_ocr/${catalogId}-${Date.now()}-${fileName}`.replace(/[^a-zA-Z0-9_\-\.\/!]/g, '_'); // Nome de arquivo seguro para GCS
+        const gcsPdfFileName = `catalogs_to_ocr/${catalogId}-${Date.now()}-${fileName}`.replace(/[^a-zA-Z0-9_\-\.\/!]/g, '_');
         const gcsOutputPrefix = `ocr_results/${catalogId}-${Date.now()}/`;
         const gcsSourceUri = `gs://${GCS_BUCKET_NAME}/${gcsPdfFileName}`;
         const gcsDestinationUri = `gs://${GCS_BUCKET_NAME}/${gcsOutputPrefix}`;
-
         try {
           console.log(`[BG Proc ${catalogId}] Enviando PDF para GCS: ${gcsSourceUri}...`);
           await gcsStorage.bucket(GCS_BUCKET_NAME).file(gcsPdfFileName).save(fileBufferFromS3, { contentType: 'application/pdf' });
           console.log(`[BG Proc ${catalogId}] PDF enviado para GCS com sucesso.`);
-
           console.log(`[BG Proc ${catalogId}] Solicitando análise assíncrona do Google Vision AI...`);
           const [operation] = await visionClient.asyncBatchAnnotateFiles({
             requests: [{
@@ -493,19 +489,18 @@ export async function processCatalogInBackground(jobData: CatalogJobData): Promi
               features: [{ type: 'DOCUMENT_TEXT_DETECTION' }],
               outputConfig: {
                 gcsDestination: { uri: gcsDestinationUri },
-                batchSize: 20, // Processa N páginas por arquivo JSON de saída. Ajuste conforme necessário.
+                batchSize: 20, 
               },
             }],
           });
           console.log(`[BG Proc ${catalogId}] Operação Google Vision AI iniciada: ${operation.name}. Aguardando conclusão...`);
           await operation.promise(); 
           console.log(`[BG Proc ${catalogId}] Operação Google Vision AI concluída.`);
-
           const [outputFiles] = await gcsStorage.bucket(GCS_BUCKET_NAME).getFiles({ prefix: gcsOutputPrefix });
           console.log(`[BG Proc ${catalogId}] Encontrados ${outputFiles.length} arquivos de resultado OCR no GCS.`);
           extractionInfo += ` | Google Vision (GCS): ${outputFiles.length} arquivos de resultado.`;
 
-          let allProductsFromPdfText: AIAVisionProductExtraction[] = []; // Para acumular produtos de todas as páginas
+          let allProductsFromPdfText: AIAVisionProductExtraction[] = []; 
           let pagesProcessedForOpenAI = 0;
 
           for (const outputFile of outputFiles) {
@@ -513,14 +508,13 @@ export async function processCatalogInBackground(jobData: CatalogJobData): Promi
               console.log(`[BG Proc ${catalogId}] Baixando e processando resultado OCR: ${outputFile.name}`);
               const [jsonData] = await outputFile.download();
               const ocrResult = JSON.parse(jsonData.toString());
-              
               if (ocrResult.responses && Array.isArray(ocrResult.responses)) {
                 for (const response of ocrResult.responses) {
                   if (response.fullTextAnnotation && response.fullTextAnnotation.pages && Array.isArray(response.fullTextAnnotation.pages)) {
                     for (const page of response.fullTextAnnotation.pages) {
-                      if (pagesProcessedForOpenAI >= MAX_PAGES_TO_PROCESS_PDF_TEXT) {
-                        console.log(`[BG Proc ${catalogId}] Limite de ${MAX_PAGES_TO_PROCESS_PDF_TEXT} páginas para envio ao OpenAI atingido.`);
-                        break; // Sai do loop de páginas desta resposta
+                      if (pagesProcessedForOpenAI >= MAX_PAGES_TO_PROCESS_WITH_OPENAI) {
+                        console.log(`[BG Proc ${catalogId}] Limite de ${MAX_PAGES_TO_PROCESS_WITH_OPENAI} páginas para envio ao OpenAI atingido.`);
+                        break; 
                       }
                       let pageText = '';
                       if (page.blocks) {
@@ -545,36 +539,73 @@ export async function processCatalogInBackground(jobData: CatalogJobData): Promi
                       }
                       const effectivePageNumber = (ocrResult.responses.indexOf(response) * (ocrResult.responses[0].context?.pageNumber || 0)) + (response.context?.pageNumber || response.fullTextAnnotation.pages.indexOf(page) + 1);
                       
-                      if (pagesProcessedForOpenAI < MAX_PAGES_TO_PROCESS_PDF_TEXT) {
-                          console.log(`\n--- [BG Proc ${catalogId}] Texto OCR (GCS) da Página Efetiva ${effectivePageNumber} (Para OpenAI) ---`);
-                          // Log limitado para OpenAI, o texto completo vai para a função
-                          console.log(pageText.substring(0, 300) + (pageText.length > 300 ? '... (texto truncado para log)' : ''));
-                          console.log(`--- Fim do preview do Texto OCR da Página Efetiva ${effectivePageNumber} ---\n`);
+                      if (pagesProcessedForOpenAI < MAX_PAGES_TO_PROCESS_WITH_OPENAI) {
+                        console.log(`\n--- [BG Proc ${catalogId}] TEXTO OCR COMPLETO (Página Efetiva ${effectivePageNumber}) A SER ENVIADO PARA OPENAI ---`);
+                        console.log(pageText);
+                        console.log(`--- FIM DO TEXTO OCR COMPLETO (Página Efetiva ${effectivePageNumber}) ---\n`);
                           
-                          const productsFromThisPage = await extractProductsFromTextWithOpenAI(pageText, catalogId, effectivePageNumber);
+                        const productsFromThisPage = await extractProductsFromTextWithOpenAI(pageText, catalogId, effectivePageNumber);
+                        
+                        // Lógica para tentar usar nome da página anterior
+                        if (productsFromThisPage.length > 0) {
+                          for (const product of productsFromThisPage) {
+                            if (product.name && (product.name.endsWith("(ver especificações)") || product.name === "Produto (ver especificações)")) {
+                              if (potentialProductNameFromPreviousPage) {
+                                console.log(`[Nome Atribuído] Usando nome '${potentialProductNameFromPreviousPage}' da pág. anterior para produto '${product.name}' na pág. ${effectivePageNumber}.`);
+                                product.name = potentialProductNameFromPreviousPage; // Atribui o nome capturado
+                                potentialProductNameFromPreviousPage = null; // Limpa para não usar de novo indevidamente
+                              } else {
+                                console.log(`[Nome Genérico] Produto '${product.name}' na pág. ${effectivePageNumber} não encontrou nome na pág. anterior.`);
+                              }
+                            } else if (product.name) { 
+                              // Se o produto tem nome específico (não genérico), limpa qualquer nome pendente da pág. anterior.
+                              potentialProductNameFromPreviousPage = null;
+                            }
+                          }
                           allProductsFromPdfText.push(...productsFromThisPage);
-                          pagesProcessedForOpenAI++;
+                        } else { // productsFromThisPage.length === 0
+                          // Esta página NÃO rendeu produtos via OpenAI. Pode ser uma página que contém apenas o nome do modelo.
+                          const trimmedPageText = pageText.trim();
+                          const wordsInPage = trimmedPageText.split(/\s+/);
+                          // Heurística: texto curto (ex: <= 7 palavras, < 60 chars), não é frase longa, e parece um nome.
+                          if (wordsInPage.length > 0 && wordsInPage.length <= 7 && trimmedPageText.length < 60) {
+                            let candidateName = trimmedPageText.split('\n')[0].trim(); // Pega a primeira linha como candidato
+                            // Verifica se o candidato parece um nome de modelo válido
+                            if (candidateName.length > 2 && candidateName.length < 40 && 
+                                /^[A-Za-z0-9À-ÖØ-öø-ÿ\s'-]+$/.test(candidateName) && // Letras, números, espaços, hífens, apóstrofos
+                                !/^\d+$/.test(candidateName) && // Não ser apenas números
+                                candidateName.toLowerCase() !== "especificações" && 
+                                candidateName.toLowerCase() !== "especificacoes" && 
+                                candidateName.toLowerCase() !== "detalhes" &&
+                                candidateName.toLowerCase() !== "medidas") {
+                              potentialProductNameFromPreviousPage = candidateName;
+                              console.log(`[Nome Candidato] Pág. ${effectivePageNumber} (0 produtos OpenAI). Capturado '${potentialProductNameFromPreviousPage}' como nome potencial.`);
+                            } else {
+                              potentialProductNameFromPreviousPage = null; // Candidato não parece um nome de modelo.
+                            }
+                          } else {
+                            potentialProductNameFromPreviousPage = null; // Página não rendeu produto e texto não parece ser só um nome.
+                          }
+                        }
+                        pagesProcessedForOpenAI++;
+                      } else {
+                        break; 
                       }
-                    } // Fim do loop page
+                    } 
                   } else { console.log(`[BG Proc ${catalogId}] Resposta OCR (${outputFile.name}) não contém fullTextAnnotation.pages válidas.`); }
-                  if (pagesProcessedForOpenAI >= MAX_PAGES_TO_PROCESS_PDF_TEXT) break; // Sai do loop de responses
+                  if (pagesProcessedForOpenAI >= MAX_PAGES_TO_PROCESS_WITH_OPENAI) break; 
                 }
               } else { console.log(`[BG Proc ${catalogId}] Arquivo de resultado OCR (${outputFile.name}) não tem o formato esperado (sem 'responses').`); }
             }
+             if (pagesProcessedForOpenAI >= MAX_PAGES_TO_PROCESS_WITH_OPENAI && MAX_PAGES_TO_PROCESS_WITH_OPENAI > 0) break; 
           }
-          rawExtractedProducts = allProductsFromPdfText; // Agora rawExtractedProducts contém itens do tipo AIAVisionProductExtraction
-          extractionInfo += ` Texto OCR de ${allProductsFromPdfText.length} produtos (de ${pagesProcessedForOpenAI} páginas) extraído via OpenAI.`;
-          console.log(`[BG Proc ${catalogId}] Total de ${rawExtractedProducts.length} produtos brutos extraídos do texto OCR via OpenAI.`);
+          rawExtractedProducts = allProductsFromPdfText; 
+          extractionInfo += ` Texto OCR processado por OpenAI para ${pagesProcessedForOpenAI} página(s), resultando em ${rawExtractedProducts.length} produtos.`;
+          console.log(`[BG Proc ${catalogId}] Total de ${rawExtractedProducts.length} produtos brutos extraídos do texto OCR via OpenAI de ${pagesProcessedForOpenAI} páginas.`);
 
-          // Salvar produtos extraídos do PDF
           if (rawExtractedProducts.length > 0) {
             console.log(`[BG Proc ${catalogId}] Salvando ${rawExtractedProducts.length} produtos extraídos do PDF...`);
-            // savedLocalProducts já foi declarado no escopo da função, pode ser reutilizado ou usar um nome diferente.
-            // Vamos garantir que está zerado para produtos de PDF.
-            // savedLocalProducts = []; // Comentar se quiser adicionar aos produtos do Excel em modo 'complete' com PDF.
-            // Em modo 'separate', savedLocalProducts deve vir apenas do arquivo artístico.
             if(uploadMode === 'separate') savedLocalProducts = []; 
-
             for (const pData of rawExtractedProducts) { 
               try {
                 let embeddingVector: number[] | null = null;
@@ -587,10 +618,10 @@ export async function processCatalogInBackground(jobData: CatalogJobData): Promi
                 const productToSave: InsertProduct = {
                   userId: localUserIdNum, catalogId: catalogId, name: pData.name || 'Produto PDF s/ Nome',
                   code: pData.code || null, description: pData.description || null, 
-                  price: 0, // Preços virão do arquivo de preços para modo 'separate'
+                  price: 0, 
                   category: pData.category_hint || null, 
                   dimensions: pData.dimensions || null, 
-                  imageUrl: null, // TODO: Extrair imagens literais do PDF e associar
+                  imageUrl: null, 
                   colors: pData.colors_hint || [], 
                   materials: pData.materials_hint || [], 
                   sizes: [], 
@@ -608,7 +639,7 @@ export async function processCatalogInBackground(jobData: CatalogJobData): Promi
           console.error(`[BG Proc ${catalogId}] Erro ao processar PDF com Google Vision AI via GCS:`, visionError);
           extractionInfo += ` | Erro Google Vision (GCS): ${visionError instanceof Error ? visionError.message : String(visionError)}.`;
         }
-      } // Fim do else (visionClient && gcsStorage && GCS_BUCKET_NAME)
+      } 
     } else { 
       console.warn(`[BG Proc ${catalogId}] Tipo de arquivo principal '${fileType}' não suportado para extração.`);
       extractionInfo += ` | Tipo de arquivo principal ${fileType} não processado.`;
