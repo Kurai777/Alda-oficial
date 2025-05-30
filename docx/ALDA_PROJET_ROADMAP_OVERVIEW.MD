@@ -13,9 +13,9 @@ Esta funcionalidade é crucial para popular o sistema Ald-a com produtos de dife
 ### 2.1. Objetivos
 - Processar catálogos fornecidos como arquivos Excel completos (contendo todas as informações, incluindo imagens e preços).
 - Processar catálogos fornecidos em partes: um "Arquivo Artístico" (geralmente PDF com visuais dos produtos e descrições básicas) e um "Arquivo de Preços" separado (geralmente planilha Excel ou PDF com tabelas de preços).
-- Extrair de forma inteligente e precisa os detalhes dos produtos: nome, código, descrição, dimensões, categoria, materiais, cores e preços (incluindo variações como classes de acabamento).
-- Associar corretamente as imagens aos seus respectivos produtos.
-- Armazenar os produtos de forma estruturada no banco de dados.
+- Extrair de forma inteligente e precisa os detalhes dos produtos: nome do modelo base, variações de descrição/tamanho, dimensões, categoria, materiais, cores e preços (incluindo variações como classes de acabamento/tecido).
+- Associar corretamente as imagens aos seus respectivos produtos (modelo base).
+- Armazenar os produtos e suas variações de forma estruturada no banco de dados, permitindo que um modelo base tenha múltiplas variações de tamanho/preço.
 
 ### 2.2. Estratégia e Fluxo de Processamento Atual
 
@@ -32,42 +32,81 @@ Esta funcionalidade é crucial para popular o sistema Ald-a com produtos de dife
     *   **Salvamento:** Produtos com todos os dados (incluindo `imageUrl` e `clipEmbedding`) são salvos no banco de dados PostgreSQL.
 
 **2.2.2. Para Arquivos Separados (PDF Artístico + Planilha de Preços):**
-1.  **Upload:** Usuário faz upload do PDF artístico e, opcionalmente, da planilha de preços.
+1.  **Upload:** Usuário faz upload do PDF artístico e da planilha de preços.
 2.  **Armazenamento Inicial:** Arquivos são enviados para o AWS S3.
-3.  **Processamento do PDF Artístico no Backend (`server/catalog-processor.ts`):
+3.  **Processamento do PDF Artístico no Backend (`server/catalog-processor.ts`):**
     *   Download do PDF do AWS S3.
-    *   **Upload para Google Cloud Storage (GCS):** Devido a limites de tamanho da API Vision para arquivos inline, o PDF é primeiro enviado para um bucket no GCS.
-    *   **OCR com Google Cloud Vision API:** A função `asyncBatchAnnotateFiles` da Vision API é chamada para processar o PDF armazenado no GCS, realizando OCR (`DOCUMENT_TEXT_DETECTION`) em todas as páginas. Os resultados (texto estruturado por página) são salvos de volta no GCS em arquivos JSON.
-    *   **Download e Reconstrução do Texto OCR:** O backend baixa esses arquivos JSON de resultado do GCS e reconstrói o texto completo de cada página.
-    *   **Extração de Produtos do Texto OCR via OpenAI:** O texto OCR de cada página (até um limite configurável `MAX_PAGES_TO_PROCESS_WITH_OPENAI`) é enviado para a API da OpenAI (GPT-4o via a função `extractProductsFromTextWithOpenAI`) com um prompt detalhado para identificar e extrair informações estruturadas dos produtos (nome, descrição, código, dimensões, categoria, materiais, cores).
-    *   **Salvamento (Parcial):** Os produtos extraídos do texto são salvos no banco de dados com embeddings textuais. O campo `imageUrl` permanece `null` nesta fase, aguardando a extração de imagens literais do PDF.
-4.  **Processamento da Planilha de Preços no Backend (se fornecida):
+    *   Upload para Google Cloud Storage (GCS) e OCR com Google Cloud Vision API para extrair texto bruto por página.
+    *   **Extração de Produtos do Texto OCR via OpenAI (`extractProductsFromTextWithOpenAI`):**
+        *   O texto OCR de cada página (até `MAX_PAGES_TO_PROCESS_WITH_OPENAI`) é enviado para a API da OpenAI (GPT-4o).
+        *   O prompt foi refinado para extrair detalhes técnicos (descrição, materiais, dimensões, categoria) mesmo de páginas de especificações que não contêm o nome do modelo.
+        *   Implementada lógica para capturar um "nome candidato" de páginas que contêm apenas o nome do modelo e aplicá-lo aos detalhes extraídos da página de especificações subsequente.
+    *   **Salvamento (Parcial dos Produtos do PDF):** Os produtos extraídos do PDF (com nome do modelo base e detalhes) são salvos na tabela `products` (atualmente sem preço e sem imagem).
+4.  **Processamento da Planilha de Preços no Backend (`server/pricing-file-processor.ts`):**
     *   Download da planilha do S3.
-    *   Utilização da API OpenAI (`ai-excel-processor.js` ou similar via `pricing-file-processor.js`) para extrair códigos, nomes de modelos e tabelas de preços com suas variações/classes.
-5.  **Fusão de Dados (`server/catalog-fusion-service.ts`):
-    *   Os produtos extraídos do PDF artístico são combinados com os dados da planilha de preços. A correspondência primária é por código do produto, com planos para implementar um fallback mais inteligente usando IA (comparação de nomes/descrições e embeddings) se o código não corresponder.
+    *   **Extração de Itens de Preço com IA (`processPricingFile`):**
+        *   O prompt da IA foi refinado para identificar cada linha da planilha como uma variação de produto.
+        *   A IA é instruída a extrair:
+            *   `name`: O nome completo da variação como aparece na coluna "MODELO" (ex: "BORA C/ASSENTO 0,63").
+            *   `model_base`: O nome do modelo principal/família (ex: "BORA").
+            *   `variation_description`: A parte descritiva da variação (ex: "C/ASSENTO 0,63" ou da coluna "DESCRIÇÃO" da planilha).
+            *   `dimensions` e `priceVariations` (com `class_name` e `price`) para cada linha/variação.
+        *   Os resultados são mapeados para a interface `ExtractedPriceItem`.
+5.  **Fusão de Dados (`server/catalog-fusion-service.ts` - `fuseCatalogData`):**
+    *   **Match por Código:** Tentativa primária (atualmente não aplicável para o catálogo de exemplo, pois não há códigos consistentes).
+    *   **Fallback por Nome (Melhorado):**
+        *   **1ª Tentativa:** Compara o nome do produto do PDF (ex: "Apgar") com o `model_base` extraído da planilha (ex: "APGAR"). Se houver correspondência exata (após normalização), um match é feito.
+        *   **2ª Tentativa (Se a 1ª falhar):** Compara o nome do produto do PDF com o `name` (nome completo da variação) da planilha usando similaridade de Dice (limiar atual de 0.80).
+    *   **Atualização de Preço:** Se um match é encontrado, o preço do produto no banco (extraído do PDF) é atualizado com o primeiro preço da primeira classe de preço encontrada para o item correspondente da planilha. *(Limitação atual: não armazena múltiplas variações ou classes de preço no produto final).*
 
 ### 2.3. Funcionalidades Implementadas (Estado Atual)
 *   Upload de arquivos Excel completos e processamento (incluindo extração de dados textuais, imagens embutidas, associação e embeddings) - **Restaurado e funcionando.**
 *   Upload de arquivos PDF artístico e Planilha de Preços separados.
 *   Upload do PDF artístico para Google Cloud Storage (GCS).
 *   OCR de múltiplas páginas de PDFs (via Google Cloud Vision API e GCS) para extração de texto bruto - **Funcionando.**
-*   Extração inicial de produtos do texto OCR via OpenAI (GPT-4o) - **Funcionando para algumas páginas; requer refinamento significativo do prompt.**
-*   Processamento de planilhas de preços (Excel) via OpenAI para extrair itens e variações de preço - **Funcionando.**
-*   Estrutura básica para fusão de dados (match por código) - **Implementada.**
+*   Extração de produtos do texto OCR via OpenAI (GPT-4o):
+    *   Extração de detalhes técnicos de páginas de especificações - **Melhorada.**
+    *   Captura e atribuição de nomes de modelo de páginas "capa" para páginas de "especificação" - **Funcionando.**
+*   Processamento de planilhas de preços (Excel) via OpenAI (`pricing-file-processor.ts`):
+    *   Extração de nome completo da variação, nome do modelo base, descrição da variação, dimensões e variações de preço por classe - **Implementado e em refinamento.**
+    *   **NOVO:** Extração de `classDefinitions` (definições de classe de preço, como cores e materiais) pela IA durante a análise estrutural da planilha. Essas definições são salvas no campo `class_definitions` (JSONB) da tabela `catalogs`.
+*   Mecanismo de Fusão de Dados (`catalog-fusion-service.ts`):
+    *   Match por código (existente).
+    *   Fallback por comparação de nome (PDF.name vs Planilha.model_base) - **Implementado.**
+    *   Fallback secundário por similaridade de Dice (PDF.name vs Planilha.name completo) - **Implementado.**
+    *   **NOVO:** Suporte para relação um-para-muitos entre produtos do PDF e variações da planilha, utilizando a nova tabela `product_variations`.
 *   Geração de embeddings textuais para produtos extraídos do PDF.
+*   **NOVO (Frontend):**
+    *   Exibição de múltiplas variações de produto (tamanho/descrição) e classes de preço nos cards de produto e na página de detalhes.
+    *   Seletores (dropdowns) interativos para o usuário escolher a variação e a classe de preço desejada.
+    *   Atualização dinâmica do preço do produto conforme a seleção do usuário.
+    *   Exibição das definições de classe (ex: cores, materiais como "AMARELO, AREIA") nos seletores.
+    *   Na página de detalhes, exibição de bolinhas de cores interativas para classes que especificam cores, com tooltip mostrando o nome da cor.
+    *   Padronização da formatação de preços (R$) em todo o frontend, com preços armazenados em centavos no backend.
 
 ### 2.4. Desafios Atuais e Pontos de Atenção
-*   **Qualidade da Extração da OpenAI a partir do Texto OCR:** O desafio principal é refinar o prompt para a OpenAI (`extractProductsFromTextWithOpenAI`) para que ela interprete corretamente o texto OCR (que pode ser ruidoso ou ter formatação variada) e extraia de forma precisa e completa: 
-    *   Nomes de modelo de produto (especialmente quando o nome está em uma página/seção e as especificações em outra).
-    *   Códigos de produto.
-    *   Dimensões detalhadas.
-    *   Materiais e cores específicos do produto.
-*   **Associação Contextual:** Melhorar a capacidade da IA de associar informações que podem estar visualmente próximas em uma página de catálogo, mas separadas no texto OCR (ex: um nome de modelo no topo da página e suas especificações mais abaixo).
-*   **Robustez para Diversos Layouts de PDF:** Garantir que a extração funcione bem para diferentes estruturas e layouts de catálogos PDF.
-*   **Extração de Imagens Literais de PDFs:** A funcionalidade para extrair as imagens visuais dos produtos de dentro dos arquivos PDF e associá-las aos dados extraídos ainda precisa ser implementada. (Marcado como `TODO`).
-*   **Lógica de Fusão de Preços:** A fusão atual é baseada em código. É necessário implementar um fallback robusto (provavelmente usando IA/embeddings) para associar produtos e preços quando os códigos não batem ou estão ausentes nos produtos extraídos do PDF.
-*   **Performance e Custo:** O processamento de PDFs página a página com Google Vision e depois com OpenAI para cada página pode ser demorado e custoso para catálogos muito grandes. Otimizações e/ou estratégias de processamento em lote podem ser necessárias.
+*   **Qualidade da Extração da OpenAI (PDF - `extractProductsFromTextWithOpenAI`):**
+    *   Garantir que códigos de produto (se presentes no PDF) sejam extraídos.
+    *   Processar o catálogo PDF inteiro (além do limite atual de `MAX_PAGES_TO_PROCESS_WITH_OPENAI`).
+*   **Qualidade da Extração da OpenAI (Planilha de Preços - `pricing-file-processor.ts`):**
+    *   **Principal Ponto de Atenção Atual:** Garantir que a IA extraia consistentemente e corretamente o `model_base` (ex: "Chesterfield I") e o `name` completo da variação para todos os produtos na planilha, especialmente para nomes complexos ou com números romanos. Isso é crucial para o sucesso da fusão.
+    *   **Extração e Uso de `classDefinitions`:** A extração básica está funcionando. O foco agora é aprimorar a capacidade da IA de interpretar diversas estruturas de tabelas de legenda/cores e refinar a exibição e interatividade no frontend (já bastante avançado com as bolinhas de cores).
+*   **Lógica de Fusão de Preços (`catalog-fusion-service.ts`):**
+    *   **Principal Ponto de Atenção Atual:** Investigar por que alguns produtos (ex: "Chesterfield I, II, X") não estão recebendo preços, analisando os `model_base` e `name` extraídos da planilha e como eles se comparam com os nomes do PDF.
+    *   **Roadmap Estratégico (Implementado e em Refinamento):** Lidar com a relação "um-para-muitos": um produto base do PDF (ex: "Bora") é associado a TODAS as suas variações de preço/tamanho da planilha (ex: "Bora C/Assento 0,63", "Bora C/Assento 0,83").
+        *   Schema do banco de dados modificado com a nova tabela `product_variations` (ligada a `products`) e o campo `class_definitions` (JSONB) na tabela `catalogs`.
+        *   `fuseCatalogData` ajustada para criar/atualizar os registros de variação.
+        *   `storage` atualizada para salvar/buscar essas variações e definições de classe.
+        *   Interface do frontend atualizada para exibir e permitir a seleção dessas variações e suas classes de preço, incluindo suas definições (cores, materiais).
+*   **Extração de Imagens de PDF Artístico (`catalog-processor.ts`):**
+    *   Tentativa inicial com a biblioteca `pdf-export-images` (Node.js) para extração direta de imagens do PDF artístico. 
+    *   **Desafio:** A biblioteca não está performando como esperado para os catálogos de teste, resultando em imagens ausentes ou não correspondentes aos produtos. Isso impede a associação imagem-produto e o cálculo de embeddings visuais para esses catálogos.
+    *   **Próxima Ação:** Priorizar a pesquisa e implementação de métodos mais robustos para extração de imagens de PDFs. Isso pode incluir:
+        *   Bibliotecas Python especializadas (ex: `PyMuPDF/fitz`, `pdfminer.six` com extração de objetos de imagem).
+        *   Ferramentas de processamento de imagem (ex: `OpenCV`) para segmentar imagens em páginas renderizadas do PDF.
+        *   Serviços de IA mais avançados para análise de layout e segmentação de objetos (conforme o pipeline avançado já documentado no roadmap).
+    *   O objetivo é garantir que cada produto extraído do PDF artístico tenha sua imagem correspondente corretamente identificada e armazenada.
+*   **Performance e Custo:** Otimizações podem ser necessárias conforme o volume de dados e o número de chamadas de IA aumentam.
 
 ### 2.5. Ferramentas e Tecnologias Chave (para Upload Inteligente)
 *   **Backend:** Node.js com TypeScript, Express.js.
@@ -79,19 +118,22 @@ Esta funcionalidade é crucial para popular o sistema Ald-a com produtos de dife
 *   **Extração de Imagens de Excel:** Script Python (`extract_images_by_row.py`) usando `openpyxl`.
 *   **Banco de Dados:** PostgreSQL (NeonDB) com Drizzle ORM e `pgvector`.
 *   **Embeddings:** OpenAI `text-embedding-3-small` (para texto), `@xenova/transformers` (CLIP local para imagens de produtos de Excel).
+*   **NOVO (Estrutura do Banco de Dados - Chave):**
+    *   Tabela `product_variations`: Armazena as múltiplas variações (tamanho, descrição específica) de um produto base. Contém `productId` (FK para `products`), `name` (da variação), `variationDescription`, `dimensionsLabel`, `priceClasses` (JSONB com `{className, value}`), `sku`.
+    *   Tabela `catalogs`: Adicionado campo `class_definitions` (JSONB) para armazenar as definições de classe (ex: `[{className: "CLASSE 01", definition: {"Cor 1": "AMARELO", "Cor 2": "AREIA"}}]`) extraídas pela IA da planilha de preços.
 
-### 2.6. Próximos Passos Imediatos (Plano para Upload Inteligente de PDF)
-1.  **Coleta e Análise de Texto OCR:**
-    *   Executar o processamento no catálogo PDF de exemplo com `MAX_PAGES_TO_PROCESS_WITH_OPENAI` aumentado (ex: 20-25 páginas).
-    *   Coletar o texto OCR completo logado para cada uma dessas páginas.
-    *   Analisar manualmente a qualidade do OCR e a estrutura do texto, especialmente para páginas que contêm produtos bem definidos mas que a IA não está extraindo corretamente.
-2.  **Refinamento Iterativo do Prompt da OpenAI:**
-    *   Com base na análise do texto OCR, refinar intensivamente o `systemPromptForTextExtraction` na função `extractProductsFromTextWithOpenAI`.
-    *   Foco em: Melhorar a identificação de nomes de modelo proeminentes, associar especificações (mesmo que em seções diferentes da página) ao nome do modelo correto, extrair com precisão códigos, dimensões, e outros atributos, e instruir a IA a ser mais robusta a variações no texto OCR.
-    *   Testar o prompt refinado com os textos OCR coletados (pode-se usar o Playground da OpenAI para testes rápidos de prompt antes de codificar).
-3.  **Testar e Validar a Extração:** Implementar o prompt refinado e testar novamente o fluxo de upload de PDF, verificando a qualidade e completude dos produtos extraídos.
-4.  **Melhorar Lógica de Fusão:** Após ter produtos mais bem extraídos do PDF (com nomes e talvez códigos mais precisos), revisitar e melhorar a função `fuseCatalogData` para aumentar as chances de correspondência com os itens da planilha de preços. Considerar o uso de embeddings textuais para comparação de similaridade semântica entre nomes/descrições.
-5.  **(Roadmap Futuro) Extração de Imagens Visuais de PDFs:** Planejar e implementar a extração das imagens dos produtos de dentro dos arquivos PDF e associá-las aos registros de produtos correspondentes (atualizando `imageUrl` e gerando `clipEmbedding`).
+### 2.6. Próximos Passos Imediatos (Plano para Upload Inteligente de PDF + Planilha)
+1.  **Refinar Extração da Planilha de Preços (`pricing-file-processor.ts`):**
+    *   Analisar logs do `PricingProcessor` para produtos que não estão tendo `model_base` extraído corretamente (ex: "Chesterfield I").
+    *   Ajustar o `systemPrompt` para melhorar a identificação e separação de `model_base`, `name` (completo da variação) e `variation_description`, especialmente para nomes com números romanos ou outras complexidades.
+    *   **Aprimorar a IA para interpretar e extrair de forma mais robusta e flexível as `classDefinitions` de diferentes formatos de tabelas de legenda/cores nas planilhas.**
+2.  **Verificar Lógica de Fusão (`catalog-fusion-service.ts`):**
+    *   Com base nos logs, confirmar se o `product.name` (PDF) está sendo comparado corretamente com `priceItem.model_base` (Planilha).
+    *   Analisar os scores de similaridade de Dice para os casos que falham no match direto por `model_base` para ver se o limiar de `0.80` é adequado ou se precisa de ajuste para nomes como "Chesterfield I".
+3.  **Aumentar Cobertura do Catálogo PDF:**
+    *   Após os refinamentos acima, aumentar o valor de `MAX_PAGES_TO_PROCESS_WITH_OPENAI` em `server/catalog-processor.ts` (ex: para 40, 60, ou remover o limite) para processar mais produtos do arquivo artístico e testar a fusão em maior escala.
+4.  **(Roadmap Futuro Principal) Extração de Imagens Visuais de PDFs:** Planejar e implementar a extração das imagens dos produtos de dentro dos arquivos PDF e associá-las aos registros de produtos (modelo base) correspondentes.
+5.  **(Roadmap Futuro) Implementar Uso de `classDefinitions`:** Utilizar as definições de classe de preço (extraídas da planilha) para enriquecer os dados do produto ou permitir uma seleção mais informada no frontend.
 
 ## 3. Funcionalidade: Design com IA (Visão Geral e Status Anterior)
 

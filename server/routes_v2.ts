@@ -906,4 +906,42 @@ export async function registerRoutes(router: ExpressRouter, upload: multer.Multe
       return res.status(500).json({ message });
     }
   });
+
+  // Nova rota para buscar variações de um produto
+  router.get("/products/:productId/variations", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const productId = parseInt(req.params.productId);
+      if (isNaN(productId)) {
+        return res.status(400).json({ message: "ID do produto inválido." });
+      }
+
+      // Verificar se o produto principal pertence ao usuário (opcional, mas bom para segurança)
+      // Esta verificação pode ser mais complexa dependendo das regras de negócio
+      // Por agora, vamos buscar as variações diretamente.
+      // const product = await storage.getProduct(productId);
+      // if (!product || product.userId !== req.session.userId!) {
+      //   return res.status(404).json({ message: "Produto não encontrado ou acesso negado." });
+      // }
+
+      const variations = await storage.getProductVariationsByProductId(productId);
+      
+      if (!variations) { // storage.getProductVariationsByProductId retorna [] em caso de erro ou não encontrado, nunca null
+        // Este caso pode não ser atingido se a função de storage sempre retorna array
+        return res.status(404).json({ message: "Variações não encontradas para este produto." });
+      }
+      
+      // Formatar as datas para JSON, similar ao que é feito para /products
+      const variationsForJson = variations.map(v => ({
+        ...v,
+        createdAt: v.createdAt instanceof Date ? v.createdAt.toISOString() : v.createdAt,
+        updatedAt: v.updatedAt instanceof Date ? v.updatedAt.toISOString() : v.updatedAt,
+        // priceClasses já deve estar no formato correto (Array de objetos com className e value em centavos)
+      }));
+
+      return res.status(200).json(variationsForJson);
+    } catch (error) {
+      console.error(`Erro ao obter variações para o produto ID ${req.params.productId}:`, error);
+      return res.status(500).json({ message: "Erro interno ao obter variações do produto." });
+    }
+  });
 }

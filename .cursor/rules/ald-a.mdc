@@ -1,0 +1,6 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+Sempre que fizer uma alteração, no final dela, garanta que está atualizando a documentação do projeto, para manter o projeto atualizado e alinhado com as modifcações implementações

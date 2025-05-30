@@ -15,7 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { Product } from "@shared/schema";
+import { Product, ProductVariation, Catalog } from "@shared/schema";
 import { useToast } from "@/hooks/use-toast";
 
 export default function ProductDetailPage() {
@@ -24,25 +24,147 @@ export default function ProductDetailPage() {
   const { toast } = useToast();
   const [selectedColor, setSelectedColor] = useState<string>("");
 
+  // Estados para variações e classes de preço
+  const [productVariations, setProductVariations] = useState<ProductVariation[]>([]);
+  const [selectedVariationId, setSelectedVariationId] = useState<string | number | null>(null);
+  const [isLoadingVariations, setIsLoadingVariations] = useState<boolean>(false);
+  const [variationError, setVariationError] = useState<string | null>(null);
+  const [selectedPriceClassName, setSelectedPriceClassName] = useState<string | null>(null);
+  const [catalogClassDefinitions, setCatalogClassDefinitions] = useState<Array<{ className: string; definition: Record<string, string>; }> | null>(null);
+  
+  // Novos estados para opções dinâmicas da classe selecionada
+  const [currentClassOptions, setCurrentClassOptions] = useState<string[]>([]);
+  const [selectedClassOption, setSelectedClassOption] = useState<string | null>(null);
+
   // Buscar produto por ID
   const { data: product, isLoading, error } = useQuery<Product>({
     queryKey: [`/api/products/${productId}`],
     enabled: !!productId,
   });
 
-  // Selecionar a primeira cor automaticamente quando o produto carrega
+  // Efeito para buscar variações do produto
   useEffect(() => {
-    if (product?.colors && product.colors.length > 0) {
-      setSelectedColor(product.colors[0]);
+    if (productId) {
+      const fetchVariations = async () => {
+        setIsLoadingVariations(true);
+        setVariationError(null);
+        setSelectedPriceClassName(null);
+        try {
+          const response = await fetch(`/api/products/${productId}/variations`);
+          if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.message || `Erro ao buscar variações: ${response.statusText}`);
+          }
+          const data: ProductVariation[] = await response.json();
+          setProductVariations(data);
+          if (data && data.length > 0) {
+            const firstVariation = data[0];
+            setSelectedVariationId(firstVariation.id);
+            if (firstVariation.priceClasses && firstVariation.priceClasses.length > 0) {
+              setSelectedPriceClassName(firstVariation.priceClasses[0].className);
+            }
+          } else {
+            setSelectedVariationId(null); // Nenhuma variação, então nenhuma classe selecionada
+          }
+        } catch (error: any) {
+          console.error("Erro ao buscar variações do produto (detalhe):", error);
+          setVariationError(error.message || "Não foi possível carregar as variações.");
+          setProductVariations([]);
+        } finally {
+          setIsLoadingVariations(false);
+        }
+      };
+      fetchVariations();
     }
-  }, [product]);
+  }, [productId]);
+
+  // Efeito para buscar definições de classe do catálogo quando o produto (e seu catalogId) estiver carregado
+  useEffect(() => {
+    if (product && product.catalogId) {
+      const fetchCatalogDefinitions = async () => {
+        try {
+          const response = await fetch(`/api/catalogs/${product.catalogId}`);
+          if (!response.ok) {
+            console.warn(`Não foi possível buscar definições de classe para o catálogo ${product.catalogId} (detalhe): ${response.statusText}`);
+            setCatalogClassDefinitions(null);
+            return;
+          }
+          const catalogData: Catalog = await response.json();
+          if (catalogData && catalogData.classDefinitions) {
+            setCatalogClassDefinitions(catalogData.classDefinitions);
+          } else {
+            setCatalogClassDefinitions(null);
+          }
+        } catch (error) {
+          console.warn(`Erro ao buscar definições de classe para o catálogo ${product.catalogId} (detalhe):`, error);
+          setCatalogClassDefinitions(null);
+        }
+      };
+      fetchCatalogDefinitions();
+    } else if (!product) { // Se o produto for null (ex: erro ao buscar produto principal)
+        setCatalogClassDefinitions(null);
+    }
+  }, [product]); // Depende do objeto product (que contém catalogId)
+
+   // Efeito para atualizar a classe de preço selecionada quando a variação muda (similar ao ProductCard)
+   useEffect(() => {
+    if (selectedVariationId && productVariations.length > 0) {
+      const currentSelectedVariation = productVariations.find(v => v.id === Number(selectedVariationId));
+      if (currentSelectedVariation && currentSelectedVariation.priceClasses && currentSelectedVariation.priceClasses.length > 0) {
+        const currentClassStillExists = currentSelectedVariation.priceClasses.some(pc => pc.className === selectedPriceClassName);
+        if (!selectedPriceClassName || !currentClassStillExists) {
+          setSelectedPriceClassName(currentSelectedVariation.priceClasses[0].className);
+        }
+      } else {
+        setSelectedPriceClassName(null);
+      }
+    } else if (productVariations.length === 0) {
+        setSelectedPriceClassName(null);
+    }
+  }, [selectedVariationId, productVariations, selectedPriceClassName]);
+
+  // Efeito para popular currentClassOptions e definir a primeira como selecionada
+  useEffect(() => {
+    if (selectedPriceClassName && catalogClassDefinitions) {
+      const activeClassDef = catalogClassDefinitions.find(def => def.className === selectedPriceClassName);
+      if (activeClassDef && activeClassDef.definition) {
+        const options = Object.values(activeClassDef.definition); // Pega só os valores (ex: "AMARELO", "AREIA")
+        setCurrentClassOptions(options);
+        if (options.length > 0) {
+          // Se a opção atualmente selecionada não estiver nas novas opções, ou nenhuma estiver selecionada,
+          // selecionar a primeira nova opção.
+          if (!selectedClassOption || !options.includes(selectedClassOption)) {
+            setSelectedClassOption(options[0]);
+          }
+        } else {
+          setSelectedClassOption(null);
+        }
+      } else {
+        setCurrentClassOptions([]);
+        setSelectedClassOption(null);
+      }
+    } else {
+      setCurrentClassOptions([]);
+      setSelectedClassOption(null);
+    }
+  }, [selectedPriceClassName, catalogClassDefinitions, selectedClassOption]); // Adicionado selectedClassOption para reavaliar se ele ainda é válido
 
   // Funções de formatação
-  const formatPrice = (price: number) => {
+  const formatPrice = (priceInCents: number | undefined | null) => {
+    if (priceInCents === undefined || priceInCents === null) return "Sob consulta";
     return new Intl.NumberFormat('pt-BR', { 
       style: 'currency', 
       currency: 'BRL' 
-    }).format(price);
+    }).format(priceInCents / 100);
+  };
+
+  const formatInstallments = (priceInCents: number | undefined | null) => {
+    if (priceInCents === undefined || priceInCents === null) return formatPrice(priceInCents);
+    const installmentValueInReais = (priceInCents / 10) / 100;
+    return new Intl.NumberFormat('pt-BR', { 
+      style: 'currency', 
+      currency: 'BRL' 
+    }).format(installmentValueInReais);
   };
 
   const formatDimension = (value: number | undefined | null) => {
@@ -90,8 +212,29 @@ export default function ProductDetailPage() {
   const handleAddToQuote = () => {
     toast({
       title: "Produto adicionado",
-      description: `${product?.name} foi adicionado ao orçamento`,
+      description: `${product?.name} ${selectedVariationId ? `(Variação ID: ${selectedVariationId})` : ''} ${selectedPriceClassName ? `(Classe: ${selectedPriceClassName})` : ''} ${selectedClassOption ? `(Opção: ${selectedClassOption})` : ''} foi adicionado ao orçamento`,
     });
+  };
+
+  // Lógica para obter o preço da variação selecionada ou o preço base em CENTAVOS
+  const getDisplayPrice = () => { // Deve retornar CENTAVOS
+    if (selectedVariationId && productVariations.length > 0) {
+      const selectedVar = productVariations.find(v => v.id === Number(selectedVariationId));
+      if (selectedVar && selectedVar.priceClasses && selectedVar.priceClasses.length > 0) {
+        if (selectedPriceClassName) {
+          const priceInfo = selectedVar.priceClasses.find(pc => pc.className === selectedPriceClassName);
+          if (priceInfo && typeof priceInfo.value === 'number') {
+            return priceInfo.value; // CENTAVOS
+          }
+        }
+        // Fallback para o primeiro preço da variação
+        const firstPriceInfo = selectedVar.priceClasses[0];
+        if (firstPriceInfo && typeof firstPriceInfo.value === 'number') {
+          return firstPriceInfo.value; // CENTAVOS
+        }
+      }
+    }
+    return product?.price; // product.price do banco deve ser CENTAVOS
   };
 
   if (isLoading) {
@@ -158,12 +301,85 @@ export default function ProductDetailPage() {
           )}
           
           <div className="text-2xl font-bold text-primary mb-1">
-            {formatPrice(product.price)}
+            {formatPrice(getDisplayPrice())}
           </div>
           
           <p className="text-sm text-muted-foreground mb-6">
-            ou 10x de {formatPrice(product.price / 10)} sem juros
+            ou 10x de {formatInstallments(getDisplayPrice())} sem juros
           </p>
+          
+          {/* Dropdown de Variações */}
+          {isLoadingVariations && (
+            <div className="flex items-center text-sm text-muted-foreground my-2">
+              <Loader2 className="h-4 w-4 animate-spin mr-2" />
+              Carregando opções...
+            </div>
+          )}
+          {variationError && <p className="text-sm text-red-500 my-2">{variationError}</p>}
+          {!isLoadingVariations && !variationError && productVariations && productVariations.length > 0 && (
+            <div className="my-4">
+              <label htmlFor={`variation-select-${product.id}`} className="block text-sm font-medium text-gray-700 mb-1">Opção:</label>
+              <select
+                id={`variation-select-${product.id}`}
+                value={selectedVariationId || ''}
+                onChange={(e) => setSelectedVariationId(e.target.value)}
+                className="w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-primary focus:border-primary"
+              >
+                {productVariations.map((variation) => (
+                  <option key={variation.id} value={variation.id}>
+                    {variation.name} 
+                    {variation.dimensionsLabel ? ` (${variation.dimensionsLabel})` : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {/* Dropdown de Classes de Preço */}
+          {selectedVariationId && 
+           productVariations.find(v => v.id === Number(selectedVariationId))?.priceClasses && 
+           (productVariations.find(v => v.id === Number(selectedVariationId))?.priceClasses?.length || 0) > 0 && (
+            <div className="my-4">
+              <label htmlFor={`price-class-select-detail-${product.id}`} className="block text-sm font-medium text-gray-700 mb-1">Acabamento/Classe:</label>
+              <select
+                id={`price-class-select-detail-${product.id}`}
+                value={selectedPriceClassName || ''}
+                onChange={(e) => setSelectedPriceClassName(e.target.value)}
+                className="w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-primary focus:border-primary"
+              >
+                {productVariations.find(v => v.id === Number(selectedVariationId))?.priceClasses?.map((pc) => {
+                  let optionText = pc.className;
+                  let optionTitle = pc.className; // Fallback para o title
+                  if (catalogClassDefinitions) {
+                    const definition = catalogClassDefinitions.find(def => def.className === pc.className);
+                    if (definition && definition.definition) {
+                      const defEntries = Object.entries(definition.definition);
+                      // Mostrar apenas os valores das 2 primeiras entradas da definição no texto da opção
+                      const defDetailsShort = defEntries.slice(0, 2).map(([, val]) => `${val}`).join(", ");
+                      // Mostrar todas as chaves e valores no tooltip
+                      const defDetailsFull = defEntries.map(([key, val]) => `${key}: ${val}`).join(", ");
+
+                      if (defDetailsShort) {
+                        optionText = `${pc.className} (${defDetailsShort}${defEntries.length > 2 ? ', ...' : ''})`;
+                        optionTitle = `${pc.className} - Detalhes: ${defDetailsFull}`;
+                      } else {
+                        // Caso não haja defDetailsShort (ex: definition é um objeto vazio), o title ainda pode ser útil se houver className
+                        optionTitle = pc.className;
+                      }
+                    } else {
+                       // Caso definition não seja encontrada ou pc.className não esteja em catalogClassDefinitions
+                       optionTitle = pc.className;
+                    }
+                  }
+                  return (
+                    <option key={pc.className} value={pc.className} title={optionTitle}>
+                      {optionText}
+                    </option>
+                  );
+                })}
+              </select>
+            </div>
+          )}
           
           <div className="mb-6">
             <h3 className="font-semibold mb-2">Descrição</h3>
@@ -190,25 +406,29 @@ export default function ProductDetailPage() {
             </div>
           )}
           
-          {product.colors && product.colors.length > 0 && (
+          {/* SELETORES DINÂMICOS DE COR/OPÇÃO BASEADOS NA CLASSE */}
+          {currentClassOptions.length > 0 && (
             <div className="mb-6">
-              <h3 className="font-semibold mb-2">Cores disponíveis</h3>
-              <div className="flex gap-2">
-                {product.colors.map((color) => (
+              <h3 className="font-semibold mb-2">{Object.keys(catalogClassDefinitions?.find(def => def.className === selectedPriceClassName)?.definition || {})[0] || 'Opções'}:</h3>
+              <div className="flex flex-wrap gap-2">
+                {currentClassOptions.map((optionValue) => (
                   <button
-                    key={color}
-                    className={`h-8 w-8 rounded-full ${getColorClass(color)} border ${
-                      selectedColor === color 
-                        ? 'ring-2 ring-primary ring-offset-2' 
-                        : 'border-gray-300'
-                    }`}
-                    title={getColorName(color)}
-                    onClick={() => setSelectedColor(color)}
-                  />
+                    key={optionValue}
+                    className={`h-8 w-8 rounded-full border flex items-center justify-center 
+                               ${getColorClass(optionValue)} 
+                               ${selectedClassOption === optionValue 
+                                 ? 'ring-2 ring-primary ring-offset-2' 
+                                 : 'border-gray-300'}`}
+                    title={getColorName(optionValue)} // Tooltip com o nome da cor/opção
+                    onClick={() => setSelectedClassOption(optionValue)}
+                  >
+                    {/* Opcional: Adicionar um checkmark ou mudar a borda se for selecionado e não for uma cor visual */} 
+                    {/* {!getColorClass(optionValue).startsWith('bg-') && optionValue.substring(0,1)} Breve texto se não for cor */} 
+                  </button>
                 ))}
               </div>
-              {selectedColor && (
-                <p className="text-sm mt-2">Cor selecionada: {getColorName(selectedColor)}</p>
+              {selectedClassOption && (
+                <p className="text-sm mt-2">Selecionado: {getColorName(selectedClassOption)}</p>
               )}
             </div>
           )}

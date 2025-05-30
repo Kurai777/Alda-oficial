@@ -2,6 +2,9 @@ modules = ["web", "postgresql-16", "python-3.11", "nodejs-20"]
 run = "npm run dev"
 hidden = [".config", ".git", "generated-icon.png", "node_modules", "dist"]
 
+# Comando para instalar dependências Python no boot
+onBoot = "pip install -r requirements.txt"
+
 # Especificar um canal Nix estável
 channel = "stable-23_11"
 

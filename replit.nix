@@ -6,6 +6,10 @@
     # Adicionar Ghostscript headless para processamento de PDF
     pkgs.ghostscript_headless 
     
+    # Adicionar Python e Pip
+    pkgs.python311
+    pkgs.python311Packages.pip
+
     # Dependências completas para Puppeteer/Chromium no Nix (REMOVIDAS)
     # pkgs.chromium  // REMOVIDO
     # pkgs.alsa-lib // REMOVIDO

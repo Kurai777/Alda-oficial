@@ -95,6 +95,7 @@ export const catalogs = pgTable("catalogs", {
   pricingFileName: text("pricing_file_name"),
   pricingFileUrl: text("pricing_file_url"),
   processedStatus: text("processed_status").default("pending").notNull(),
+  classDefinitions: jsonb("class_definitions").$type<Array<{ className: string; definition: Record<string, string>; }>>(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   firestoreCatalogId: text("firestore_catalog_id"),
   firebaseUserId: text("firebase_user_id"),
@@ -107,6 +108,7 @@ export const insertCatalogSchema = createInsertSchema(catalogs).pick({
   pricingFileName: true,
   pricingFileUrl: true,
   processedStatus: true,
+  classDefinitions: true,
   firestoreCatalogId: true,
   firebaseUserId: true,
 });
@@ -376,3 +378,45 @@ export const insertFloorPlanAreaSchema = createInsertSchema(floorPlanAreas).omit
 //   user: one(users, { fields: [floorPlanAreas.userId], references: [users.id] }),
 //   suggestedProduct: one(products, { fields: [floorPlanAreas.suggestedProductId], references: [products.id]}),
 // }));
+
+// Nova tabela para Variações de Produto
+export const productVariations = pgTable("product_variations", {
+  id: serial("id").primaryKey(),
+  productId: integer("product_id").references(() => products.id, { onDelete: "cascade" }).notNull(),
+  name: text("name").notNull(), // Nome completo da variação, ex: "Chesterfield I sofá 2 lug" ou "BORA C/ASSENTO 0,63"
+  variationDescription: text("variation_description"), // Descrição específica da variação, ex: "sofá 2 lug" ou "C/ASSENTO 0,63"
+  dimensionsLabel: text("dimensions_label"), // String original das dimensões, ex: "1,30 x 1,00 x 0,80" ou "0,85X F 0,96 A 1,59 X 1,00"
+  // Adicionar campos opcionais para dimensões numéricas se quisermos parseá-las no futuro
+  // widthCm: integer("width_cm"),
+  // heightCm: integer("height_cm"),
+  // depthCm: integer("depth_cm"),
+  priceClasses: jsonb("price_classes").$type<Array<{ className: string; value: number; }>>(), // Array de {className: "CLASSE 01", value: 435300}
+  sku: text("sku"), // SKU específico da variação, se houver
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export type ProductVariation = typeof productVariations.$inferSelect;
+export type InsertProductVariation = typeof productVariations.$inferInsert;
+export const insertProductVariationSchema = createInsertSchema(productVariations);
+
+// Adicionar relação de products para productVariations
+export const productsRelations = relations(products, ({one, many}) => ({
+    user: one(users, {
+        fields: [products.userId],
+        references: [users.id],
+    }),
+    catalog: one(catalogs, {
+        fields: [products.catalogId],
+        references: [catalogs.id],
+    }),
+    variations: many(productVariations), // Um produto pode ter muitas variações
+}));
+
+// Adicionar relação de productVariations para products
+export const productVariationsRelations = relations(productVariations, ({ one }) => ({
+  product: one(products, {
+    fields: [productVariations.productId],
+    references: [products.id],
+  }),
+}));
