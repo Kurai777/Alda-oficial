@@ -7,3 +7,4 @@ screenshots
 *.log
 attached_assets/*
 !attached_assets/.gitkeep
+            gcloud-key.jsongcloud-key.json

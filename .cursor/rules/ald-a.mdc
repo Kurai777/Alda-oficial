@@ -4,3 +4,7 @@ globs:
 alwaysApply: false
 ---
 Sempre que fizer uma alteração, no final dela, garanta que está atualizando a documentação do projeto, para manter o projeto atualizado e alinhado com as modifcações implementações
+
+Assim que fizer uma alteração no projeto, certifique de testar a funcionalidade antes ate mesmo de concluir uma tarefa na documentação do projeto.
+
+Sempre verifique as documentações do projeto como contexto e se lembrando de suas alterações para nao causar alucinações
